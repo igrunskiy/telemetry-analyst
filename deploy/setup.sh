@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# =============================================================================
+# ================================================================================
 # One-time GCP Compute Engine VM setup
 # Run as root or with sudo on a fresh Ubuntu 22.04 / Debian 12 instance
 #
 # Usage:
 #   curl -sSL https://raw.githubusercontent.com/igrunskiy/telemetry-analyst/main/deploy/setup.sh | sudo bash
-#   — or —
+#   — or --
 #   sudo bash setup.sh
-# =============================================================================
+# ================================================================================
 set -euo pipefail
 
 APP_DIR="/opt/telemetry-analyst"
@@ -18,12 +18,17 @@ apt-get update -qq && apt-get upgrade -y -qq
 
 echo "==> Installing Docker..."
 apt-get install -y -qq ca-certificates curl gnupg
+
+# Detect OS (Ubuntu or Debian)
+. /etc/os-release
+OS_ID="${ID}"  # e.g. ubuntu or debian
+
 install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+curl -fsSL "https://download.docker.com/linux/${OS_ID}/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 chmod a+r /etc/apt/keyrings/docker.gpg
 
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+https://download.docker.com/linux/${OS_ID} ${VERSION_CODENAME} stable" \
   > /etc/apt/sources.list.d/docker.list
 
 apt-get update -qq
@@ -58,21 +63,21 @@ if [ ! -f "$APP_DIR/.env" ]; then
   sed -i "s|ENCRYPTION_KEY=.*|ENCRYPTION_KEY=$ENCRYPTION_KEY|" "$APP_DIR/.env"
 
   echo ""
-  echo "    ============================================"
+  echo "    ================================================="
   echo "    .env created at $APP_DIR/.env"
   echo "    You MUST edit it to fill in:"
   echo "      - GARAGE61_CLIENT_ID"
   echo "      - GARAGE61_CLIENT_SECRET"
   echo "      - GARAGE61_REDIRECT_URI (http://<your-vm-ip>/auth/callback)"
   echo "      - CLAUDE_API_KEY"
-  echo "    ============================================"
+  echo "    ================================================="
   echo ""
 else
   echo "    .env already exists, skipping..."
 fi
 
 echo "==> Setting up systemd service..."
-cat > /etc/systemd/system/telemetry-analyst.service <<'EOF'
+cat > /etc/systemd/system/telemetry-analyst.service <<'SVCEOF'
 [Unit]
 Description=Telemetry Analyst
 After=docker.service
@@ -89,7 +94,7 @@ TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target
-EOF
+SVCEOF
 
 systemctl daemon-reload
 systemctl enable telemetry-analyst
