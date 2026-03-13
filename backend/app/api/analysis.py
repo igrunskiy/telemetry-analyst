@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,13 +38,24 @@ class RunAnalysisRequest(BaseModel):
     track_name: str
 
 
+class AnalysisHistoryItemResponse(BaseModel):
+    id: str
+    lap_id: str
+    car_name: str
+    track_name: str
+    created_at: datetime
+    summary: str
+    estimated_time_gain_seconds: float | None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.post("/run")
+@router.post("/run", status_code=status.HTTP_201_CREATED)
 async def run_analysis(
     body: RunAnalysisRequest,
+    response: Response,
     current_user: User = Depends(get_current_user),
     client: Garage61Client = Depends(get_garage61_client),
     db: AsyncSession = Depends(get_db),
@@ -74,8 +85,9 @@ async def run_analysis(
     )
     existing = cache_hit.scalars().all()
     for record in existing:
-        # Match if same set of reference laps
+        # Match if same set of reference laps — return cached result with 200
         if set(record.reference_lap_ids) == set(body.reference_lap_ids):
+            response.status_code = status.HTTP_200_OK
             return record.result_json
 
     # ----- Fetch CSVs concurrently -----
@@ -202,11 +214,11 @@ async def run_analysis(
     return full_result
 
 
-@router.get("/history")
+@router.get("/history", response_model=list[AnalysisHistoryItemResponse])
 async def get_history(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[dict]:
+) -> list[AnalysisHistoryItemResponse]:
     """Return a list of the current user's past analysis results (summary view)."""
     result = await db.execute(
         select(AnalysisResult)
@@ -218,21 +230,21 @@ async def get_history(
 
     history = []
     for r in records:
-        result = r.result_json or {}
-        summary_snippet = result.get("summary", "")
+        rj = r.result_json or {}
+        summary_snippet = rj.get("summary", "")
         if summary_snippet and len(summary_snippet) > 120:
             summary_snippet = summary_snippet[:120] + "…"
 
         history.append(
-            {
-                "id": str(r.id),
-                "lap_id": r.lap_id,
-                "car_name": r.car_name,
-                "track_name": r.track_name,
-                "created_at": r.created_at.isoformat(),
-                "summary": summary_snippet,
-                "estimated_time_gain_seconds": result.get("estimated_time_gain_seconds"),
-            }
+            AnalysisHistoryItemResponse(
+                id=str(r.id),
+                lap_id=r.lap_id,
+                car_name=r.car_name,
+                track_name=r.track_name,
+                created_at=r.created_at,
+                summary=summary_snippet,
+                estimated_time_gain_seconds=rj.get("estimated_time_gain_seconds"),
+            )
         )
 
     return history
