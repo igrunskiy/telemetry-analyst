@@ -12,4 +12,3 @@ numpy==2.1.1
 cryptography==43.0.1
 python-multipart==0.0.12
 anthropic==0.40.0
-garage61api==0.1.0

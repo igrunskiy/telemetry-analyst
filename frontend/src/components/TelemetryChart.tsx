@@ -42,7 +42,7 @@ function cornerShapes(corners: Corner[], yMin: number, yMax: number) {
   }))
 }
 
-function cornerAnnotations(corners: Corner[], y: number, yref = 'y') {
+function cornerAnnotations(corners: Corner[], y: number, yref: 'y' | 'y2' | 'y3' = 'y') {
   return corners.map((c) => ({
     x: c.dist_apex,
     y,
