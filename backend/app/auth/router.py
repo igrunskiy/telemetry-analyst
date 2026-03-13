@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +14,13 @@ from app.database import get_db
 from app.models.user import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+class UserMeResponse(BaseModel):
+    id: str
+    display_name: str
+    avatar_url: str | None
+    has_custom_claude_key: bool
 
 
 @router.get("/login")
@@ -129,20 +137,20 @@ async def callback(
     return redirect
 
 
-@router.post("/logout")
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout():
     """Clear the session cookie and log the user out."""
-    response = Response(content='{"message": "Logged out"}', media_type="application/json")
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
     response.delete_cookie("session")
     return response
 
 
-@router.get("/me")
-async def me(current_user: User = Depends(get_current_user)):
+@router.get("/me", response_model=UserMeResponse)
+async def me(current_user: User = Depends(get_current_user)) -> UserMeResponse:
     """Return the current user's public profile info."""
-    return {
-        "id": str(current_user.id),
-        "display_name": current_user.display_name,
-        "avatar_url": current_user.avatar_url,
-        "has_custom_claude_key": bool(current_user.claude_api_key_enc),
-    }
+    return UserMeResponse(
+        id=str(current_user.id),
+        display_name=current_user.display_name,
+        avatar_url=current_user.avatar_url,
+        has_custom_claude_key=bool(current_user.claude_api_key_enc),
+    )

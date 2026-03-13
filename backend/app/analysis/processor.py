@@ -217,6 +217,86 @@ class TelemetryProcessor:
         return corners
 
     # ------------------------------------------------------------------
+    # Time delta and sector computation
+    # ------------------------------------------------------------------
+
+    def compute_time_delta(
+        self,
+        user_df: pd.DataFrame,
+        ref_df: pd.DataFrame,
+        lap_distance_m: float = 3000.0,
+    ) -> list[float]:
+        """
+        Compute cumulative time delta in milliseconds between user and reference lap.
+        Positive = user is slower; negative = user is faster.
+
+        Uses speed integration: dt = dDist * lap_distance_m / speed (m/s assumed).
+        lap_distance_m is approximate and used only for scaling.
+        """
+        if "Speed" not in user_df.columns or "Speed" not in ref_df.columns:
+            return [0.0] * INTERP_POINTS
+
+        dist = user_df["LapDistPct"].values
+        dDist = np.diff(dist, prepend=dist[0])
+
+        user_speed = pd.Series(user_df["Speed"].values).ffill().bfill().fillna(1.0).values
+        ref_speed = pd.Series(ref_df["Speed"].values).ffill().bfill().fillna(1.0).values
+
+        user_speed = np.maximum(user_speed, 0.5)
+        ref_speed = np.maximum(ref_speed, 0.5)
+
+        user_dt = dDist * lap_distance_m / user_speed
+        ref_dt = dDist * lap_distance_m / ref_speed
+
+        delta_ms = np.cumsum(user_dt - ref_dt) * 1000.0
+        return delta_ms.tolist()
+
+    def compute_sectors(
+        self,
+        user_df: pd.DataFrame,
+        ref_df: pd.DataFrame,
+        n_sectors: int = 3,
+        lap_distance_m: float = 3000.0,
+    ) -> list[dict]:
+        """
+        Split the lap into n_sectors equal segments and compute estimated time
+        for user and reference in each sector.
+        Returns list of {sector, user_time_ms, ref_time_ms, delta_ms}.
+        """
+        if "Speed" not in user_df.columns or "Speed" not in ref_df.columns:
+            return []
+
+        dist = user_df["LapDistPct"].values
+        dDist = np.diff(dist, prepend=dist[0])
+
+        user_speed = pd.Series(user_df["Speed"].values).ffill().bfill().fillna(1.0).values
+        ref_speed = pd.Series(ref_df["Speed"].values).ffill().bfill().fillna(1.0).values
+
+        user_speed = np.maximum(user_speed, 0.5)
+        ref_speed = np.maximum(ref_speed, 0.5)
+
+        user_dt = dDist * lap_distance_m / user_speed
+        ref_dt = dDist * lap_distance_m / ref_speed
+
+        n = len(dist)
+        sector_size = n // n_sectors
+        sectors = []
+        for i in range(n_sectors):
+            start = i * sector_size
+            end = (i + 1) * sector_size if i < n_sectors - 1 else n
+            user_time_ms = int(round(float(np.sum(user_dt[start:end])) * 1000))
+            ref_time_ms = int(round(float(np.sum(ref_dt[start:end])) * 1000))
+            sectors.append(
+                {
+                    "sector": i + 1,
+                    "user_time_ms": user_time_ms,
+                    "ref_time_ms": ref_time_ms,
+                    "delta_ms": user_time_ms - ref_time_ms,
+                }
+            )
+        return sectors
+
+    # ------------------------------------------------------------------
     # Orchestration
     # ------------------------------------------------------------------
 
@@ -229,17 +309,19 @@ class TelemetryProcessor:
         Full processing pipeline:
         1. Parse all CSVs
         2. Normalise to 1000-point distance grid
-        3. Pick best reference (longest CSV / first available)
+        3. Pick best reference (first available, assumed fastest)
         4. Compute delta vs best reference
         5. Identify corners on the user trace
-        6. Return structured result
+        6. Compute time delta and sector splits
+        7. Return structured result
 
         Returns:
           {
             user_lap: {dist, speed, throttle, brake, rpm, gear, lat, lon},
             reference_laps: [ same structure per reference ],
-            delta: {dist, speed_delta, throttle_delta, brake_delta},
+            delta: {dist, speed_delta, throttle_delta, brake_delta, time_delta_ms},
             corners: [ corner dicts ],
+            sectors: [ sector dicts ],
             track_coordinates: [ {lat, lon} ] or [],
           }
         """
@@ -257,15 +339,17 @@ class TelemetryProcessor:
 
         if not ref_dfs:
             # No valid references; return user lap only with empty delta/corners
-            return self._build_result(user_df, [], None)
+            return self._build_result(user_df, [], None, None, [])
 
         # Best reference = first (assumed to be sorted by fastest lap time)
         best_ref = ref_dfs[0]
 
         delta_df = self.compute_delta(user_df, best_ref)
         corners = self.identify_corners(user_df)
+        time_delta_ms = self.compute_time_delta(user_df, best_ref)
+        sectors = self.compute_sectors(user_df, best_ref)
 
-        return self._build_result(user_df, ref_dfs, delta_df, corners)
+        return self._build_result(user_df, ref_dfs, delta_df, corners, time_delta_ms, sectors)
 
     # ------------------------------------------------------------------
     # Result serialisation
@@ -300,6 +384,8 @@ class TelemetryProcessor:
         ref_dfs: list[pd.DataFrame],
         delta_df: pd.DataFrame | None,
         corners: list[dict] | None = None,
+        time_delta_ms: list[float] | None = None,
+        sectors: list[dict] | None = None,
     ) -> dict:
         track_coords: list[dict] = []
         if "Lat" in user_df.columns and "Lon" in user_df.columns:
@@ -315,15 +401,16 @@ class TelemetryProcessor:
         if delta_df is not None:
             delta_data = {
                 "dist": delta_df["LapDistPct"].tolist(),
-                "speed_delta": delta_df.get("speed_delta", pd.Series(dtype=float)).tolist()
+                "speed_delta": delta_df["speed_delta"].tolist()
                 if "speed_delta" in delta_df.columns
                 else [],
-                "throttle_delta": delta_df.get("throttle_delta", pd.Series(dtype=float)).tolist()
+                "throttle_delta": delta_df["throttle_delta"].tolist()
                 if "throttle_delta" in delta_df.columns
                 else [],
-                "brake_delta": delta_df.get("brake_delta", pd.Series(dtype=float)).tolist()
+                "brake_delta": delta_df["brake_delta"].tolist()
                 if "brake_delta" in delta_df.columns
                 else [],
+                "time_delta_ms": time_delta_ms or [],
             }
 
         return {
@@ -331,6 +418,7 @@ class TelemetryProcessor:
             "reference_laps": [self._df_to_series(r) for r in ref_dfs],
             "delta": delta_data,
             "corners": corners or [],
+            "sectors": sectors or [],
             "track_coordinates": track_coords,
         }
 

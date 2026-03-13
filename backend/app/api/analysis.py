@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,13 +38,24 @@ class RunAnalysisRequest(BaseModel):
     track_name: str
 
 
+class AnalysisHistoryItemResponse(BaseModel):
+    id: str
+    lap_id: str
+    car_name: str
+    track_name: str
+    created_at: datetime
+    summary: str
+    estimated_time_gain_seconds: float | None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.post("/run")
+@router.post("/run", status_code=status.HTTP_201_CREATED)
 async def run_analysis(
     body: RunAnalysisRequest,
+    response: Response,
     current_user: User = Depends(get_current_user),
     client: Garage61Client = Depends(get_garage61_client),
     db: AsyncSession = Depends(get_db),
@@ -74,8 +85,9 @@ async def run_analysis(
     )
     existing = cache_hit.scalars().all()
     for record in existing:
-        # Match if same set of reference laps
+        # Match if same set of reference laps — return cached result with 200
         if set(record.reference_lap_ids) == set(body.reference_lap_ids):
+            response.status_code = status.HTTP_200_OK
             return record.result_json
 
     # ----- Fetch CSVs concurrently -----
@@ -141,17 +153,47 @@ async def run_analysis(
             detail=f"Claude analysis failed: {exc}",
         )
 
-    # ----- Build full result -----
+    # ----- Build telemetry object for frontend visualizations -----
+    user_lap = processed.get("user_lap", {})
+    ref_laps = processed.get("reference_laps", [])
+    ref_lap = ref_laps[0] if ref_laps else {}
+    delta = processed.get("delta", {})
+
+    telemetry: dict[str, Any] = {
+        "distances": user_lap.get("dist", []),
+        "user_speed": user_lap.get("speed", []),
+        "ref_speed": ref_lap.get("speed", []),
+        "user_throttle": user_lap.get("throttle", []),
+        "ref_throttle": ref_lap.get("throttle", []),
+        "user_brake": user_lap.get("brake", []),
+        "ref_brake": ref_lap.get("brake", []),
+        "delta_ms": delta.get("time_delta_ms", []),
+        "corners": processed.get("corners", []),
+        "sectors": processed.get("sectors", []),
+    }
+    if "lat" in user_lap:
+        telemetry["user_lat"] = user_lap["lat"]
+        telemetry["user_lon"] = user_lap.get("lon", [])
+    if "lat" in ref_lap:
+        telemetry["ref_lat"] = ref_lap["lat"]
+        telemetry["ref_lon"] = ref_lap.get("lon", [])
+
+    # ----- Build full result (LLM fields flattened to top level) -----
     full_result: dict[str, Any] = {
         "lap_id": body.lap_id,
         "reference_lap_ids": body.reference_lap_ids,
         "car_name": body.car_name,
         "track_name": body.track_name,
+        # LLM coaching fields at top level (matches frontend AnalysisReport type)
+        "summary": llm_result.get("summary", ""),
+        "estimated_time_gain_seconds": llm_result.get("estimated_time_gain_seconds"),
+        "improvement_areas": llm_result.get("improvement_areas", []),
+        "strengths": llm_result.get("strengths", []),
+        "sector_notes": llm_result.get("sector_notes", []),
+        # Telemetry object for visualizations
+        "telemetry": telemetry,
+        # Keep weak_zones for potential future use
         "weak_zones": weak_zones,
-        "corners": processed.get("corners", []),
-        "delta": processed.get("delta", {}),
-        "track_coordinates": processed.get("track_coordinates", []),
-        "llm_analysis": llm_result,
     }
 
     # ----- Persist to DB -----
@@ -172,11 +214,11 @@ async def run_analysis(
     return full_result
 
 
-@router.get("/history")
+@router.get("/history", response_model=list[AnalysisHistoryItemResponse])
 async def get_history(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[dict]:
+) -> list[AnalysisHistoryItemResponse]:
     """Return a list of the current user's past analysis results (summary view)."""
     result = await db.execute(
         select(AnalysisResult)
@@ -188,21 +230,21 @@ async def get_history(
 
     history = []
     for r in records:
-        llm = r.result_json.get("llm_analysis", {}) if r.result_json else {}
-        summary_snippet = llm.get("summary", "")
+        rj = r.result_json or {}
+        summary_snippet = rj.get("summary", "")
         if summary_snippet and len(summary_snippet) > 120:
             summary_snippet = summary_snippet[:120] + "…"
 
         history.append(
-            {
-                "id": str(r.id),
-                "lap_id": r.lap_id,
-                "car_name": r.car_name,
-                "track_name": r.track_name,
-                "created_at": r.created_at.isoformat(),
-                "summary": summary_snippet,
-                "estimated_time_gain_seconds": llm.get("estimated_time_gain_seconds"),
-            }
+            AnalysisHistoryItemResponse(
+                id=str(r.id),
+                lap_id=r.lap_id,
+                car_name=r.car_name,
+                track_name=r.track_name,
+                created_at=r.created_at,
+                summary=summary_snippet,
+                estimated_time_gain_seconds=rj.get("estimated_time_gain_seconds"),
+            )
         )
 
     return history

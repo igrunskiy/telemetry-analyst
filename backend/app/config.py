@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     JWT_EXPIRE_HOURS: int = 168  # 1 week
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 settings = Settings()

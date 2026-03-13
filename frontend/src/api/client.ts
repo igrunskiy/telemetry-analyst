@@ -46,14 +46,14 @@ export async function getTracks(): Promise<Track[]> {
 }
 
 export async function getMyLaps(carId: number, trackId: number): Promise<Lap[]> {
-  const { data } = await api.get<Lap[]>('/api/laps/my', {
+  const { data } = await api.get<Lap[]>('/api/laps/my-laps', {
     params: { car_id: carId, track_id: trackId },
   })
   return data
 }
 
 export async function getReferenceLaps(carId: number, trackId: number): Promise<Lap[]> {
-  const { data } = await api.get<Lap[]>('/api/laps/reference', {
+  const { data } = await api.get<Lap[]>('/api/laps/reference-laps', {
     params: { car_id: carId, track_id: trackId },
   })
   return data
@@ -85,7 +85,7 @@ export async function getAnalysis(id: string): Promise<AnalysisReport> {
 }
 
 export async function updateClaudeKey(apiKey: string): Promise<void> {
-  await api.post('/api/profile/claude-key', { api_key: apiKey })
+  await api.put('/api/profile/claude-key', { api_key: apiKey })
 }
 
 export async function logout(): Promise<void> {
