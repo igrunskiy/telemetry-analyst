@@ -98,4 +98,5 @@ export interface AnalysisHistoryItem {
   track_name: string
   created_at: string
   summary: string
+  estimated_time_gain_seconds: number | null
 }

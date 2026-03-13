@@ -141,17 +141,47 @@ async def run_analysis(
             detail=f"Claude analysis failed: {exc}",
         )
 
-    # ----- Build full result -----
+    # ----- Build telemetry object for frontend visualizations -----
+    user_lap = processed.get("user_lap", {})
+    ref_laps = processed.get("reference_laps", [])
+    ref_lap = ref_laps[0] if ref_laps else {}
+    delta = processed.get("delta", {})
+
+    telemetry: dict[str, Any] = {
+        "distances": user_lap.get("dist", []),
+        "user_speed": user_lap.get("speed", []),
+        "ref_speed": ref_lap.get("speed", []),
+        "user_throttle": user_lap.get("throttle", []),
+        "ref_throttle": ref_lap.get("throttle", []),
+        "user_brake": user_lap.get("brake", []),
+        "ref_brake": ref_lap.get("brake", []),
+        "delta_ms": delta.get("time_delta_ms", []),
+        "corners": processed.get("corners", []),
+        "sectors": processed.get("sectors", []),
+    }
+    if "lat" in user_lap:
+        telemetry["user_lat"] = user_lap["lat"]
+        telemetry["user_lon"] = user_lap.get("lon", [])
+    if "lat" in ref_lap:
+        telemetry["ref_lat"] = ref_lap["lat"]
+        telemetry["ref_lon"] = ref_lap.get("lon", [])
+
+    # ----- Build full result (LLM fields flattened to top level) -----
     full_result: dict[str, Any] = {
         "lap_id": body.lap_id,
         "reference_lap_ids": body.reference_lap_ids,
         "car_name": body.car_name,
         "track_name": body.track_name,
+        # LLM coaching fields at top level (matches frontend AnalysisReport type)
+        "summary": llm_result.get("summary", ""),
+        "estimated_time_gain_seconds": llm_result.get("estimated_time_gain_seconds"),
+        "improvement_areas": llm_result.get("improvement_areas", []),
+        "strengths": llm_result.get("strengths", []),
+        "sector_notes": llm_result.get("sector_notes", []),
+        # Telemetry object for visualizations
+        "telemetry": telemetry,
+        # Keep weak_zones for potential future use
         "weak_zones": weak_zones,
-        "corners": processed.get("corners", []),
-        "delta": processed.get("delta", {}),
-        "track_coordinates": processed.get("track_coordinates", []),
-        "llm_analysis": llm_result,
     }
 
     # ----- Persist to DB -----
@@ -188,8 +218,8 @@ async def get_history(
 
     history = []
     for r in records:
-        llm = r.result_json.get("llm_analysis", {}) if r.result_json else {}
-        summary_snippet = llm.get("summary", "")
+        result = r.result_json or {}
+        summary_snippet = result.get("summary", "")
         if summary_snippet and len(summary_snippet) > 120:
             summary_snippet = summary_snippet[:120] + "…"
 
@@ -201,7 +231,7 @@ async def get_history(
                 "track_name": r.track_name,
                 "created_at": r.created_at.isoformat(),
                 "summary": summary_snippet,
-                "estimated_time_gain_seconds": llm.get("estimated_time_gain_seconds"),
+                "estimated_time_gain_seconds": result.get("estimated_time_gain_seconds"),
             }
         )
 
