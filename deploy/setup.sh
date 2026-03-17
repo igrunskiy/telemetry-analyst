@@ -68,24 +68,7 @@ if [ ! -f "$APP_DIR/.env" ]; then
   echo "    You MUST edit it to fill in:"
   echo "      - GARAGE61_CLIENT_ID"
   echo "      - GARAGE61_CLIENT_SECRET"
-  echo "      - GARAGE61_REDIRECT_URI (http://<your-vm-ip>/auth/callback)"
-  echo "      - CLAUDE_API_KEY"
-  echo "    ================================================="
-  echo ""
-else
-  echo "    .env already exists, skipping..."
-fi
-
-echo "==> Setting up systemd service..."
-cat > /etc/systemd/system/telemetry-analyst.service <<'SVCEOF'
-[Unit]
-Description=Telemetry Analyst
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
+  echo "      - GARAGE61_REDIRECT_URI (http://<your-vm-ip>:8000/auth/callback)"
 User=telemetry
 WorkingDirectory=/opt/telemetry-analyst
 ExecStart=/usr/bin/docker compose up -d --build

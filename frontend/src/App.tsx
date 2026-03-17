@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './hooks/useAuth'
+import { OAuthCallback } from './components/OAuthCallback'
 import LoginPage from './pages/Login'
 import LapSelectorPage from './pages/LapSelector'
 import ReportPage from './pages/Report'
@@ -31,8 +32,9 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/" element={<OAuthCallback />} />
       <Route
-        path="/"
+        path="/app"
         element={
           <ProtectedRoute>
             <LapSelectorPage />
@@ -55,8 +57,8 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-      {/* Catch-all: redirect to home */}
-      <Route path="*" element={<Navigate to="/" replace />} />
+      {/* Catch-all: redirect to app */}
+      <Route path="*" element={<Navigate to="/app" replace />} />
     </Routes>
   )
 }

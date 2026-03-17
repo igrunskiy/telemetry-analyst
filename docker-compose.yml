@@ -29,8 +29,8 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/app:/app/app
-    expose:
-      - "8000"
+    ports:
+      - "8000:8000"
 
   frontend:
     build:
