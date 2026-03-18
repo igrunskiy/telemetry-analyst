@@ -50,6 +50,19 @@ docker compose up --build
 # 6. Open http://localhost in your browser
 ```
 
+## Production (pre-built images)
+
+This repo includes `docker-compose.prod.yml` which runs the backend/frontend/proxy from pre-built images (GHCR).
+
+On your VM:
+
+1. (Once) `docker login ghcr.io`
+2. Set image vars (either in your shell or in `/opt/telemetry-analyst/.env`):
+   - `IMAGE_OWNER` (default: `igrunskiy`)
+   - `IMAGE_REPO` (default: `telemetry-analyst`)
+   - `IMAGE_TAG` (default: `latest`)
+3. Deploy: `sudo -u telemetry bash /opt/telemetry-analyst/deploy/deploy-images.sh`
+
 ## Architecture
 
 ```

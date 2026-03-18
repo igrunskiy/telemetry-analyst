@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Any
+import logging
 
 import httpx
 from fastapi import Depends, HTTPException, status
@@ -11,6 +12,9 @@ from app.auth.oauth import refresh_access_token
 from app.config import settings
 from app.database import get_db
 from app.models.user import User
+
+
+logger = logging.getLogger(__name__)
 
 
 class Garage61Client:
@@ -137,35 +141,58 @@ class Garage61Client:
     async def get_cars(self) -> list[dict]:
         """GET /cars — return list of cars."""
         data = await self._request("GET", "/cars")
-        # Handle both direct list and wrapped response
         if isinstance(data, list):
+            logger.info(f"Garage61 /cars list count: {len(data)}")
             return data
-        return data.get("cars") or data.get("data") or data.get("results") or []
+        if isinstance(data, dict):
+            for key in ("cars", "data", "results", "items"):
+                if key in data and isinstance(data[key], list):
+                    logger.info(f"Garage61 /cars {key} count: {len(data[key])}")
+                    return data[key]
+            logger.info(f"Garage61 /cars dict keys: {list(data.keys())}")
+        else:
+            logger.info(f"Garage61 /cars unexpected type: {type(data)}")
+        return []
 
     async def get_tracks(self) -> list[dict]:
         """GET /tracks — return list of tracks."""
         data = await self._request("GET", "/tracks")
         if isinstance(data, list):
+            logger.info(f"Garage61 /tracks list count: {len(data)}")
             return data
-        return data.get("tracks") or data.get("data") or data.get("results") or []
+        if isinstance(data, dict):
+            for key in ("tracks", "data", "results", "items"):
+                if key in data and isinstance(data[key], list):
+                    logger.info(f"Garage61 /tracks {key} count: {len(data[key])}")
+                    return data[key]
+            logger.info(f"Garage61 /tracks dict keys: {list(data.keys())}")
+        else:
+            logger.info(f"Garage61 /tracks unexpected type: {type(data)}")
+        return []
 
     async def get_my_laps(
         self,
         car_id: int | None = None,
         track_id: int | None = None,
-        limit: int = 20,
+        limit: int = 25,
+        offset: int = 0,
     ) -> list[dict]:
         """GET /laps filtered to the current user's laps."""
-        params: dict[str, Any] = {"limit": limit, "driver": self._user_id}
+        params: dict[str, Any] = {
+            "limit": limit,
+            "offset": offset,
+            "drivers": "me",
+            "group": "none",
+        }
         if car_id is not None:
-            params["car_id"] = car_id
+            params["cars"] = car_id
         if track_id is not None:
-            params["track_id"] = track_id
+            params["tracks"] = track_id
 
         data = await self._request("GET", "/laps", params=params)
         if isinstance(data, list):
             return data
-        return data.get("laps") or data.get("data") or data.get("results") or []
+        return data.get("items") or data.get("laps") or data.get("data") or data.get("results") or []
 
     async def get_reference_laps(
         self,
@@ -175,17 +202,51 @@ class Garage61Client:
     ) -> list[dict]:
         """GET /laps sorted by fastest time, excluding the current user."""
         params: dict[str, Any] = {
-            "car_id": car_id,
-            "track_id": track_id,
+            "cars": car_id,
+            "tracks": track_id,
             "limit": limit,
-            "sort": "laptime",
-            "order": "asc",
-            "exclude_driver": self._user_id,
+            "clean": 1,
         }
         data = await self._request("GET", "/laps", params=params)
         if isinstance(data, list):
             return data
-        return data.get("laps") or data.get("data") or data.get("results") or []
+        return data.get("items") or data.get("data") or data.get("results") or []
+
+    async def get_recent_laps(self, limit: int = 5) -> list[dict]:
+        """GET /laps — return the most recent laps for the current user."""
+        attempt_params = [
+            {"limit": limit, "drivers": "me", "group": "none"},
+        ]
+        data = None
+        for params in attempt_params:
+            try:
+                data = await self._request("GET", "/laps", params=params)
+                break
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 400:
+                    raise
+                continue
+        if data is None:
+            return []
+
+        if isinstance(data, list):
+            return data
+        return data.get("items") or data.get("data") or data.get("results") or []
+
+    async def get_me_statistics(self) -> dict:
+        """GET /me/statistics — return aggregate stats for the current user."""
+        data = await self._request("GET", "/me/statistics")
+        if isinstance(data, dict):
+            logger.info(f"Garage61 /me/statistics keys: {list(data.keys())}")
+            driving_stats = data.get("drivingStatistics")
+            if isinstance(driving_stats, dict):
+                logger.info(
+                    "Garage61 /me/statistics drivingStatistics keys: "
+                    f"{list(driving_stats.keys())}"
+                )
+            return data
+        logger.info(f"Garage61 /me/statistics unexpected type: {type(data)}")
+        return {}
 
     async def get_lap_csv(self, lap_id: str) -> str:
         """GET /laps/{lap_id}/csv — return raw CSV text."""

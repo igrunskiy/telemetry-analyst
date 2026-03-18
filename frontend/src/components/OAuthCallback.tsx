@@ -12,11 +12,18 @@ export function OAuthCallback() {
     if (accessToken) {
       // Store token in localStorage
       localStorage.setItem('access_token', accessToken)
-      // Clean up URL and navigate to home
-      navigate('/', { replace: true })
+      // Clean up URL and navigate to app
+      window.history.replaceState({}, '', '/callback')
+      window.location.replace('/app')
+      return
     } else {
-      // No token found, redirect to login
-      navigate('/login', { replace: true })
+      // No token in URL; if we already have one, go to app
+      if (localStorage.getItem('access_token')) {
+        window.location.replace('/app')
+      } else {
+        // No token found, redirect to login
+        window.location.replace('/login')
+      }
     }
   }, [navigate])
 

@@ -7,26 +7,102 @@ import {
   getCars,
   getTracks,
   getMyLaps,
+  getRecentLaps,
   getReferenceLaps,
   getAnalysisHistory,
   runAnalysis,
   logout,
 } from '../api/client'
-import type { Lap, AnalysisHistoryItem } from '../types'
+import type { Lap, AnalysisHistoryItem, Track } from '../types'
 
-function formatLapTime(ms: number): string {
+function normalizeLapTimeMs(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0
+  }
+  // Heuristic: Garage61 can return seconds; treat sub-1000 values as seconds.
+  if (value < 1000) {
+    return value * 1000
+  }
+  return value
+}
+
+function parseLapTime(value: number | string): number {
+  if (typeof value === 'number') {
+    return normalizeLapTimeMs(value)
+  }
+  if (!value) {
+    return 0
+  }
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return 0
+  }
+  // Support "M:SS.mmm" or "SS.mmm"
+  const match = trimmed.match(/^(\d+):(\d{2})(?:\.(\d{1,3}))?$/)
+  if (match) {
+    const minutes = Number(match[1])
+    const seconds = Number(match[2])
+    const millis = match[3] ? Number(match[3].padEnd(3, '0')) : 0
+    return (minutes * 60 + seconds) * 1000 + millis
+  }
+  const asNumber = Number(trimmed)
+  if (Number.isFinite(asNumber)) {
+    return normalizeLapTimeMs(asNumber)
+  }
+  return 0
+}
+
+function formatLapTime(value: number | string): string {
+  const ms = parseLapTime(value)
+  if (!ms) {
+    return '—'
+  }
   const totalSeconds = ms / 1000
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = (totalSeconds % 60).toFixed(3).padStart(6, '0')
   return `${minutes}:${seconds}`
 }
 
+function parseDate(value: string): Date | null {
+  if (!value) {
+    return null
+  }
+  if (/^\d+$/.test(value)) {
+    const num = Number(value)
+    if (Number.isFinite(num)) {
+      return new Date(value.length >= 13 ? num : num * 1000)
+    }
+  }
+  let parsed = new Date(value)
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    parsed = new Date(`${value}T00:00:00Z`)
+  } else if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
+    parsed = new Date(value.replace(' ', 'T') + 'Z')
+  }
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
 function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString(undefined, {
+  const parsed = parseDate(dateStr)
+  if (!parsed) {
+    return '—'
+  }
+  return parsed.toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
   })
+}
+
+function formatTrackName(track: Track): string {
+  const variant = track.variant || track.config
+  if (variant && variant.trim() && variant !== track.name) {
+    return `${track.name} - ${variant}`
+  }
+  return track.name
 }
 
 const ANALYSIS_STEPS = [
@@ -46,6 +122,8 @@ export default function LapSelectorPage() {
   const [selectedLapId, setSelectedLapId] = useState<string | null>(null)
   const [selectedRefIds, setSelectedRefIds] = useState<Set<string>>(new Set())
   const [analysisStep, setAnalysisStep] = useState(0)
+  const [myLapsLimit, setMyLapsLimit] = useState(25)
+  const [myLapsPage, setMyLapsPage] = useState(0)
 
   // Data fetching
   const { data: cars = [], isLoading: carsLoading } = useQuery({
@@ -59,8 +137,9 @@ export default function LapSelectorPage() {
   })
 
   const { data: myLaps = [], isLoading: myLapsLoading } = useQuery({
-    queryKey: ['myLaps', selectedCarId, selectedTrackId],
-    queryFn: () => getMyLaps(selectedCarId!, selectedTrackId!),
+    queryKey: ['myLaps', selectedCarId, selectedTrackId, myLapsLimit, myLapsPage],
+    queryFn: () =>
+      getMyLaps(selectedCarId!, selectedTrackId!, myLapsLimit, myLapsPage * myLapsLimit),
     enabled: selectedCarId !== null && selectedTrackId !== null,
   })
 
@@ -76,6 +155,11 @@ export default function LapSelectorPage() {
     queryFn: getAnalysisHistory,
   })
 
+  const { data: recentLaps = [], isLoading: recentLoading } = useQuery({
+    queryKey: ['recentLaps'],
+    queryFn: () => getRecentLaps(5),
+  })
+
   // Auto-select top 5 reference laps when they load
   useEffect(() => {
     if (refLaps.length > 0) {
@@ -84,16 +168,38 @@ export default function LapSelectorPage() {
   }, [refLaps])
 
   // Reset lap selection when car/track change
-  function handleCarChange(carId: number) {
+  function handleCarChange(carId: number | null) {
     setSelectedCarId(carId)
     setSelectedLapId(null)
     setSelectedRefIds(new Set())
+    setMyLapsPage(0)
   }
 
-  function handleTrackChange(trackId: number) {
+  function handleTrackChange(trackId: number | null) {
     setSelectedTrackId(trackId)
     setSelectedLapId(null)
     setSelectedRefIds(new Set())
+    setMyLapsPage(0)
+  }
+
+  function applyRecentFilters(carId: number | null, trackId: number | null) {
+    if (!carId || !trackId) {
+      return
+    }
+    setSelectedCarId(carId)
+    setSelectedTrackId(trackId)
+    setSelectedLapId(null)
+    setSelectedRefIds(new Set())
+    setMyLapsPage(0)
+  }
+
+  function resolveRecentIds(lap: Lap) {
+    const carId = lap.car_id ?? cars.find((car) => car.name === lap.car_name)?.id ?? null
+    const trackId =
+      lap.track_id ??
+      tracks.find((track) => formatTrackName(track) === lap.track_name)?.id ??
+      null
+    return { carId, trackId }
   }
 
   function toggleRefLap(lapId: string) {
@@ -218,7 +324,8 @@ export default function LapSelectorPage() {
                 <select
                   className="select"
                   value={selectedCarId ?? ''}
-                  onChange={(e) => handleCarChange(Number(e.target.value))}
+                  onChange={(e) => handleCarChange(e.target.value ? Number(e.target.value) : null)}
+                  data-testid="car-select"
                 >
                   <option value="">-- Choose a car --</option>
                   {cars.map((car) => (
@@ -246,13 +353,13 @@ export default function LapSelectorPage() {
                 <select
                   className="select"
                   value={selectedTrackId ?? ''}
-                  onChange={(e) => handleTrackChange(Number(e.target.value))}
+                  onChange={(e) => handleTrackChange(e.target.value ? Number(e.target.value) : null)}
+                  data-testid="track-select"
                 >
                   <option value="">-- Choose a track --</option>
                   {tracks.map((track) => (
                     <option key={track.id} value={track.id}>
-                      {track.name}
-                      {track.config ? ` — ${track.config}` : ''}
+                      {formatTrackName(track)}
                     </option>
                   ))}
                 </select>
@@ -267,6 +374,23 @@ export default function LapSelectorPage() {
                     3
                   </div>
                   <span className="text-white font-medium text-sm">Your Laps</span>
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <span>Rows</span>
+                    <select
+                      className="bg-slate-800 border border-slate-700 rounded-md px-2 py-1 text-xs text-slate-200"
+                      value={myLapsLimit}
+                      onChange={(e) => {
+                        setMyLapsLimit(Number(e.target.value))
+                        setMyLapsPage(0)
+                      }}
+                    >
+                      {[10, 25, 50, 100].map((size) => (
+                        <option key={size} value={size}>
+                          {size}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 {myLapsLoading ? (
@@ -280,50 +404,71 @@ export default function LapSelectorPage() {
                     No laps found for this car &amp; track combination.
                   </p>
                 ) : (
-                  <div className="overflow-x-auto -mx-4 px-4">
-                    <table className="w-full text-sm min-w-[300px]">
-                      <thead>
-                        <tr className="text-slate-500 text-xs border-b border-slate-700">
-                          <th className="text-left pb-2 font-medium">Select</th>
-                          <th className="text-left pb-2 font-medium flex items-center gap-1">
-                            <Clock className="w-3 h-3" /> Lap Time
-                          </th>
-                          <th className="text-left pb-2 font-medium">
-                            <Calendar className="w-3 h-3 inline mr-1" />Date
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-700/50">
-                        {myLaps.map((lap: Lap) => (
-                          <tr
-                            key={lap.id}
-                            className={`cursor-pointer transition-colors ${
-                              selectedLapId === lap.id
-                                ? 'bg-amber-500/10'
-                                : 'hover:bg-slate-700/50'
-                            }`}
-                            onClick={() => setSelectedLapId(lap.id)}
-                          >
-                            <td className="py-2.5 pr-3">
-                              <input
-                                type="radio"
-                                name="userLap"
-                                checked={selectedLapId === lap.id}
-                                onChange={() => setSelectedLapId(lap.id)}
-                                className="accent-amber-500"
-                              />
-                            </td>
-                            <td className="py-2.5 font-mono text-white">
-                              {formatLapTime(lap.lap_time)}
-                            </td>
-                            <td className="py-2.5 text-slate-400">
-                              {formatDate(lap.recorded_at)}
-                            </td>
+                  <>
+                    <div className="overflow-x-auto -mx-4 px-4">
+                      <table className="w-full text-sm min-w-[300px]">
+                        <thead>
+                          <tr className="text-slate-500 text-xs border-b border-slate-700">
+                            <th className="text-left pb-2 font-medium">Select</th>
+                            <th className="text-left pb-2 font-medium flex items-center gap-1">
+                              <Clock className="w-3 h-3" /> Lap Time
+                            </th>
+                            <th className="text-left pb-2 font-medium">
+                              <Calendar className="w-3 h-3 inline mr-1" />Date
+                            </th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody className="divide-y divide-slate-700/50">
+                          {myLaps.map((lap: Lap) => (
+                            <tr
+                              key={lap.id}
+                              className={`cursor-pointer transition-colors ${
+                                selectedLapId === lap.id
+                                  ? 'bg-amber-500/10'
+                                  : 'hover:bg-slate-700/50'
+                              }`}
+                              onClick={() => setSelectedLapId(lap.id)}
+                            >
+                              <td className="py-2.5 pr-3">
+                                <input
+                                  type="radio"
+                                  name="userLap"
+                                  checked={selectedLapId === lap.id}
+                                  onChange={() => setSelectedLapId(lap.id)}
+                                  className="accent-amber-500"
+                                />
+                              </td>
+                              <td className="py-2.5 font-mono text-white">
+                                {formatLapTime(lap.lap_time)}
+                              </td>
+                              <td className="py-2.5 text-slate-400">
+                                {formatDate(lap.recorded_at)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-slate-500 mt-3">
+                      <button
+                        type="button"
+                        onClick={() => setMyLapsPage((prev) => Math.max(0, prev - 1))}
+                        disabled={myLapsPage === 0}
+                        className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
+                      >
+                        Previous
+                      </button>
+                      <span>Page {myLapsPage + 1}</span>
+                      <button
+                        type="button"
+                        onClick={() => setMyLapsPage((prev) => prev + 1)}
+                        disabled={myLaps.length < myLapsLimit}
+                        className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </>
                 )}
               </div>
             )}
@@ -414,8 +559,65 @@ export default function LapSelectorPage() {
             )}
           </div>
 
-          {/* Right column: Analysis History */}
-          <div className="flex flex-col gap-4">
+          {/* Right column: Recent Activity + Analysis History */}
+          <div className="flex flex-col gap-4" data-testid="analysis-history">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-white">Recent Activity</h2>
+            </div>
+
+            {recentLoading ? (
+              <div className="space-y-3">
+                {[...Array(3)].map((_, i) => (
+                  <div key={i} className="h-16 bg-slate-800 rounded-xl border border-slate-700 animate-pulse" />
+                ))}
+              </div>
+            ) : recentLaps.length === 0 ? (
+              <div className="card flex flex-col items-center py-8 text-center">
+                <Calendar className="w-8 h-8 text-slate-600 mb-2" />
+                <p className="text-slate-400 text-sm">No recent activity yet.</p>
+                <p className="text-slate-500 text-xs mt-1">Your latest laps will show up here.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {recentLaps.map((lap) => {
+                  const { carId, trackId } = resolveRecentIds(lap)
+                  const canApply = Boolean(carId && trackId)
+                  return (
+                    <button
+                      key={lap.id}
+                      type="button"
+                      onClick={() => applyRecentFilters(carId, trackId)}
+                      disabled={!canApply}
+                      title={
+                        canApply
+                          ? 'Use this car and track for filtering'
+                          : 'Car or track not available for filtering'
+                      }
+                      className={`card text-left transition-colors ${
+                        canApply ? 'hover:bg-slate-700' : 'opacity-70 cursor-not-allowed'
+                      }`}
+                    >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-sm">
+                          <Car className="w-4 h-4 text-slate-500" />
+                          <span className="text-white truncate">{lap.car_name}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-sm mt-1">
+                          <MapPin className="w-4 h-4 text-slate-500" />
+                          <span className="text-slate-300 truncate">{lap.track_name}</span>
+                        </div>
+                      </div>
+                      <span className="text-slate-500 text-xs flex-shrink-0">
+                        {formatDate(lap.recorded_at)}
+                      </span>
+                    </div>
+                  </button>
+                  )
+                })}
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-white">Analysis History</h2>
             </div>
@@ -427,7 +629,10 @@ export default function LapSelectorPage() {
                 ))}
               </div>
             ) : history.length === 0 ? (
-              <div className="card flex flex-col items-center py-10 text-center">
+              <div
+                className="card flex flex-col items-center py-10 text-center"
+                data-testid="analysis-history-empty"
+              >
                 <BarChart2 className="w-10 h-10 text-slate-600 mb-3" />
                 <p className="text-slate-400 text-sm">No analyses yet.</p>
                 <p className="text-slate-500 text-xs mt-1">
@@ -439,6 +644,7 @@ export default function LapSelectorPage() {
                 {history.map((item: AnalysisHistoryItem) => (
                   <button
                     key={item.id}
+                    data-testid="analysis-history-item"
                     onClick={() => navigate(`/report/${item.id}`)}
                     className="w-full card text-left hover:bg-slate-700 transition-colors group"
                   >
@@ -472,3 +678,4 @@ export default function LapSelectorPage() {
     </div>
   )
 }
+

@@ -55,9 +55,21 @@ export async function getTracks(): Promise<Track[]> {
   return data
 }
 
-export async function getMyLaps(carId: number, trackId: number): Promise<Lap[]> {
+export async function getMyLaps(
+  carId: number,
+  trackId: number,
+  limit = 25,
+  offset = 0,
+): Promise<Lap[]> {
   const { data } = await api.get<Lap[]>('/api/laps/my-laps', {
-    params: { car_id: carId, track_id: trackId },
+    params: { car_id: carId, track_id: trackId, limit, offset },
+  })
+  return data
+}
+
+export async function getRecentLaps(limit = 5): Promise<Lap[]> {
+  const { data } = await api.get<Lap[]>('/api/laps/recent', {
+    params: { limit },
   })
   return data
 }

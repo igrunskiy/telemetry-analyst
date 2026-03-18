@@ -32,7 +32,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/" element={<OAuthCallback />} />
+      <Route path="/callback" element={<OAuthCallback />} />
+      <Route path="/" element={<Navigate to="/app" replace />} />
       <Route
         path="/app"
         element={

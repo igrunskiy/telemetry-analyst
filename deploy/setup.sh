@@ -20,7 +20,7 @@ echo "==> Updating system packages..."
 apt-get update -qq && apt-get upgrade -y -qq
 
 echo "==> Installing Docker..."
-apt-get install -y -qq ca-certificates curl gnupg git
+apt-get install -y -qq ca-certificates curl gnupg git openssl python3
 
 # Detect OS (ubuntu or debian)
 . /etc/os-release
@@ -86,9 +86,24 @@ if [ ! -f "$APP_DIR/.env" ]; then
   echo "    You MUST edit it to fill in:"
   echo "      - GARAGE61_CLIENT_ID"
   echo "      - GARAGE61_CLIENT_SECRET"
-  echo "      - GARAGE61_REDIRECT_URI (http://<your-vm-ip>:8000/auth/callback)"
-User=telemetry
-WorkingDirectory=/opt/telemetry-analyst
+  echo "      - GARAGE61_REDIRECT_URI (http://<your-vm-ip>/auth/callback)"
+  echo "      - CLAUDE_API_KEY"
+  echo "    ================================================="
+  echo ""
+fi
+
+echo "==> Creating systemd service..."
+cat > /etc/systemd/system/telemetry-analyst.service <<SVCEOF
+[Unit]
+Description=Telemetry Analyst (Docker Compose)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=${APP_USER}
+WorkingDirectory=${APP_DIR}
 ExecStart=/usr/bin/docker compose up -d --build --remove-orphans
 ExecStop=/usr/bin/docker compose down
 TimeoutStartSec=600

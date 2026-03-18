@@ -4,6 +4,10 @@ from typing import List
 
 
 class Settings(BaseSettings):
+    LOG_LEVEL: str = "INFO"
+    ENABLE_REMOTE_DEBUG: bool = False
+    REMOTE_DEBUG_PORT: int = 5678
+    REMOTE_DEBUG_WAIT: bool = False
     DATABASE_URL: str
     SECRET_KEY: str
     GARAGE61_CLIENT_ID: str
@@ -12,6 +16,7 @@ class Settings(BaseSettings):
     GARAGE61_AUTH_URL: str = "https://garage61.net/app/account/oauth"
     GARAGE61_TOKEN_URL: str = "https://garage61.net/api/oauth/token"
     GARAGE61_API_BASE: str = "https://garage61.net/api/v1"
+    GARAGE61_PERSONAL_TOKEN: str = ""
     CLAUDE_API_KEY: str = ""
     ENCRYPTION_KEY: str
     JWT_ALGORITHM: str = "HS256"

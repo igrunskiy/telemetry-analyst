@@ -12,3 +12,4 @@ numpy==2.1.1
 cryptography==43.0.1
 python-multipart==0.0.12
 anthropic==0.40.0
+debugpy==1.8.5

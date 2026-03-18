@@ -11,14 +11,31 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from sqlalchemy import text
+
 from app.database import Base, engine
 
 # Configure logging with timestamps
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
+
+if settings.ENABLE_REMOTE_DEBUG:
+    try:
+        import debugpy
+
+        debugpy.listen(("0.0.0.0", settings.REMOTE_DEBUG_PORT))
+        logging.getLogger(__name__).info(
+            "Remote debugpy listening on 0.0.0.0:%s",
+            settings.REMOTE_DEBUG_PORT,
+        )
+        if settings.REMOTE_DEBUG_WAIT:
+            logging.getLogger(__name__).info("Waiting for debug client to attach...")
+            debugpy.wait_for_client()
+    except Exception:
+        logging.getLogger(__name__).exception("Failed to start remote debugpy")
 
 
 @asynccontextmanager
@@ -28,7 +45,12 @@ async def lifespan(app: FastAPI):
     import app.models  # noqa: F401
 
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        # Prevent multiple workers from running DDL concurrently
+        await conn.execute(text("SELECT pg_advisory_lock(987654321)"))
+        try:
+            await conn.run_sync(Base.metadata.create_all)
+        finally:
+            await conn.execute(text("SELECT pg_advisory_unlock(987654321)"))
 
     yield
 

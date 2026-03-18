@@ -8,12 +8,15 @@ export interface User {
 export interface Car {
   id: number
   name: string
+  platform_id?: string
 }
 
 export interface Track {
   id: number
   name: string
   config?: string
+  variant?: string
+  platform_id?: number | string
 }
 
 export interface Lap {
@@ -21,6 +24,8 @@ export interface Lap {
   lap_time: number // milliseconds
   car_name: string
   track_name: string
+  car_id?: number
+  track_id?: number
   driver_name: string
   recorded_at: string
 }
