@@ -7,6 +7,7 @@ import {
   getCars,
   getTracks,
   getMyLaps,
+  getMySessions,
   getRecentLaps,
   getReferenceLaps,
   getAnalysisHistory,
@@ -14,7 +15,7 @@ import {
   deleteAnalysis,
   logout,
 } from '../api/client'
-import type { Lap, AnalysisHistoryItem, Track } from '../types'
+import type { Lap, Session, AnalysisHistoryItem, Track } from '../types'
 
 function normalizeLapTimeMs(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
@@ -129,15 +130,18 @@ export default function LapSelectorPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
 
-  const [analysisMode, setAnalysisMode] = useState<'vs_reference' | 'solo'>('vs_reference')
+  const [analysisMode, setAnalysisMode] = useState<'vs_reference' | 'sessions'>('vs_reference')
   const [selectedCarId, setSelectedCarId] = useState<number | null>(null)
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null)
   const [selectedLapId, setSelectedLapId] = useState<string | null>(null)
   const [selectedRefIds, setSelectedRefIds] = useState<Set<string>>(new Set())
-  const [selectedSoloLapIds, setSelectedSoloLapIds] = useState<Set<string>>(new Set())
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null)
   const [analysisStep, setAnalysisStep] = useState(0)
   const [myLapsLimit, setMyLapsLimit] = useState(10)
   const [myLapsPage, setMyLapsPage] = useState(0)
+  const [mySessionsLimit, setMySessionsLimit] = useState(10)
+  const [mySessionsPage, setMySessionsPage] = useState(0)
   const [recentPage, setRecentPage] = useState(0)
   const RECENT_PAGE_SIZE = 5
 
@@ -156,7 +160,14 @@ export default function LapSelectorPage() {
     queryKey: ['myLaps', selectedCarId, selectedTrackId, myLapsLimit, myLapsPage],
     queryFn: () =>
       getMyLaps(selectedCarId!, selectedTrackId!, myLapsLimit, myLapsPage * myLapsLimit),
-    enabled: selectedCarId !== null && selectedTrackId !== null,
+    enabled: selectedCarId !== null && selectedTrackId !== null && analysisMode === 'vs_reference',
+  })
+
+  const { data: mySessions = [], isLoading: mySessionsLoading } = useQuery({
+    queryKey: ['mySessions', selectedCarId, selectedTrackId, mySessionsLimit, mySessionsPage],
+    queryFn: () =>
+      getMySessions(selectedCarId!, selectedTrackId!, mySessionsLimit, mySessionsPage * mySessionsLimit),
+    enabled: selectedCarId !== null && selectedTrackId !== null && analysisMode === 'sessions',
   })
 
   const { data: refLaps = [], isLoading: refLapsLoading } = useQuery({
@@ -215,13 +226,15 @@ export default function LapSelectorPage() {
     }
   }, [refLaps])
 
-  // Reset lap selection when car/track change
+  // Reset lap/session selection when car/track change
   function handleCarChange(carId: number | null) {
     setSelectedCarId(carId)
     setSelectedLapId(null)
     setSelectedRefIds(new Set())
-    setSelectedSoloLapIds(new Set())
+    setSelectedSessionId(null)
+    setExpandedSessionId(null)
     setMyLapsPage(0)
+    setMySessionsPage(0)
     setRecentPage(0)
   }
 
@@ -229,8 +242,10 @@ export default function LapSelectorPage() {
     setSelectedTrackId(trackId)
     setSelectedLapId(null)
     setSelectedRefIds(new Set())
-    setSelectedSoloLapIds(new Set())
+    setSelectedSessionId(null)
+    setExpandedSessionId(null)
     setMyLapsPage(0)
+    setMySessionsPage(0)
     setRecentPage(0)
   }
 
@@ -242,8 +257,10 @@ export default function LapSelectorPage() {
     setSelectedTrackId(trackId)
     setSelectedLapId(null)
     setSelectedRefIds(new Set())
-    setSelectedSoloLapIds(new Set())
+    setSelectedSessionId(null)
+    setExpandedSessionId(null)
     setMyLapsPage(0)
+    setMySessionsPage(0)
   }
 
   function resolveRecentIds(lap: Lap) {
@@ -267,23 +284,12 @@ export default function LapSelectorPage() {
     })
   }
 
-  function toggleSoloLap(lapId: string) {
-    setSelectedSoloLapIds((prev: Set<string>) => {
-      const next = new Set(prev)
-      if (next.has(lapId)) {
-        next.delete(lapId)
-      } else {
-        next.add(lapId)
-      }
-      return next
-    })
-  }
-
-  function handleModeChange(mode: 'vs_reference' | 'solo') {
+  function handleModeChange(mode: 'vs_reference' | 'sessions') {
     setAnalysisMode(mode)
     setSelectedLapId(null)
     setSelectedRefIds(new Set())
-    setSelectedSoloLapIds(new Set())
+    setSelectedSessionId(null)
+    setExpandedSessionId(null)
   }
 
   // Analysis mutation
@@ -297,23 +303,34 @@ export default function LapSelectorPage() {
 
       try {
         let result
-        if (analysisMode === 'solo') {
-          // Sort selected laps by time, fastest first — it becomes the primary
-          const sorted = Array.from(selectedSoloLapIds)
-            .map((id) => myLaps.find((l: Lap) => l.id === id))
-            .filter((l): l is Lap => l !== undefined)
-            .sort((a, b) => parseLapTime(a.lap_time) - parseLapTime(b.lap_time))
+        if (analysisMode === 'sessions') {
+          const session = mySessions.find((s: Session) => s.id === selectedSessionId)!
+          const sorted = [...session.laps].sort(
+            (a, b) => parseLapTime(a.lap_time) - parseLapTime(b.lap_time)
+          )
           const primary = sorted[0]
-          const rest = sorted.slice(1).map((l) => l.id)
-          result = await runAnalysis(primary.id, rest, primary.car_name, primary.track_name, 'solo')
+          const rest = sorted.slice(1)
+          const lapsMetadata = [
+            { id: primary.id, role: 'user' as const, driver_name: primary.driver_name, lap_time: parseLapTime(primary.lap_time) },
+            ...rest.map((l) => ({ id: l.id, role: 'reference' as const, driver_name: l.driver_name, lap_time: parseLapTime(l.lap_time) })),
+          ]
+          result = await runAnalysis(primary.id, rest.map((l) => l.id), primary.car_name, primary.track_name, 'solo', lapsMetadata)
         } else {
           const lap = myLaps.find((l) => l.id === selectedLapId)!
+          const lapsMetadata = [
+            { id: lap.id, role: 'user' as const, driver_name: lap.driver_name, lap_time: parseLapTime(lap.lap_time) },
+            ...Array.from(selectedRefIds).map((id) => {
+              const ref = refLaps.find((r) => r.id === id)
+              return { id, role: 'reference' as const, driver_name: ref?.driver_name ?? '', lap_time: parseLapTime(ref?.lap_time ?? 0), irating: ref?.irating }
+            }),
+          ]
           result = await runAnalysis(
             selectedLapId!,
             Array.from(selectedRefIds),
             lap.car_name,
             lap.track_name,
             'vs_reference',
+            lapsMetadata,
           )
         }
         clearInterval(interval)
@@ -350,8 +367,9 @@ export default function LapSelectorPage() {
     }
   }
 
-  const canAnalyse = analysisMode === 'solo'
-    ? selectedSoloLapIds.size >= 2 && !analysisMutation.isPending
+  const selectedSession = mySessions.find((s: Session) => s.id === selectedSessionId)
+  const canAnalyse = analysisMode === 'sessions'
+    ? selectedSessionId !== null && (selectedSession?.laps?.length ?? 0) >= 2 && !analysisMutation.isPending
     : selectedLapId !== null && selectedRefIds.size > 0 && !analysisMutation.isPending
 
   return (
@@ -417,21 +435,21 @@ export default function LapSelectorPage() {
                   vs Reference
                 </button>
                 <button
-                  onClick={() => handleModeChange('solo')}
+                  onClick={() => handleModeChange('sessions')}
                   className={`px-3 py-1.5 rounded-md transition-colors ${
-                    analysisMode === 'solo'
+                    analysisMode === 'sessions'
                       ? 'bg-amber-500 text-slate-900'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  My Laps Only
+                  My Sessions
                 </button>
               </div>
             </div>
 
-            {analysisMode === 'solo' && (
+            {analysisMode === 'sessions' && (
               <p className="text-slate-500 text-xs -mt-2">
-                Select 2 or more of your own laps. The fastest will be used as the baseline to find patterns and improvement areas across your sessions.
+                Select one of your sessions. All laps from that session will be analysed together — the fastest becomes the baseline.
               </p>
             )}
 
@@ -525,7 +543,7 @@ export default function LapSelectorPage() {
               )}
             </div>
 
-            {/* Step 3: Your Laps */}
+            {/* Step 3: Sessions or Laps depending on mode */}
             {selectedCarId && selectedTrackId && (
               <div className="card">
                 <div className="flex items-center gap-2 mb-3">
@@ -533,21 +551,21 @@ export default function LapSelectorPage() {
                     3
                   </div>
                   <span className="text-white font-medium text-sm">
-                    {analysisMode === 'solo' ? 'Select Your Laps' : 'Your Laps'}
+                    {analysisMode === 'sessions' ? 'Select Session' : 'Your Laps'}
                   </span>
-                  {analysisMode === 'solo' && (
-                    <span className="text-slate-500 text-xs">
-                      ({selectedSoloLapIds.size} selected, need ≥ 2)
-                    </span>
-                  )}
                   <div className="flex items-center gap-2 text-xs text-slate-400 ml-auto">
                     <span>Rows</span>
                     <select
                       className="bg-slate-800 border border-slate-700 rounded-md px-2 py-1 text-xs text-slate-200"
-                      value={myLapsLimit}
+                      value={analysisMode === 'sessions' ? mySessionsLimit : myLapsLimit}
                       onChange={(e) => {
-                        setMyLapsLimit(Number(e.target.value))
-                        setMyLapsPage(0)
+                        if (analysisMode === 'sessions') {
+                          setMySessionsLimit(Number(e.target.value))
+                          setMySessionsPage(0)
+                        } else {
+                          setMyLapsLimit(Number(e.target.value))
+                          setMyLapsPage(0)
+                        }
                       }}
                     >
                       {[10, 25, 50, 100].map((size) => (
@@ -559,103 +577,198 @@ export default function LapSelectorPage() {
                   </div>
                 </div>
 
-                {myLapsLoading ? (
-                  <div className="space-y-2">
-                    {[...Array(3)].map((_, i) => (
-                      <div key={i} className="h-12 bg-slate-700 rounded-lg animate-pulse" />
-                    ))}
-                  </div>
-                ) : myLaps.length === 0 ? (
-                  <p className="text-slate-500 text-sm text-center py-4">
-                    No laps found for this car &amp; track combination.
-                  </p>
-                ) : (
-                  <>
-                    <div className="overflow-x-auto -mx-4 px-4">
-                      <table className="w-full text-sm min-w-[300px]">
-                        <thead>
-                          <tr className="text-slate-500 text-xs border-b border-slate-700">
-                            <th className="text-left pb-2 font-medium">Select</th>
-                            <th className="text-left pb-2 font-medium flex items-center gap-1">
-                              <Clock className="w-3 h-3" /> Lap Time
-                            </th>
-                            <th className="text-left pb-2 font-medium">
-                              <Calendar className="w-3 h-3 inline mr-1" />Date
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-700/50">
-                          {myLaps.map((lap: Lap) => {
-                            const isSoloSelected = selectedSoloLapIds.has(lap.id)
-                            const isRefSelected = selectedLapId === lap.id
-                            const isHighlighted = analysisMode === 'solo' ? isSoloSelected : isRefSelected
-                            return (
-                              <tr
-                                key={lap.id}
-                                className={`cursor-pointer transition-colors ${
-                                  isHighlighted ? 'bg-amber-500/10' : 'hover:bg-slate-700/50'
+                {/* Sessions mode */}
+                {analysisMode === 'sessions' && (
+                  mySessionsLoading ? (
+                    <div className="space-y-2">
+                      {[...Array(3)].map((_, i) => (
+                        <div key={i} className="h-12 bg-slate-700 rounded-lg animate-pulse" />
+                      ))}
+                    </div>
+                  ) : mySessions.length === 0 ? (
+                    <p className="text-slate-500 text-sm text-center py-4">
+                      No sessions found for this car &amp; track combination.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="space-y-1">
+                        {mySessions.map((session: Session) => {
+                          const isSelected = selectedSessionId === session.id
+                          const isExpanded = expandedSessionId === session.id
+                          const hasEnoughLaps = session.laps.length >= 2
+                          return (
+                            <div key={session.id}>
+                              <div
+                                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg transition-colors ${
+                                  isSelected
+                                    ? 'bg-amber-500/10 border border-amber-500/30'
+                                    : 'bg-slate-700/40 border border-transparent hover:bg-slate-700/70'
                                 }`}
-                                onClick={() =>
-                                  analysisMode === 'solo'
-                                    ? toggleSoloLap(lap.id)
-                                    : setSelectedLapId(lap.id)
-                                }
                               >
-                                <td className="py-2.5 pr-3">
-                                  {analysisMode === 'solo' ? (
-                                    <input
-                                      type="checkbox"
-                                      checked={isSoloSelected}
-                                      onChange={() => toggleSoloLap(lap.id)}
-                                      className="accent-amber-500"
-                                    />
-                                  ) : (
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  disabled={!hasEnoughLaps}
+                                  onChange={() => {
+                                    setSelectedSessionId(isSelected ? null : session.id)
+                                    if (!isSelected) setExpandedSessionId(session.id)
+                                  }}
+                                  className="accent-amber-500 flex-shrink-0 cursor-pointer disabled:cursor-not-allowed"
+                                />
+                                <div className="flex-1 min-w-0 flex items-center gap-3 flex-wrap">
+                                  <span className="font-mono text-white text-sm">
+                                    {formatLapTime(session.best_lap_time)}
+                                  </span>
+                                  <span className={`text-xs ${hasEnoughLaps ? 'text-slate-400' : 'text-slate-600'}`}>
+                                    {session.lap_count} lap{session.lap_count !== 1 ? 's' : ''}
+                                    {!hasEnoughLaps && ' (need ≥ 2)'}
+                                  </span>
+                                  <span className="text-slate-500 text-xs flex items-center gap-1">
+                                    <Calendar className="w-3 h-3" />
+                                    {formatDate(session.date)}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}
+                                  className="p-0.5 text-slate-500 hover:text-slate-300 flex-shrink-0"
+                                >
+                                  <ChevronRight
+                                    className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                                  />
+                                </button>
+                              </div>
+
+                              {/* Expanded laps within session */}
+                              {isExpanded && session.laps.length > 0 && (
+                                <div className="ml-4 mt-1 mb-1 border-l border-slate-700 pl-3 space-y-0.5">
+                                  {[...session.laps]
+                                    .sort((a, b) => parseLapTime(a.lap_time) - parseLapTime(b.lap_time))
+                                    .map((lap, idx) => (
+                                      <div key={lap.id} className="flex items-center gap-3 py-1 text-xs">
+                                        <span className="text-slate-600 w-4 text-right flex-shrink-0">{idx + 1}</span>
+                                        <span className={`font-mono flex-shrink-0 ${idx === 0 ? 'text-amber-400' : 'text-slate-300'}`}>
+                                          {formatLapTime(lap.lap_time)}
+                                        </span>
+                                        <span className="text-slate-500">
+                                          {formatDateTime(lap.recorded_at)}
+                                        </span>
+                                      </div>
+                                    ))}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                      <div className="flex items-center justify-between text-xs text-slate-500 mt-3">
+                        <button
+                          type="button"
+                          onClick={() => setMySessionsPage((prev) => Math.max(0, prev - 1))}
+                          disabled={mySessionsPage === 0}
+                          className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
+                        >
+                          Previous
+                        </button>
+                        <span>Page {mySessionsPage + 1}</span>
+                        <button
+                          type="button"
+                          onClick={() => setMySessionsPage((prev) => prev + 1)}
+                          disabled={mySessions.length < mySessionsLimit}
+                          className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </>
+                  )
+                )}
+
+                {/* vs_reference mode — individual lap selection */}
+                {analysisMode === 'vs_reference' && (
+                  myLapsLoading ? (
+                    <div className="space-y-2">
+                      {[...Array(3)].map((_, i) => (
+                        <div key={i} className="h-12 bg-slate-700 rounded-lg animate-pulse" />
+                      ))}
+                    </div>
+                  ) : myLaps.length === 0 ? (
+                    <p className="text-slate-500 text-sm text-center py-4">
+                      No laps found for this car &amp; track combination.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="overflow-x-auto -mx-4 px-4">
+                        <table className="w-full text-sm min-w-[300px]">
+                          <thead>
+                            <tr className="text-slate-500 text-xs border-b border-slate-700">
+                              <th className="text-left pb-2 font-medium">Select</th>
+                              <th className="text-left pb-2 font-medium flex items-center gap-1">
+                                <Clock className="w-3 h-3" /> Lap Time
+                              </th>
+                              <th className="text-left pb-2 font-medium">
+                                <Calendar className="w-3 h-3 inline mr-1" />Date
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-700/50">
+                            {myLaps.map((lap: Lap) => {
+                              const isSelected = selectedLapId === lap.id
+                              return (
+                                <tr
+                                  key={lap.id}
+                                  className={`cursor-pointer transition-colors ${
+                                    isSelected ? 'bg-amber-500/10' : 'hover:bg-slate-700/50'
+                                  }`}
+                                  onClick={() => setSelectedLapId(lap.id)}
+                                >
+                                  <td className="py-2.5 pr-3">
                                     <input
                                       type="radio"
                                       name="userLap"
-                                      checked={isRefSelected}
+                                      checked={isSelected}
                                       onChange={() => setSelectedLapId(lap.id)}
                                       className="accent-amber-500"
                                     />
-                                  )}
-                                </td>
-                                <td className="py-2.5 font-mono text-white">
-                                  {formatLapTime(lap.lap_time)}
-                                </td>
-                                <td className="py-2.5 text-slate-400">
-                                  {formatDate(lap.recorded_at)}
-                                </td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                    <div className="flex items-center justify-between text-xs text-slate-500 mt-3">
-                      <button
-                        type="button"
-                        onClick={() => setMyLapsPage((prev) => Math.max(0, prev - 1))}
-                        disabled={myLapsPage === 0}
-                        className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
-                      >
-                        Previous
-                      </button>
-                      <span>Page {myLapsPage + 1}</span>
-                      <button
-                        type="button"
-                        onClick={() => setMyLapsPage((prev) => prev + 1)}
-                        disabled={myLaps.length < myLapsLimit}
-                        className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
-                      >
-                        Next
-                      </button>
-                    </div>
-                  </>
+                                  </td>
+                                  <td className="py-2.5 font-mono text-white">
+                                    {formatLapTime(lap.lap_time)}
+                                  </td>
+                                  <td className="py-2.5 text-slate-400">
+                                    {formatDate(lap.recorded_at)}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="flex items-center justify-between text-xs text-slate-500 mt-3">
+                        <button
+                          type="button"
+                          onClick={() => setMyLapsPage((prev) => Math.max(0, prev - 1))}
+                          disabled={myLapsPage === 0}
+                          className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
+                        >
+                          Previous
+                        </button>
+                        <span>Page {myLapsPage + 1}</span>
+                        <button
+                          type="button"
+                          onClick={() => setMyLapsPage((prev) => prev + 1)}
+                          disabled={myLaps.length < myLapsLimit}
+                          className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </>
+                  )
                 )}
               </div>
             )}
 
-            {/* Step 4: Reference Laps — hidden in solo mode */}
+            {/* Step 4: Reference Laps — hidden in sessions mode */}
             {selectedCarId && selectedTrackId && analysisMode === 'vs_reference' && (
               <div className="card">
                 <div className="flex items-center gap-2 mb-3">
@@ -734,7 +847,7 @@ export default function LapSelectorPage() {
                 ) : (
                   <>
                     <BarChart2 className="w-5 h-5" />
-                    <span>Analyse Lap</span>
+                    <span>{analysisMode === 'sessions' ? 'Analyse Session' : 'Analyse Lap'}</span>
                   </>
                 )}
               </button>
@@ -951,4 +1064,3 @@ export default function LapSelectorPage() {
     </div>
   )
 }
-

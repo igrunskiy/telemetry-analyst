@@ -177,19 +177,28 @@ class Garage61Client:
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict]:
-        """GET /laps filtered to the current user's laps."""
+        """GET /laps filtered to the current user's laps, ungrouped (one row per lap)."""
         params: dict[str, Any] = {
             "limit": limit,
             "offset": offset,
             "drivers": "me",
             "clean": 1,
+            "group": "none",
         }
         if car_id is not None:
             params["cars"] = car_id
         if track_id is not None:
             params["tracks"] = track_id
 
-        data = await self._request("GET", "/laps", params=params)
+        try:
+            data = await self._request("GET", "/laps", params=params)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 400:
+                raise
+            # API rejected group=none — retry without it
+            params.pop("group")
+            data = await self._request("GET", "/laps", params=params)
+
         if isinstance(data, list):
             return data
         return data.get("items") or data.get("laps") or data.get("data") or data.get("results") or []
@@ -211,6 +220,33 @@ class Garage61Client:
         if isinstance(data, list):
             return data
         return data.get("items") or data.get("data") or data.get("results") or []
+
+    async def get_my_sessions(
+        self,
+        car_id: int | None = None,
+        track_id: int | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict]:
+        """GET /sessions filtered to the current user's sessions."""
+        params: dict[str, Any] = {
+            "limit": limit,
+            "offset": offset,
+            "drivers": "me",
+        }
+        if car_id is not None:
+            params["cars"] = car_id
+        if track_id is not None:
+            params["tracks"] = track_id
+
+        try:
+            data = await self._request("GET", "/sessions", params=params)
+            if isinstance(data, list):
+                return data
+            return data.get("items") or data.get("sessions") or data.get("data") or data.get("results") or []
+        except Exception:
+            logger.info("Garage61 /sessions endpoint not available, will fall back to laps grouping")
+            return []
 
     async def get_recent_laps(self, limit: int = 5) -> list[dict]:
         """GET /laps — return the most recent laps for the current user."""

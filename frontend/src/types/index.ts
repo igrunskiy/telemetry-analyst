@@ -32,6 +32,18 @@ export interface Lap {
   season?: string
 }
 
+export interface Session {
+  id: string
+  date: string
+  car_name: string
+  track_name: string
+  car_id?: number
+  track_id?: number
+  lap_count: number
+  best_lap_time: number
+  laps: Lap[]
+}
+
 export interface Corner {
   corner_num: number
   dist_start: number
@@ -85,6 +97,7 @@ export interface AnalysisReport {
   reference_lap_ids: string[]
   car_name: string
   track_name: string
+  analysis_mode?: 'vs_reference' | 'solo'
   created_at: string
   summary: string
   estimated_time_gain_seconds: number

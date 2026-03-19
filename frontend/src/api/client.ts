@@ -4,6 +4,8 @@ import type {
   Car,
   Track,
   Lap,
+  Session,
+  LapMeta,
   AnalysisReport,
   AnalysisHistoryItem,
 } from '../types'
@@ -67,6 +69,18 @@ export async function getMyLaps(
   return data
 }
 
+export async function getMySessions(
+  carId: number,
+  trackId: number,
+  limit = 20,
+  offset = 0,
+): Promise<Session[]> {
+  const { data } = await api.get<Session[]>('/api/laps/my-sessions', {
+    params: { car_id: carId, track_id: trackId, limit, offset },
+  })
+  return data
+}
+
 export async function getRecentLaps(limit = 5): Promise<Lap[]> {
   const { data } = await api.get<Lap[]>('/api/laps/recent', {
     params: { limit },
@@ -87,6 +101,7 @@ export async function runAnalysis(
   carName: string,
   trackName: string,
   analysisMode: 'vs_reference' | 'solo' = 'vs_reference',
+  lapsMetadata?: LapMeta[],
 ): Promise<AnalysisReport> {
   const { data } = await api.post<AnalysisReport>('/api/analysis/run', {
     lap_id: lapId,
@@ -94,6 +109,7 @@ export async function runAnalysis(
     car_name: carName,
     track_name: trackName,
     analysis_mode: analysisMode,
+    laps_metadata: lapsMetadata,
   })
   return data
 }

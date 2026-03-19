@@ -7,7 +7,8 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost/)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost/health)",
       "Bash(curl -s http://localhost/health)",
-      "Bash(find /d/Claude/telemetry-analyst/node_modules/@types/plotly.js -type f -name *.d.ts)"
+      "Bash(find /d/Claude/telemetry-analyst/node_modules/@types/plotly.js -type f -name *.d.ts)",
+      "Bash(docker ps:*)"
     ]
   }
 }

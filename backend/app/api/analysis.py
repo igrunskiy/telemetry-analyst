@@ -31,12 +31,21 @@ router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 # Request / Response schemas
 # ---------------------------------------------------------------------------
 
+class LapMetaInput(BaseModel):
+    id: str
+    role: str = "reference"
+    driver_name: str = ""
+    lap_time: float = 0.0
+    irating: int | None = None
+
+
 class RunAnalysisRequest(BaseModel):
     lap_id: str
     reference_lap_ids: list[str]
     car_name: str
     track_name: str
     analysis_mode: str = "vs_reference"  # "vs_reference" or "solo"
+    laps_metadata: list[LapMetaInput] | None = None
 
 
 class AnalysisHistoryItemResponse(BaseModel):
@@ -92,14 +101,17 @@ async def run_analysis(
             enriched = dict(record.result_json)
             enriched["id"] = str(record.id)
             enriched["created_at"] = record.created_at.isoformat()
+            # Inject fresh metadata on cache hit if caller supplied it
+            if body.laps_metadata:
+                enriched["laps_metadata"] = [m.model_dump() for m in body.laps_metadata]
             return enriched
 
-    # ----- Fetch CSVs + metadata concurrently -----
+    # ----- Fetch CSVs -----
     all_lap_ids = [body.lap_id] + list(body.reference_lap_ids)
     try:
-        csv_results, meta_results = await asyncio.gather(
-            asyncio.gather(*[client.get_lap_csv(lap_id) for lap_id in all_lap_ids], return_exceptions=True),
-            asyncio.gather(*[client.get_lap(lap_id) for lap_id in all_lap_ids], return_exceptions=True),
+        csv_results = await asyncio.gather(
+            *[client.get_lap_csv(lap_id) for lap_id in all_lap_ids],
+            return_exceptions=True,
         )
     except Exception as exc:
         raise HTTPException(
@@ -107,37 +119,16 @@ async def run_analysis(
             detail=f"Failed to fetch telemetry data from Garage61: {exc}",
         )
 
-    # Build laps_metadata list (best-effort — missing fields become None)
-    def _extract_meta(raw: Any, lap_id: str, role: str) -> dict:
-        if not isinstance(raw, dict):
-            raw = {}
-        driver = raw.get("driver") or raw.get("user") or {}
-        first = driver.get("firstName", "") or ""
-        last = driver.get("lastName", "") or ""
-        driver_name = f"{first} {last}".strip() or raw.get("driver_name", "")
-        lap_time = raw.get("lapTime") or raw.get("lap_time") or raw.get("lapTimeMs") or 0
-        irating = raw.get("driverRating")
-        entry: dict = {
-            "id": lap_id,
-            "role": role,
-            "driver_name": driver_name,
-            "lap_time": float(lap_time) if lap_time else 0,
-        }
-        if irating is not None:
-            try:
-                entry["irating"] = int(irating)
-            except (TypeError, ValueError):
-                pass
-        return entry
-
-    laps_metadata = [
-        _extract_meta(
-            meta_results[i] if not isinstance(meta_results[i], Exception) else {},
-            lap_id,
-            "user" if i == 0 else "reference",
-        )
-        for i, lap_id in enumerate(all_lap_ids)
-    ]
+    # Build laps_metadata — use client-supplied values when available (reliable),
+    # otherwise fall back to empty placeholders
+    if body.laps_metadata:
+        laps_metadata = [m.model_dump() for m in body.laps_metadata]
+    else:
+        laps_metadata = [
+            {"id": lap_id, "role": "user" if i == 0 else "reference",
+             "driver_name": "", "lap_time": 0}
+            for i, lap_id in enumerate(all_lap_ids)
+        ]
 
     user_csv = csv_results[0]
     if isinstance(user_csv, Exception):
@@ -221,6 +212,7 @@ async def run_analysis(
         "reference_lap_ids": body.reference_lap_ids,
         "car_name": body.car_name,
         "track_name": body.track_name,
+        "analysis_mode": body.analysis_mode,
         # LLM coaching fields at top level (matches frontend AnalysisReport type)
         "summary": llm_result.get("summary", ""),
         "estimated_time_gain_seconds": llm_result.get("estimated_time_gain_seconds"),

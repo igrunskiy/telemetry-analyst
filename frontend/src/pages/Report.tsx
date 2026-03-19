@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import React, { useState, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User } from 'lucide-react'
@@ -12,7 +12,7 @@ import type { AnalysisReport, ImprovementArea, LapMeta, SectorData } from '../ty
 
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 }
 
-function TabInsights({ report, tab }: { report: AnalysisReport; tab: Tab }) {
+function TabInsights({ report, tab, isSolo }: { report: AnalysisReport; tab: Tab; isSolo: boolean }) {
   const areas = report.improvement_areas ?? []
   const sectors: SectorData[] = report.telemetry?.sectors ?? []
 
@@ -84,6 +84,7 @@ function TabInsights({ report, tab }: { report: AnalysisReport; tab: Tab }) {
     }
 
     if (tab === 'sectors') {
+      const baseline = isSolo ? 'best lap' : 'reference'
       const deltas = sectors.map((s) => s.ref_time_ms - s.user_time_ms)
       const slowest = sectors
         .map((s, i) => ({ sector: s.sector, delta: deltas[i] }))
@@ -102,12 +103,12 @@ function TabInsights({ report, tab }: { report: AnalysisReport; tab: Tab }) {
         items: [
           ...slowest.map((s) => ({
             label: `Sector ${s.sector} — needs work`,
-            detail: `${Math.abs(s.delta).toFixed(0)}ms behind reference`,
+            detail: `${Math.abs(s.delta).toFixed(0)}ms behind ${baseline}`,
             severity: 'high' as const,
           })),
           ...fastest.map((s) => ({
             label: `Sector ${s.sector} — strength`,
-            detail: `${s.delta.toFixed(0)}ms ahead of reference`,
+            detail: `${s.delta.toFixed(0)}ms ahead of ${baseline}`,
             severity: 'low' as const,
           })),
         ],
@@ -196,22 +197,27 @@ function IRatingBadge({ value }: { value: number }) {
   )
 }
 
-function LapMetaTable({ laps, userLapId }: { laps: LapMeta[]; userLapId: string }) {
+function LapMetaTable({ laps, userLapId, isSolo }: { laps: LapMeta[]; userLapId: string; isSolo: boolean }) {
   const userLap = laps.find((l) => l.id === userLapId || l.role === 'user')
   const userTimeMs = normalizeLapTimeMs(userLap?.lap_time ?? 0)
+
+  // In solo mode, count non-user laps to give them lap numbers
+  let refLapIndex = 0
 
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
           <tr className="text-slate-500 border-b border-slate-700/50">
-            <th className="text-left pb-2 pr-4 font-medium">Role</th>
-            <th className="text-left pb-2 pr-4 font-medium">
-              <span className="flex items-center gap-1"><User className="w-3 h-3" />Driver</span>
-            </th>
-            <th className="text-right pb-2 pr-4 font-medium">iRating</th>
+            <th className="text-left pb-2 pr-4 font-medium">{isSolo ? 'Lap' : 'Role'}</th>
+            {!isSolo && (
+              <th className="text-left pb-2 pr-4 font-medium">
+                <span className="flex items-center gap-1"><User className="w-3 h-3" />Driver</span>
+              </th>
+            )}
+            {!isSolo && <th className="text-right pb-2 pr-4 font-medium">iRating</th>}
             <th className="text-right pb-2 pr-4 font-medium">Lap Time</th>
-            <th className="text-right pb-2 font-medium">Δ vs You</th>
+            <th className="text-right pb-2 font-medium">{isSolo ? 'Δ vs Best' : 'Δ vs You'}</th>
             <th className="pb-2 pl-3"></th>
           </tr>
         </thead>
@@ -220,27 +226,41 @@ function LapMetaTable({ laps, userLapId }: { laps: LapMeta[]; userLapId: string 
             const isUser = lap.role === 'user'
             const deltaMs = isUser ? null : normalizeLapTimeMs(lap.lap_time) - userTimeMs
             const deltaS = deltaMs != null ? deltaMs / 1000 : null
-            // negative delta = reference is faster (bad for user) → red
-            // positive delta = reference is slower (good for user) → green
-            const deltaColor = deltaS == null ? '' : deltaS < 0 ? 'text-red-400' : 'text-emerald-400'
+            // positive delta = this lap is slower than baseline (bad) → red
+            // negative delta = this lap is faster than baseline → shouldn't happen in solo (baseline is fastest)
+            const deltaColor = deltaS == null ? '' : deltaS > 0 ? 'text-red-400' : 'text-emerald-400'
             const deltaLabel =
               deltaS == null ? '—'
-              : deltaS < 0 ? `−${Math.abs(deltaS).toFixed(3)}s`
-              : `+${deltaS.toFixed(3)}s`
+              : deltaS > 0 ? `+${deltaS.toFixed(3)}s`
+              : `−${Math.abs(deltaS).toFixed(3)}s`
+
+            let roleLabel: React.ReactNode
+            if (isSolo) {
+              if (isUser) {
+                roleLabel = <span className="text-amber-400 font-medium">Best</span>
+              } else {
+                refLapIndex++
+                roleLabel = <span className="text-slate-400">Lap {refLapIndex + 1}</span>
+              }
+            } else {
+              roleLabel = isUser
+                ? <span className="text-blue-400 font-medium">You</span>
+                : <span className="text-orange-400">Ref</span>
+            }
 
             return (
               <tr key={lap.id} className="text-slate-300">
-                <td className="py-2 pr-4">
-                  {isUser
-                    ? <span className="text-blue-400 font-medium">You</span>
-                    : <span className="text-orange-400">Ref</span>}
-                </td>
-                <td className="py-2 pr-4 text-slate-200">
-                  {lap.driver_name || <span className="text-slate-600 italic">unknown</span>}
-                </td>
-                <td className="py-2 pr-4 text-right">
-                  {lap.irating != null ? <IRatingBadge value={lap.irating} /> : <span className="text-slate-600 font-mono">—</span>}
-                </td>
+                <td className="py-2 pr-4">{roleLabel}</td>
+                {!isSolo && (
+                  <td className="py-2 pr-4 text-slate-200">
+                    {lap.driver_name || <span className="text-slate-600 italic">unknown</span>}
+                  </td>
+                )}
+                {!isSolo && (
+                  <td className="py-2 pr-4 text-right">
+                    {lap.irating != null ? <IRatingBadge value={lap.irating} /> : <span className="text-slate-600 font-mono">—</span>}
+                  </td>
+                )}
                 <td className="py-2 pr-4 text-right font-mono">
                   {lap.lap_time ? formatLapTime(lap.lap_time) : <span className="text-slate-600">—</span>}
                 </td>
@@ -336,6 +356,7 @@ export default function ReportPage() {
     }
   }
 
+  const isSolo = report?.analysis_mode === 'solo'
   const hasGps = (report?.telemetry.user_lat?.length ?? 0) > 0
   const trackLength =
     report && report.telemetry.distances.length > 0
@@ -434,6 +455,14 @@ export default function ReportPage() {
                 onClick={() => setMetaExpanded((v) => !v)}
                 className="w-full flex items-center gap-x-5 gap-y-1.5 flex-wrap px-3 py-2.5 text-xs text-slate-400 hover:bg-slate-800/60 transition-colors text-left"
               >
+                {/* Mode badge */}
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium border ${
+                  isSolo
+                    ? 'bg-violet-500/15 border-violet-500/30 text-violet-300'
+                    : 'bg-orange-500/15 border-orange-500/30 text-orange-300'
+                }`}>
+                  {isSolo ? 'Session Analysis' : 'vs Reference'}
+                </span>
                 <span className="flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                   <span className="text-slate-300">
@@ -445,14 +474,18 @@ export default function ReportPage() {
                 </span>
                 <span className="flex items-center gap-1.5">
                   <Calendar className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                  <span className="text-slate-500">Your lap:</span>
-                  <span className="font-mono text-blue-400">{report.lap_id.slice(0, 8)}</span>
+                  <span className="text-slate-500">{isSolo ? 'Best lap:' : 'Your lap:'}</span>
+                  <span className={`font-mono ${isSolo ? 'text-amber-400' : 'text-blue-400'}`}>
+                    {report.lap_id.slice(0, 8)}
+                  </span>
                 </span>
                 {report.reference_lap_ids.length > 0 && (
                   <span className="flex items-center gap-1.5">
                     <Layers className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                     <span className="text-slate-500">
-                      {report.reference_lap_ids.length === 1 ? '1 reference' : `${report.reference_lap_ids.length} references`}
+                      {isSolo
+                        ? `${report.reference_lap_ids.length} other ${report.reference_lap_ids.length === 1 ? 'lap' : 'laps'} in session`
+                        : report.reference_lap_ids.length === 1 ? '1 reference' : `${report.reference_lap_ids.length} references`}
                     </span>
                   </span>
                 )}
@@ -471,6 +504,7 @@ export default function ReportPage() {
                     <LapMetaTable
                       laps={report.laps_metadata}
                       userLapId={report.lap_id}
+                      isSolo={isSolo}
                     />
                   ) : (
                     /* Fallback: show raw IDs when metadata not stored (old analyses) */
@@ -578,7 +612,7 @@ export default function ReportPage() {
 
               {/* Tab content */}
               <div>
-                <TabInsights report={report} tab={activeTab} />
+                <TabInsights report={report} tab={activeTab} isSolo={isSolo} />
 
                 {activeTab === 'summary' && (
                   <AnalysisCards

@@ -103,6 +103,7 @@ jobs:
           username: ${{ secrets.GCP_USER }}
           key: ${{ secrets.GCP_SSH_KEY }}
           script: |
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GCP_USER }}" --password-stdin
             cd /opt/telemetry-analyst
             git pull origin main
             docker compose -f docker-compose.prod.yml pull

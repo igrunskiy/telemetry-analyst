@@ -18,6 +18,8 @@ interface CornerSnippetProps {
 }
 
 const DARK_BG = '#0f172a'
+const USER_COLOR = '#3b82f6'
+const REF_COLOR = '#f97316'
 const PAD_M = 100 // metres padding around corner bounds
 
 export default function CornerSnippet({
@@ -96,7 +98,7 @@ export default function CornerSnippet({
         mode: 'lines',
         x: userLon.slice(startIdx, endIdx + 1),
         y: userLat.slice(startIdx, endIdx + 1),
-        line: { color: '#f59e0b', width: 2.5 },
+        line: { color: USER_COLOR, width: 2 },
         showlegend: false,
         hoverinfo: 'skip',
       },
@@ -108,8 +110,7 @@ export default function CornerSnippet({
         mode: 'lines',
         x: refLon.slice(startIdx, endIdx + 1),
         y: refLat.slice(startIdx, endIdx + 1),
-        line: { color: '#94a3b8', width: 1.5 },
-        opacity: 0.45,
+        line: { color: REF_COLOR, width: 1.5, dash: 'dot' },
         showlegend: false,
         hoverinfo: 'skip',
       })
@@ -207,12 +208,18 @@ export default function CornerSnippet({
         )}
         <div className="flex items-center gap-3 ml-auto text-xs">
           <span className="flex items-center gap-1.5">
-            <span className="w-5 h-0.5 bg-amber-500 inline-block" />
+            <span className="w-5 h-0.5 inline-block" style={{ backgroundColor: USER_COLOR }} />
             <span className="text-slate-500">You</span>
           </span>
           {hasRefGps && (
             <span className="flex items-center gap-1.5">
-              <span className="w-5 h-0.5 bg-slate-400 inline-block opacity-50" />
+              <span
+                className="w-5 h-0.5 inline-block"
+                style={{
+                  backgroundColor: REF_COLOR,
+                  backgroundImage: 'repeating-linear-gradient(90deg,transparent,transparent 3px,#0f172a 3px,#0f172a 5px)',
+                }}
+              />
               <span className="text-slate-500">Ref</span>
             </span>
           )}
@@ -274,7 +281,7 @@ export default function CornerSnippet({
             mode: 'lines',
             x: slicedDist,
             y: slicedUserSpeed,
-            line: { color: '#f59e0b', width: 2 },
+            line: { color: USER_COLOR, width: 1 },
             showlegend: false,
             hovertemplate: '%{y:.0f} km/h<extra>You</extra>',
           },
@@ -283,8 +290,7 @@ export default function CornerSnippet({
             mode: 'lines',
             x: slicedDist,
             y: slicedRefSpeed,
-            line: { color: '#94a3b8', width: 1.5 },
-            opacity: 0.55,
+            line: { color: REF_COLOR, width: 1, dash: 'dot' },
             showlegend: false,
             hovertemplate: '%{y:.0f} km/h<extra>Ref</extra>',
           },
