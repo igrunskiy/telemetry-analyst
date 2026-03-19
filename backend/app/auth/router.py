@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.crypto import decrypt, encrypt
 from app.config import settings
-from app.auth.jwt import get_current_user
+from app.auth.jwt import create_access_token, get_current_user
 from app.auth.oauth import exchange_code, get_authorization_url, get_user_info
 from app.database import get_db
 from app.models.user import User
@@ -107,9 +107,11 @@ async def login(response: Response, db: AsyncSession = Depends(get_db)):
     """Initiate Garage61 OAuth2 flow. Stores CSRF state in a cookie and redirects."""
     if settings.GARAGE61_PERSONAL_TOKEN:
         logger.info("Using Garage61 personal access token for login")
-        await _upsert_user_from_token(db, settings.GARAGE61_PERSONAL_TOKEN)
+        user = await _upsert_user_from_token(db, settings.GARAGE61_PERSONAL_TOKEN)
+        await db.commit()
+        jwt_token = create_access_token(user.id)
         return RedirectResponse(
-            url=f"/callback?access_token={settings.GARAGE61_PERSONAL_TOKEN}",
+            url=f"/callback?access_token={jwt_token}",
             status_code=status.HTTP_302_FOUND,
         )
 
@@ -191,14 +193,15 @@ async def callback(
             detail=f"Failed to fetch user info: {str(e)}",
         )
 
-    logger.info(f"User {user.garage61_user_id} saved/updated, redirecting with token")
+    logger.info(f"User {user.garage61_user_id} saved/updated, issuing JWT")
 
-    # Return OAuth2 access token directly (client will use as Bearer token)
+    await db.commit()
+    jwt_token = create_access_token(user.id)
+
     redirect = RedirectResponse(
-        url=f"/callback?access_token={access_token}",
-        status_code=status.HTTP_302_FOUND
+        url=f"/callback?access_token={jwt_token}",
+        status_code=status.HTTP_302_FOUND,
     )
-    # Clear the oauth_state cookie
     redirect.delete_cookie("oauth_state")
     redirect.delete_cookie("oauth_verifier")
     return redirect
