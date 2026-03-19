@@ -144,6 +144,8 @@ export default function LapSelectorPage() {
   const [mySessionsPage, setMySessionsPage] = useState(0)
   const [recentPage, setRecentPage] = useState(0)
   const RECENT_PAGE_SIZE = 5
+  const [historyPage, setHistoryPage] = useState(0)
+  const HISTORY_PAGE_SIZE = 5
 
   // Data fetching
   const { data: cars = [], isLoading: carsLoading } = useQuery({
@@ -218,6 +220,8 @@ export default function LapSelectorPage() {
     }
     return true
   })
+  const historyTotalPages = Math.ceil(filteredHistory.length / HISTORY_PAGE_SIZE)
+  const pagedHistory = filteredHistory.slice(historyPage * HISTORY_PAGE_SIZE, (historyPage + 1) * HISTORY_PAGE_SIZE)
 
   // Auto-select top 5 reference laps when they load
   useEffect(() => {
@@ -236,6 +240,7 @@ export default function LapSelectorPage() {
     setMyLapsPage(0)
     setMySessionsPage(0)
     setRecentPage(0)
+    setHistoryPage(0)
   }
 
   function handleTrackChange(trackId: number | null) {
@@ -247,6 +252,7 @@ export default function LapSelectorPage() {
     setMyLapsPage(0)
     setMySessionsPage(0)
     setRecentPage(0)
+    setHistoryPage(0)
   }
 
   function applyRecentFilters(carId: number | null, trackId: number | null) {
@@ -261,6 +267,7 @@ export default function LapSelectorPage() {
     setExpandedSessionId(null)
     setMyLapsPage(0)
     setMySessionsPage(0)
+    setHistoryPage(0)
   }
 
   function resolveRecentIds(lap: Lap) {
@@ -957,12 +964,15 @@ export default function LapSelectorPage() {
 
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-white">Analysis History</h2>
+              {filteredHistory.length > 0 && (
+                <span className="text-xs text-slate-500">{filteredHistory.length} total</span>
+              )}
             </div>
 
             {historyLoading ? (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {[...Array(4)].map((_, i) => (
-                  <div key={i} className="h-20 bg-slate-800 rounded-xl border border-slate-700 animate-pulse" />
+                  <div key={i} className="h-14 bg-slate-800 rounded-xl border border-slate-700 animate-pulse" />
                 ))}
               </div>
             ) : filteredHistory.length === 0 ? (
@@ -977,86 +987,136 @@ export default function LapSelectorPage() {
                 </p>
               </div>
             ) : (
-              <div className="space-y-3">
-                {filteredHistory.map((item: AnalysisHistoryItem) => (
-                  <div key={item.id} className="relative group">
-                    <button
-                      data-testid="analysis-history-item"
-                      onClick={() => navigate(`/report/${item.id}`)}
-                      className="w-full card text-left hover:bg-slate-700 transition-colors pr-10"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap mb-1.5">
-                            <span className="text-white font-medium text-sm truncate">
-                              {item.car_name}
-                            </span>
-                            <span className="text-slate-500 text-xs">@</span>
-                            <span className="text-slate-300 text-sm truncate">
-                              {item.track_name}
-                            </span>
-                            {item.estimated_time_gain_seconds != null && item.estimated_time_gain_seconds > 0 && (
-                              <span className="inline-flex items-center gap-1 bg-amber-500/20 border border-amber-500/30 text-amber-400 font-semibold text-xs px-2 py-0.5 rounded-full flex-shrink-0">
-                                <Zap className="w-3 h-3" />
-                                +{item.estimated_time_gain_seconds.toFixed(1)}s
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1.5 flex-wrap text-xs text-slate-500 mb-1">
-                            <span className="font-mono bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-400">
-                              {item.lap_id.slice(0, 8)}
-                            </span>
-                            {item.reference_lap_ids.length > 0 && (
-                              <>
-                                <span>vs</span>
-                                {item.reference_lap_ids.slice(0, 3).map((rid) => (
-                                  <span key={rid} className="font-mono bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-500">
-                                    {rid.slice(0, 8)}
-                                  </span>
-                                ))}
-                                {item.reference_lap_ids.length > 3 && (
-                                  <span className="text-slate-600">+{item.reference_lap_ids.length - 3} more</span>
-                                )}
-                              </>
-                            )}
-                          </div>
-                          <span className="text-slate-600 text-xs">
-                            {formatDateTime(item.created_at)}
-                          </span>
-                        </div>
-                        <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-amber-500 flex-shrink-0 mt-1 transition-colors" />
-                      </div>
-                    </button>
-
-                    {/* Delete button — confirm on second click */}
-                    {confirmDeleteId === item.id ? (
-                      <div className="absolute top-2 right-2 flex items-center gap-1">
-                        <button
-                          onClick={() => deleteMutation.mutate(item.id)}
-                          disabled={deleteMutation.isPending}
-                          className="px-2 py-0.5 rounded text-xs bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
-                        >
-                          {deleteMutation.isPending ? '…' : 'Delete'}
-                        </button>
-                        <button
-                          onClick={() => setConfirmDeleteId(null)}
-                          className="px-2 py-0.5 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
+              <>
+                <div className="space-y-2">
+                  {pagedHistory.map((item: AnalysisHistoryItem) => {
+                    const isSoloItem = item.analysis_mode === 'solo'
+                    return (
+                    <div key={item.id} className="relative group">
                       <button
-                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(item.id) }}
-                        className="absolute top-2 right-2 p-1.5 rounded-md text-red-500 hover:text-red-400 hover:bg-slate-700 opacity-0 group-hover:opacity-100 transition-all"
-                        title="Delete analysis"
+                        data-testid="analysis-history-item"
+                        onClick={() => navigate(`/report/${item.id}`)}
+                        className={`w-full card text-left hover:bg-slate-700 transition-colors pr-10 py-2.5 border-l-2 ${
+                          isSoloItem ? 'border-l-violet-500/50' : 'border-l-orange-500/50'
+                        }`}
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            {/* Row 1: badge · car @ track · time gain */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${
+                                isSoloItem
+                                  ? 'bg-violet-500/15 text-violet-400'
+                                  : 'bg-orange-500/15 text-orange-400'
+                              }`}>
+                                {isSoloItem ? 'Session' : 'Reference'}
+                              </span>
+                              <span className="text-white font-medium text-sm truncate">
+                                {item.car_name}
+                              </span>
+                              <span className="text-slate-500 text-xs">@</span>
+                              <span className="text-slate-300 text-sm truncate">
+                                {item.track_name}
+                              </span>
+                              {item.estimated_time_gain_seconds != null && item.estimated_time_gain_seconds > 0 && (
+                                <span className="inline-flex items-center gap-1 bg-amber-500/20 border border-amber-500/30 text-amber-400 font-semibold text-xs px-2 py-0.5 rounded-full flex-shrink-0">
+                                  <Zap className="w-3 h-3" />
+                                  +{item.estimated_time_gain_seconds.toFixed(1)}s
+                                </span>
+                              )}
+                            </div>
+                            {/* Row 2: lap IDs · date */}
+                            <div className="flex items-center gap-1.5 flex-wrap text-xs text-slate-500 mt-1">
+                              {isSoloItem ? (
+                                <>
+                                  <span className="font-mono bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-400">
+                                    {item.lap_id.slice(0, 8)}
+                                  </span>
+                                  <span className="text-slate-600">·</span>
+                                  <span>{item.reference_lap_ids.length + 1} laps from session</span>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="font-mono bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-400">
+                                    {item.lap_id.slice(0, 8)}
+                                  </span>
+                                  {item.reference_lap_ids.length > 0 && (
+                                    <>
+                                      <span>vs</span>
+                                      {item.reference_lap_ids.slice(0, 3).map((rid) => (
+                                        <span key={rid} className="font-mono bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-500">
+                                          {rid.slice(0, 8)}
+                                        </span>
+                                      ))}
+                                      {item.reference_lap_ids.length > 3 && (
+                                        <span className="text-slate-600">+{item.reference_lap_ids.length - 3} more</span>
+                                      )}
+                                    </>
+                                  )}
+                                </>
+                              )}
+                              <span className="text-slate-600">·</span>
+                              <span className="text-slate-600">{formatDateTime(item.created_at)}</span>
+                            </div>
+                          </div>
+                          <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-amber-500 flex-shrink-0 transition-colors" />
+                        </div>
                       </button>
-                    )}
+
+                      {/* Delete button — confirm on second click */}
+                      {confirmDeleteId === item.id ? (
+                        <div className="absolute top-2 right-2 flex items-center gap-1">
+                          <button
+                            onClick={() => deleteMutation.mutate(item.id)}
+                            disabled={deleteMutation.isPending}
+                            className="px-2 py-0.5 rounded text-xs bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
+                          >
+                            {deleteMutation.isPending ? '…' : 'Delete'}
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="px-2 py-0.5 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(item.id) }}
+                          className="absolute top-2 right-2 p-1.5 rounded-md text-red-500 hover:text-red-400 hover:bg-slate-700 opacity-0 group-hover:opacity-100 transition-all"
+                          title="Delete analysis"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    )
+                  })}
+                </div>
+
+                {/* Pagination */}
+                {historyTotalPages > 1 && (
+                  <div className="flex items-center justify-between pt-1">
+                    <button
+                      onClick={() => setHistoryPage((p) => Math.max(0, p - 1))}
+                      disabled={historyPage === 0}
+                      className="px-3 py-1 text-xs rounded-lg bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      Previous
+                    </button>
+                    <span className="text-xs text-slate-500">
+                      {historyPage + 1} / {historyTotalPages}
+                    </span>
+                    <button
+                      onClick={() => setHistoryPage((p) => Math.min(historyTotalPages - 1, p + 1))}
+                      disabled={historyPage >= historyTotalPages - 1}
+                      className="px-3 py-1 text-xs rounded-lg bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      Next
+                    </button>
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
           </div>
         </div>

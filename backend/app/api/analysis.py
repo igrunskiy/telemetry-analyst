@@ -56,6 +56,7 @@ class AnalysisHistoryItemResponse(BaseModel):
     track_name: str
     created_at: datetime
     estimated_time_gain_seconds: float | None
+    analysis_mode: str = "vs_reference"
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +145,7 @@ async def run_analysis(
     # ----- Telemetry processing -----
     processor = TelemetryProcessor()
     try:
-        processed = processor.process_laps(user_csv, reference_csvs)
+        processed = processor.process_laps(user_csv, reference_csvs, analysis_mode=body.analysis_mode)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -273,6 +274,7 @@ async def get_history(
                 track_name=r.track_name,
                 created_at=r.created_at,
                 estimated_time_gain_seconds=rj.get("estimated_time_gain_seconds"),
+                analysis_mode=rj.get("analysis_mode", "vs_reference"),
             )
         )
 

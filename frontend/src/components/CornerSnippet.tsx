@@ -1,6 +1,8 @@
-import { useMemo } from 'react'
+import { useMemo, useEffect, useRef } from 'react'
 import Plot from 'react-plotly.js'
 import type * as Plotly from 'plotly.js'
+import { MapContainer, TileLayer, Polyline, CircleMarker, Tooltip, useMap } from 'react-leaflet'
+import 'leaflet/dist/leaflet.css'
 import type { Corner } from '../types'
 
 interface CornerSnippetProps {
@@ -21,6 +23,35 @@ const DARK_BG = '#0f172a'
 const USER_COLOR = '#3b82f6'
 const REF_COLOR = '#f97316'
 const PAD_M = 100 // metres padding around corner bounds
+const ESRI_SAT_URL =
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+
+function TileFader() {
+  const map = useMap()
+  useEffect(() => {
+    const pane = map.getPane('tilePane')
+    if (pane) pane.style.filter = 'brightness(0.38) saturate(0.45)'
+  }, [map])
+  return null
+}
+
+function FitCorner({ lat, lon }: { lat: number[]; lon: number[] }) {
+  const map = useMap()
+  const fitted = useRef(false)
+  useEffect(() => {
+    if (fitted.current || lat.length === 0) return
+    fitted.current = true
+    let minLat = lat[0], maxLat = lat[0], minLon = lon[0], maxLon = lon[0]
+    for (let i = 1; i < lat.length; i++) {
+      if (lat[i] < minLat) minLat = lat[i]
+      if (lat[i] > maxLat) maxLat = lat[i]
+      if (lon[i] < minLon) minLon = lon[i]
+      if (lon[i] > maxLon) maxLon = lon[i]
+    }
+    map.fitBounds([[minLat, minLon], [maxLat, maxLon]], { padding: [18, 18] })
+  }, [map, lat, lon])
+  return null
+}
 
 export default function CornerSnippet({
   corner,
@@ -64,18 +95,18 @@ export default function CornerSnippet({
     return idx
   }, [startIdx, endIdx, userSpeed])
 
-  // Braking point: first index where brake > 5% before apex
+  // Braking point: first index where brake >= 0.05 (0–1 scale) before apex
   const brakingIdx = useMemo(() => {
     for (let i = startIdx; i <= apexIdx; i++) {
-      if ((userBrake[i] ?? 0) > 5) return i
+      if ((userBrake[i] ?? 0) >= 0.05) return i
     }
     return null
   }, [startIdx, apexIdx, userBrake])
 
-  // Throttle point: first index after apex where throttle > 5%
+  // Throttle point: first index after apex where throttle >= 0.05 (0–1 scale)
   const throttleIdx = useMemo(() => {
     for (let i = apexIdx; i <= endIdx; i++) {
-      if ((userThrottle[i] ?? 0) > 5) return i
+      if ((userThrottle[i] ?? 0) >= 0.05) return i
     }
     return null
   }, [apexIdx, endIdx, userThrottle])
@@ -88,74 +119,48 @@ export default function CornerSnippet({
     (refLat?.length ?? 0) > endIdx &&
     (refLon?.length ?? 0) > endIdx
 
-  // GPS traces
-  const gpsTraces = useMemo((): Plotly.Data[] => {
-    if (!hasGps || !userLat || !userLon) return []
-
-    const traces: Plotly.Data[] = [
-      {
-        type: 'scatter',
-        mode: 'lines',
-        x: userLon.slice(startIdx, endIdx + 1),
-        y: userLat.slice(startIdx, endIdx + 1),
-        line: { color: USER_COLOR, width: 2 },
-        showlegend: false,
-        hoverinfo: 'skip',
-      },
+  // GPS slices for Leaflet — corner window (highlighted) and full track (dim background)
+  const userLatSlice = useMemo(
+    () => userLat?.slice(startIdx, endIdx + 1) ?? [],
+    [userLat, startIdx, endIdx],
+  )
+  const userLonSlice = useMemo(
+    () => userLon?.slice(startIdx, endIdx + 1) ?? [],
+    [userLon, startIdx, endIdx],
+  )
+  const refLatSlice = useMemo(
+    () => (hasRefGps && refLat ? refLat.slice(startIdx, endIdx + 1) : []),
+    [hasRefGps, refLat, startIdx, endIdx],
+  )
+  const refLonSlice = useMemo(
+    () => (hasRefGps && refLon ? refLon.slice(startIdx, endIdx + 1) : []),
+    [hasRefGps, refLon, startIdx, endIdx],
+  )
+  const userPositions = useMemo(
+    (): [number, number][] => userLatSlice.map((la, i) => [la, userLonSlice[i]]),
+    [userLatSlice, userLonSlice],
+  )
+  const refPositions = useMemo(
+    (): [number, number][] => refLatSlice.map((la, i) => [la, refLonSlice[i]]),
+    [refLatSlice, refLonSlice],
+  )
+  // Full track traces (dim backdrop)
+  const fullUserPositions = useMemo(
+    (): [number, number][] => (userLat && userLon ? userLat.map((la, i) => [la, userLon[i]]) : []),
+    [userLat, userLon],
+  )
+  const fullRefPositions = useMemo(
+    (): [number, number][] =>
+      hasRefGps && refLat && refLon ? refLat.map((la, i) => [la, refLon[i]]) : [],
+    [hasRefGps, refLat, refLon],
+  )
+  const mapCenter = useMemo((): [number, number] => {
+    if (userLatSlice.length === 0) return [0, 0]
+    return [
+      userLatSlice.reduce((s, v) => s + v, 0) / userLatSlice.length,
+      userLonSlice.reduce((s, v) => s + v, 0) / userLonSlice.length,
     ]
-
-    if (hasRefGps && refLat && refLon) {
-      traces.push({
-        type: 'scatter',
-        mode: 'lines',
-        x: refLon.slice(startIdx, endIdx + 1),
-        y: refLat.slice(startIdx, endIdx + 1),
-        line: { color: REF_COLOR, width: 1.5, dash: 'dot' },
-        showlegend: false,
-        hoverinfo: 'skip',
-      })
-    }
-
-    // Key point markers — one trace per point type to avoid array type issues
-    if (brakingIdx !== null) {
-      traces.push({
-        type: 'scatter',
-        mode: 'markers',
-        x: [userLon[brakingIdx]],
-        y: [userLat[brakingIdx]],
-        text: ['Braking'],
-        hovertemplate: '%{text}<extra></extra>',
-        marker: { color: '#ef4444', size: 9, symbol: 'circle', line: { color: '#0f172a', width: 1.5 } },
-        showlegend: false,
-      })
-    }
-
-    traces.push({
-      type: 'scatter',
-      mode: 'markers',
-      x: [userLon[apexIdx]],
-      y: [userLat[apexIdx]],
-      text: ['Apex'],
-      hovertemplate: '%{text}<extra></extra>',
-      marker: { color: '#fbbf24', size: 10, symbol: 'diamond', line: { color: '#0f172a', width: 1.5 } },
-      showlegend: false,
-    })
-
-    if (throttleIdx !== null) {
-      traces.push({
-        type: 'scatter',
-        mode: 'markers',
-        x: [userLon[throttleIdx]],
-        y: [userLat[throttleIdx]],
-        text: ['Throttle'],
-        hovertemplate: '%{text}<extra></extra>',
-        marker: { color: '#22c55e', size: 9, symbol: 'circle', line: { color: '#0f172a', width: 1.5 } },
-        showlegend: false,
-      })
-    }
-
-    return traces
-  }, [hasGps, hasRefGps, userLat, userLon, refLat, refLon, startIdx, endIdx, brakingIdx, apexIdx, throttleIdx])
+  }, [userLatSlice, userLonSlice])
 
   // Speed mini-chart data
   const slicedDist = distances.slice(startIdx, endIdx + 1)
@@ -202,7 +207,7 @@ export default function CornerSnippet({
     <div className="rounded-lg overflow-hidden bg-slate-900/60 border border-slate-700/40">
       {/* Header */}
       <div className="px-3 py-2 flex items-center gap-2 border-b border-slate-700/40">
-        <span className="text-amber-400 font-mono text-xs font-bold">C{corner.corner_num}</span>
+        <span className="text-amber-400 font-mono text-xs font-bold">T{corner.corner_num}</span>
         {corner.label && (
           <span className="text-slate-400 text-xs">{corner.label}</span>
         )}
@@ -242,35 +247,67 @@ export default function CornerSnippet({
         </div>
       </div>
 
-      {/* GPS map */}
-      {hasGps && (
-        <Plot
-          data={gpsTraces}
-          layout={{
-            paper_bgcolor: DARK_BG,
-            plot_bgcolor: DARK_BG,
-            autosize: true,
-            height: 200,
-            margin: { t: 6, r: 6, b: 6, l: 6 },
-            xaxis: {
-              showgrid: false,
-              zeroline: false,
-              showticklabels: false,
-              scaleanchor: 'y',
-              scaleratio: 1,
-            },
-            yaxis: {
-              showgrid: false,
-              zeroline: false,
-              showticklabels: false,
-            },
-            showlegend: false,
-            hovermode: 'closest',
-          }}
-          config={{ responsive: true, displayModeBar: false }}
-          style={{ width: '100%' }}
-          useResizeHandler
-        />
+      {/* GPS mini map with satellite background */}
+      {hasGps && userPositions.length > 0 && (
+        <div style={{ height: 200 }}>
+          <MapContainer
+            center={mapCenter}
+            zoom={16}
+            maxZoom={22}
+            style={{ height: '100%', background: DARK_BG }}
+            zoomControl={false}
+            attributionControl={false}
+            dragging={false}
+            scrollWheelZoom={false}
+            doubleClickZoom={false}
+          >
+            <TileLayer
+              url={ESRI_SAT_URL}
+              attribution="Tiles &copy; Esri"
+              maxNativeZoom={18}
+              maxZoom={22}
+            />
+            <TileFader />
+            <FitCorner lat={userLatSlice} lon={userLonSlice} />
+
+            {/* Full track — dim backdrop */}
+            {fullRefPositions.length > 0 && (
+              <Polyline positions={fullRefPositions} pathOptions={{ color: REF_COLOR, weight: 1, opacity: 0.2 }} />
+            )}
+            <Polyline positions={fullUserPositions} pathOptions={{ color: USER_COLOR, weight: 1, opacity: 0.2 }} />
+
+            {/* Corner window — highlighted overlay */}
+            {refPositions.length > 0 && (
+              <Polyline positions={refPositions} pathOptions={{ color: REF_COLOR, weight: 2.5, opacity: 0.9, dashArray: '5 3' }} />
+            )}
+            <Polyline positions={userPositions} pathOptions={{ color: USER_COLOR, weight: 3, opacity: 1 }} />
+
+            {/* Braking point */}
+            {brakingIdx !== null && userLat && userLon && (
+              <CircleMarker center={[userLat[brakingIdx], userLon[brakingIdx]]} radius={6} pathOptions={{ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 1, weight: 1.5 }}>
+                <Tooltip permanent direction="top" offset={[0, -8]} opacity={1}>
+                  <span style={{ fontSize: 9, fontWeight: 600, color: '#ef4444' }}>Brake</span>
+                </Tooltip>
+              </CircleMarker>
+            )}
+            {/* Apex */}
+            {userLat && userLon && (
+              <CircleMarker center={[userLat[apexIdx], userLon[apexIdx]]} radius={6} pathOptions={{ color: '#fbbf24', fillColor: '#fbbf24', fillOpacity: 1, weight: 1.5 }}>
+                <Tooltip permanent direction="top" offset={[0, -8]} opacity={1}>
+                  <span style={{ fontSize: 9, fontWeight: 600, color: '#fbbf24' }}>Apex</span>
+                </Tooltip>
+              </CircleMarker>
+            )}
+            {/* Throttle point */}
+            {throttleIdx !== null && userLat && userLon && (
+              <CircleMarker center={[userLat[throttleIdx], userLon[throttleIdx]]} radius={6} pathOptions={{ color: '#22c55e', fillColor: '#22c55e', fillOpacity: 1, weight: 1.5 }}>
+                <Tooltip permanent direction="top" offset={[0, -8]} opacity={1}>
+                  <span style={{ fontSize: 9, fontWeight: 600, color: '#22c55e' }}>Throttle</span>
+                </Tooltip>
+              </CircleMarker>
+            )}
+          </MapContainer>
+        </div>
       )}
 
       {/* Speed mini chart */}

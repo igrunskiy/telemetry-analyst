@@ -321,18 +321,38 @@ class TelemetryProcessor:
     # Orchestration
     # ------------------------------------------------------------------
 
+    def median_laps(self, dfs: list[pd.DataFrame]) -> pd.DataFrame:
+        """
+        Compute a point-wise median across multiple normalised DataFrames.
+
+        All inputs must already share the same 1000-point LapDistPct grid.
+        Returns a new DataFrame with median numeric columns.
+        """
+        if len(dfs) == 1:
+            return dfs[0].copy()
+        result = dfs[0].copy()
+        numeric_cols = [c for c in result.select_dtypes(include=[np.number]).columns if c != "LapDistPct"]
+        for col in numeric_cols:
+            arrays = [df[col].values for df in dfs if col in df.columns]
+            if arrays:
+                result[col] = np.median(np.stack(arrays, axis=0), axis=0)
+        return result
+
     def process_laps(
         self,
         user_csv: str,
         reference_csvs: list[str],
+        analysis_mode: str = "vs_reference",
     ) -> dict:
         """
         Full processing pipeline:
         1. Parse all CSVs
         2. Normalise to 1000-point distance grid
-        3. Pick best reference (first available, assumed fastest)
-        4. Compute delta vs best reference
-        5. Identify corners on the user trace
+        3. Pick comparison reference:
+           - vs_reference: fastest reference lap (first, assumed sorted)
+           - solo: point-wise median of all reference laps
+        4. Compute delta vs comparison reference
+        5. Identify corners on the fastest reference trace
         6. Compute time delta and sector splits
         7. Return structured result
 
@@ -363,13 +383,16 @@ class TelemetryProcessor:
             # No valid references; return user lap only with empty delta/corners
             return self._build_result(user_df, [], None, None, [], track_length_m=track_length_m)
 
-        # Best reference = first (assumed to be sorted by fastest lap time)
+        # Fastest reference (first, assumed sorted by lap time) — used for corner detection
         best_ref = ref_dfs[0]
 
-        delta_df = self.compute_delta(user_df, best_ref)
+        # Comparison reference: median of all session laps in solo mode, fastest otherwise
+        delta_ref = self.median_laps(ref_dfs) if analysis_mode == "solo" else best_ref
+
+        delta_df = self.compute_delta(user_df, delta_ref)
         corners = self.identify_corners(best_ref, track_length_m)
-        time_delta_ms = self.compute_time_delta(user_df, best_ref, track_length_m)
-        sectors = self.compute_sectors(user_df, best_ref, lap_distance_m=track_length_m)
+        time_delta_ms = self.compute_time_delta(user_df, delta_ref, track_length_m)
+        sectors = self.compute_sectors(user_df, delta_ref, lap_distance_m=track_length_m)
 
         return self._build_result(user_df, ref_dfs, delta_df, corners, time_delta_ms, sectors, track_length_m=track_length_m)
 

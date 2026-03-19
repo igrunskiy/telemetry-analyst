@@ -95,7 +95,7 @@ function ImprovementCard({ area, telemetry, onActiveCorners, onHoverIndex }: Imp
             <div className="flex items-center gap-3 mt-1 flex-wrap">
               {area.corner_refs.length > 0 && (
                 <span className="text-xs text-slate-500">
-                  {area.corner_refs.map((c) => `C${c}`).join(', ')}
+                  {area.corner_refs.map((c) => `T${c}`).join(', ')}
                 </span>
               )}
               <span className="flex items-center gap-1 text-xs text-red-400">

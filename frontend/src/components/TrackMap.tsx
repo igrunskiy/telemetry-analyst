@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
+import { Globe, Map, EyeOff } from 'lucide-react'
 import { MapContainer, TileLayer, Polyline, CircleMarker, Tooltip, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { Corner } from '../types'
@@ -16,6 +17,8 @@ interface TrackMapProps {
   trackLength?: number
   highlightRange?: [number, number] | null
   highlightCornerNums?: number[]
+  title?: string
+  showRef?: boolean
 }
 
 type MapStyle = 'satellite' | 'street' | 'none'
@@ -109,12 +112,16 @@ export default function TrackMap({
   userLon,
   refLat,
   refLon,
+  userSpeed,
+  refSpeed,
   corners,
   hoverIndex,
   height = 576,
   trackLength = 3000,
   highlightRange,
   highlightCornerNums = [],
+  title = 'Racing Lines',
+  showRef = true,
 }: TrackMapProps) {
   const [mapStyle, setMapStyle] = useState<MapStyle>('satellite')
 
@@ -162,6 +169,57 @@ export default function TrackMap({
     })
   }, [corners, userLat, userLon, hasGpsData, trackLength])
 
+  // Speed-delta gradient segments — user line coloured by (userSpeed − refSpeed):
+  // red = user slower, slate-grey = matched, green = user faster.
+  const speedDeltaSegments = useMemo(() => {
+    const BUCKETS = 16
+    const n = Math.min(userLat.length, userSpeed.length, refSpeed.length)
+    if (!hasGpsData || n < 2) return []
+
+    // Find symmetric range for diverging scale
+    let maxAbs = 1
+    for (let i = 0; i < n; i++) {
+      const d = Math.abs(userSpeed[i] - refSpeed[i])
+      if (d > maxAbs) maxAbs = d
+    }
+
+    function deltaColor(delta: number): string {
+      // t=0 → red, t=0.5 → slate, t=1 → green
+      const t = Math.max(0, Math.min(1, (delta + maxAbs) / (2 * maxAbs)))
+      if (t <= 0.5) {
+        const s = t * 2
+        // red rgb(239,68,68) → slate rgb(148,163,184)
+        return `rgb(${Math.round(239 - 91 * s)},${Math.round(68 + 95 * s)},${Math.round(68 + 116 * s)})`
+      }
+      const s = (t - 0.5) * 2
+      // slate rgb(148,163,184) → green rgb(34,197,94)
+      return `rgb(${Math.round(148 - 114 * s)},${Math.round(163 + 34 * s)},${Math.round(184 - 90 * s)})`
+    }
+
+    const segs: { positions: [number, number][]; color: string }[] = []
+    let curBucket = Math.floor(Math.max(0, Math.min(1, (userSpeed[0] - refSpeed[0] + maxAbs) / (2 * maxAbs))) * BUCKETS)
+    curBucket = Math.min(BUCKETS - 1, curBucket)
+    let run: [number, number][] = [[userLat[0], userLon[0]]]
+    let runDelta = userSpeed[0] - refSpeed[0]
+
+    for (let i = 1; i < n; i++) {
+      const delta = userSpeed[i] - refSpeed[i]
+      const b = Math.min(BUCKETS - 1, Math.floor(Math.max(0, Math.min(1, (delta + maxAbs) / (2 * maxAbs))) * BUCKETS))
+      if (b === curBucket) {
+        run.push([userLat[i], userLon[i]])
+        runDelta = delta
+      } else {
+        run.push([userLat[i], userLon[i]])
+        segs.push({ positions: run, color: deltaColor(runDelta) })
+        run = [[userLat[i - 1], userLon[i - 1]], [userLat[i], userLon[i]]]
+        runDelta = delta
+        curBucket = b
+      }
+    }
+    if (run.length >= 2) segs.push({ positions: run, color: deltaColor(runDelta) })
+    return segs
+  }, [hasGpsData, userLat, userLon, userSpeed, refSpeed])
+
   if (!hasGpsData) {
     return (
       <div className="card flex flex-col items-center justify-center py-16 text-center">
@@ -184,28 +242,36 @@ export default function TrackMap({
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/50 bg-slate-800/80">
         <div className="flex items-center gap-4 text-xs">
-          <h3 className="text-white font-medium text-sm">Racing Lines</h3>
+          <h3 className="text-white font-medium text-sm">{title}</h3>
           <span className="flex items-center gap-1.5">
-            <span className="w-5 h-0.5 bg-amber-500 inline-block" />
-            <span className="text-slate-400">You</span>
+            <span className="inline-block h-1.5 w-12 rounded-full"
+              style={{ background: 'linear-gradient(to right, #ef4444, #94a3b8, #22c55e)' }} />
+            <span className="text-slate-400">You (Δ speed)</span>
           </span>
-          <span className="flex items-center gap-1.5">
-            <span className="w-5 h-0.5 bg-green-500 inline-block opacity-70" />
-            <span className="text-slate-400">Reference</span>
-          </span>
+          {showRef && (
+            <span className="flex items-center gap-1.5">
+              <span className="w-5 h-0.5 bg-green-500 inline-block opacity-70" />
+              <span className="text-slate-400">Reference</span>
+            </span>
+          )}
         </div>
         <div className="flex gap-1.5">
-          {([['satellite', 'Satellite'], ['street', 'Street'], ['none', 'None']] as [MapStyle, string][]).map(([s, label]) => (
+          {([
+            ['satellite', 'Satellite',   <Globe  className="w-3.5 h-3.5" />],
+            ['street',    'Street map',  <Map    className="w-3.5 h-3.5" />],
+            ['none',      'No background', <EyeOff className="w-3.5 h-3.5" />],
+          ] as [MapStyle, string, React.ReactNode][]).map(([s, title, icon]) => (
             <button
               key={s}
+              title={title}
               onClick={() => setMapStyle(s)}
-              className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-colors ${
+              className={`px-2 py-1 rounded-lg font-medium transition-colors ${
                 mapStyle === s
                   ? 'bg-slate-500 text-white'
                   : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
               }`}
             >
-              {label}
+              {icon}
             </button>
           ))}
         </div>
@@ -228,22 +294,22 @@ export default function TrackMap({
             : <TileLayer url={OSM_URL} attribution="&copy; OpenStreetMap contributors" maxNativeZoom={19} maxZoom={22} />
         )}
 
-        {/* Reference racing line */}
-        {refPositions.length > 0 && (
-          <Polyline
-            positions={refPositions}
-            pathOptions={{ color: '#22c55e', weight: 1.5, opacity: 0.7 }}
-          />
+        {/* Reference line — solid green */}
+        {showRef && refPositions.length > 0 && (
+          <Polyline positions={refPositions} pathOptions={{ color: '#22c55e', weight: 1.5, opacity: 0.7 }} />
         )}
 
-        {/* User racing line (optionally dim/bright/dim) */}
-        {userSegments.map((seg, i) => (
-          <Polyline
-            key={i}
-            positions={seg.positions}
-            pathOptions={{ color: '#f59e0b', weight: seg.weight, opacity: seg.opacity }}
-          />
-        ))}
+        {/* User line — speed-delta diverging gradient (red=slower, grey=matched, green=faster) */}
+        {speedDeltaSegments.length > 0
+          ? speedDeltaSegments.map((seg, i) => (
+              <Polyline key={`ud-${i}`} positions={seg.positions}
+                pathOptions={{ color: seg.color, weight: 2.5, opacity: 0.95 }} />
+            ))
+          : userSegments.map((seg, i) => (
+              <Polyline key={i} positions={seg.positions}
+                pathOptions={{ color: '#f59e0b', weight: seg.weight, opacity: seg.opacity }} />
+            ))
+        }
 
         {/* Corner labels */}
         {cornerData.map((c) => {
@@ -262,7 +328,7 @@ export default function TrackMap({
             >
               <Tooltip permanent direction="top" offset={[0, -8]} opacity={1}>
                 <span style={{ fontSize: 10, fontWeight: 600, color: highlighted ? '#f97316' : '#fbbf24' }}>
-                  C{c.num}
+                  T{c.num}
                 </span>
               </Tooltip>
             </CircleMarker>

@@ -13,7 +13,16 @@
       "Bash(docker run:*)",
       "Bash(gh pr:*)",
       "Bash(where gh:*)",
-      "Read(//usr/local/bin/**)"
+      "Read(//usr/local/bin/**)",
+      "Bash(npx tsc:*)",
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(ls /usr/local/bin/node*)",
+      "Read(//usr/**)",
+      "Bash(grep -i jinja backend/requirements*.txt)",
+      "Bash(mv system.txt system.md)",
+      "Bash(mv user_prompt.txt user_prompt.md)",
+      "Bash(mv solo_prompt.txt solo_prompt.md)",
+      "Bash(docker build:*)"
     ]
   }
 }

@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
 import Plot from 'react-plotly.js'
 import type * as Plotly from 'plotly.js'
-import { ZoomIn, ZoomOut, Maximize2, BoxSelect, Lasso } from 'lucide-react'
+import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import type { Corner } from '../types'
 
 interface TelemetryChartProps {
@@ -71,7 +71,6 @@ interface SingleChartProps {
   onHoverIndex?: (idx: number | null) => void
   xRange?: [number, number] | null
   onRangeChange?: (range: [number, number] | null) => void
-  drawMode?: 'rect' | 'lasso'
 }
 
 function SingleChart({
@@ -86,7 +85,6 @@ function SingleChart({
   onHoverIndex,
   xRange,
   onRangeChange,
-  drawMode = 'rect',
 }: SingleChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const panState = useRef<{ startX: number; startRange: [number, number]; ppu: number } | null>(null)
@@ -292,7 +290,7 @@ function SingleChart({
           plot_bgcolor: DARK.plot_bgcolor,
           autosize: true,
           height,
-          dragmode: drawMode === 'lasso' ? 'lasso' : 'zoom',
+          dragmode: 'zoom',
           uirevision: xRange ? `${xRange[0].toFixed(1)}-${xRange[1].toFixed(1)}` : 'full',
           margin: { t: 4, r: 12, b: 28, l: 48 },
           xaxis: {
@@ -318,14 +316,6 @@ function SingleChart({
         }}
         onHover={(e) => onHoverIndex?.(e.points[0]?.pointIndex ?? null)}
         onUnhover={() => onHoverIndex?.(null)}
-        onSelected={(e) => {
-          if (drawMode !== 'lasso' || !e?.points?.length) return
-          const xs = e.points.map((p) => p.x as number).filter((x) => typeof x === 'number')
-          if (!xs.length) return
-          const lo = Math.min(...xs)
-          const hi = Math.max(...xs)
-          if (hi > lo) onRangeChange?.([lo, hi])
-        }}
         onRelayout={(e) => {
           const ev = e as Record<string, number | boolean | undefined>
           const lo = ev['xaxis.range[0]']
@@ -361,7 +351,6 @@ export default function TelemetryChart({
     ? [distances[0], distances[distances.length - 1]]
     : [0, 1]
 
-  const [drawMode, setDrawMode] = useState<'rect' | 'lasso'>('rect')
   const [controlledRange, setControlledRange] = useState<[number, number] | null>(xRange ?? null)
 
   // Sync with external xRange (sector filter) changes
@@ -417,7 +406,6 @@ export default function TelemetryChart({
     onHoverIndex,
     xRange: controlledRange,
     onRangeChange: handleRangeChange,
-    drawMode,
   }
 
   return (
@@ -426,18 +414,10 @@ export default function TelemetryChart({
         <div>
           <h3 className="text-white font-medium text-sm">Telemetry Traces</h3>
           <p className="text-slate-500 text-xs mt-0.5">
-            {drawMode === 'rect' ? 'Left-drag to zoom' : 'Left-drag to lasso'} · right-drag to pan · scroll to zoom · double-click to reset
+            Left-drag to zoom · right-drag to pan · scroll to zoom · double-click to reset
           </p>
         </div>
         <div className="flex items-center gap-0.5">
-          <button
-            onClick={() => setDrawMode(m => m === 'rect' ? 'lasso' : 'rect')}
-            className={`p-1.5 rounded transition-colors ${drawMode === 'lasso' ? 'text-amber-400 bg-slate-700' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
-            title={drawMode === 'rect' ? 'Switch to lasso selection' : 'Switch to rectangle zoom'}
-          >
-            {drawMode === 'rect' ? <Lasso className="w-3.5 h-3.5" /> : <BoxSelect className="w-3.5 h-3.5" />}
-          </button>
-          <div className="w-px h-4 bg-slate-700 mx-0.5" />
           <button
             onClick={handleZoomIn}
             className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"

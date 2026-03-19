@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 import anthropic
@@ -19,60 +20,14 @@ from app.config import settings
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
 # ---------------------------------------------------------------------------
-# Prompts
+# Prompts — loaded from external files at import time
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are an expert motorsport driving coach and data engineer with deep knowledge of:
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
 
-**Racing Line Theory**
-- Geometric apex vs. late apex vs. early apex selection depending on corner type and what follows
-- The importance of sacrificing corner entry for a clean, fast exit on long straights
-- How track layout (single apex, double apex, chicane) affects the ideal line
-- Vision points, reference points, and turn-in markers
-
-**Threshold & Trail Braking**
-- Threshold braking: maintaining maximum deceleration right at the limit of adhesion
-- Trail braking: progressively releasing brake pressure while turning in to transfer weight and aid rotation
-- When trail braking helps (slow, technical corners) vs. when it's risky (high-speed sweepers)
-- Left-foot braking and ABS interaction in sim racing
-
-**Throttle Application & Traction Circle**
-- The concept of the "traction circle" — combined lateral + longitudinal grip
-- Why early throttle application sacrifices corner exit speed (understeer/oversteer)
-- Progressive vs. snap throttle techniques depending on car balance
-- Minimum speed / throttle pickup point discipline
-
-**Weight Transfer & Car Balance**
-- How brake, throttle, and steering inputs shift weight front-to-rear and side-to-side
-- Understeer vs. oversteer identification from throttle/steering data
-- How to balance a car through a corner using smooth, overlapping inputs
-
-**iRacing-Specific Tips**
-- iRacing's tyre model rewards smooth, progressive inputs over aggressive steering corrections
-- Force feedback interpretation: understand what the wheel is telling you about grip
-- Track surface changes, marbles, and rubber-in areas on various circuits
-- The importance of consistent reference points across laps
-
-**Telemetry Interpretation**
-- How to read speed traces, throttle overlays, and brake traces
-- Identifying where time is lost: late braking, slow corner minimum, late throttle, poor exit
-- Understanding sector times and their relationship to lap time
-- Delta time: what positive and negative delta means and how to act on it
-
-When given telemetry data, provide coaching that is:
-1. Specific and actionable — tell the driver exactly what to change and where
-2. Evidence-based — reference the telemetry numbers to justify each point
-3. Prioritised — the highest time-gain improvements come first
-4. Encouraging — acknowledge strengths before pointing out weaknesses
-5. Educational — explain the "why" behind each recommendation
-
-**Data Units (important)**
-- All speeds are in **km/h**
-- All distances are in **metres** (m)
-- All times are in **milliseconds** (ms) unless labelled otherwise
-- Positive delta time = user is slower; negative = user is faster
-
-Always return your analysis as a single valid JSON object with no additional text before or after it."""
+SYSTEM_PROMPT = (_PROMPTS_DIR / "system.md").read_text(encoding="utf-8").strip()
+_USER_PROMPT_TEMPLATE = (_PROMPTS_DIR / "user_prompt.md").read_text(encoding="utf-8")
+_SOLO_PROMPT_TEMPLATE = (_PROMPTS_DIR / "solo_prompt.md").read_text(encoding="utf-8")
 
 
 def _build_corner_table(processed: dict, weak_zones: list[dict]) -> str:
@@ -172,52 +127,14 @@ def _build_solo_prompt(
     corner_table = _build_corner_table(processed, weak_zones)
     sector_table = _build_sector_table(processed)
 
-    return f"""## Solo Lap Analysis Request
-
-**Car:** {car_name}
-**Track:** {track_name}
-
-**Context:** These are all laps from the SAME driver. The "best lap" is compared against the driver's own other laps to find consistency patterns and recurring mistakes. There is no external benchmark — focus entirely on the driver's own variance and recurring weak spots.
-
-### Corner Map
-{corner_summary or "No corners detected."}
-
-### Per-Corner Telemetry (best lap vs. driver's other laps)
-{corner_table}
-
-### Sector Times
-{sector_table}
-
-### Variance Zones (corners where the driver loses time on non-best laps)
-{weak_table}
-
-### Task
-Analyse these laps and identify the driver's own patterns, inconsistencies, and areas where they could be more consistent or improve their technique. Do NOT mention "reference lap" or "reference driver" — these are all the same driver's laps.
-
-Return your analysis as a valid JSON object matching EXACTLY this schema:
-```json
-{{
-  "summary": "2-3 sentence overall assessment of the driver's consistency and patterns",
-  "estimated_time_gain_seconds": 1.2,
-  "improvement_areas": [
-    {{
-      "rank": 1,
-      "title": "short descriptive title",
-      "corner_refs": [3, 4],
-      "issue_type": "braking_point|throttle_pickup|racing_line|corner_speed|exit_speed",
-      "severity": "high|medium|low",
-      "time_loss_ms": 450,
-      "description": "detailed explanation of the inconsistency or pattern and its impact",
-      "technique": "specific actionable technique advice for achieving consistency here",
-      "telemetry_evidence": "what the telemetry numbers specifically show about the variance"
-    }}
-  ],
-  "strengths": ["area where the driver is consistent lap-to-lap", "another consistent strength"],
-  "sector_notes": ["note about sector 1 consistency", "note about sector 2", "note about sector 3"]
-}}
-```
-
-Return ONLY the JSON object. Do not include markdown code fences, explanations, or any other text."""
+    return _SOLO_PROMPT_TEMPLATE.format_map({
+        "car_name": car_name,
+        "track_name": track_name,
+        "corner_summary": corner_summary or "No corners detected.",
+        "corner_table": corner_table,
+        "sector_table": sector_table,
+        "weak_table": weak_table,
+    })
 
 
 def _build_user_prompt(
@@ -283,56 +200,15 @@ def _build_user_prompt(
     corner_table = _build_corner_table(processed, weak_zones)
     sector_table = _build_sector_table(processed)
 
-    prompt = f"""## Telemetry Analysis Request
-
-**Car:** {car_name}
-**Track:** {track_name}
-
-### Corner Map
-{corner_summary or "No corners detected."}
-
-### Per-Corner Telemetry (user vs. reference)
-{corner_table}
-
-### Sector Times
-{sector_table}
-
-### Weak Zones (sorted by severity)
-{weak_table}
-
-### Strongest Sectors (user faster than reference)
-{strength_bullets}
-
-### Task
-Analyse this telemetry data and provide specific, actionable coaching feedback.
-The driver wants to close the gap to the reference lap.
-
-Return your analysis as a valid JSON object matching EXACTLY this schema:
-```json
-{{
-  "summary": "2-3 sentence overall assessment of the lap",
-  "estimated_time_gain_seconds": 1.8,
-  "improvement_areas": [
-    {{
-      "rank": 1,
-      "title": "short descriptive title",
-      "corner_refs": [3, 4],
-      "issue_type": "braking_point|throttle_pickup|racing_line|corner_speed|exit_speed",
-      "severity": "high|medium|low",
-      "time_loss_ms": 450,
-      "description": "detailed explanation of the problem and its impact",
-      "technique": "specific actionable technique advice for this corner/zone",
-      "telemetry_evidence": "what the telemetry numbers specifically show"
-    }}
-  ],
-  "strengths": ["strength 1", "strength 2"],
-  "sector_notes": ["note about sector 1", "note about sector 2", "note about sector 3"]
-}}
-```
-
-Return ONLY the JSON object. Do not include markdown code fences, explanations, or any other text."""
-
-    return prompt
+    return _USER_PROMPT_TEMPLATE.format_map({
+        "car_name": car_name,
+        "track_name": track_name,
+        "corner_summary": corner_summary or "No corners detected.",
+        "corner_table": corner_table,
+        "sector_table": sector_table,
+        "weak_table": weak_table,
+        "strength_bullets": strength_bullets,
+    })
 
 
 # ---------------------------------------------------------------------------

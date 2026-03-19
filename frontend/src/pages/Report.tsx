@@ -6,6 +6,7 @@ import { getAnalysis, deleteAnalysis } from '../api/client'
 import TrackMap from '../components/TrackMap'
 import TelemetryChart from '../components/TelemetryChart'
 import HeatMap from '../components/HeatMap'
+import DeltaHeatmap from '../components/DeltaHeatmap'
 import SectorDelta from '../components/SectorDelta'
 import AnalysisCards from '../components/AnalysisCards'
 import type { AnalysisReport, ImprovementArea, LapMeta, SectorData } from '../types'
@@ -45,7 +46,7 @@ function TabInsights({ report, tab, isSolo }: { report: AnalysisReport; tab: Tab
           severity: a.severity,
         })),
         hint: corners.length > 0
-          ? `Focus corners: ${corners.map((c) => `C${c}`).join(', ')}`
+          ? `Focus corners: ${corners.map((c) => `T${c}`).join(', ')}`
           : null,
       }
     }
@@ -357,6 +358,8 @@ export default function ReportPage() {
   }
 
   const isSolo = report?.analysis_mode === 'solo'
+  const soloUserLap = isSolo ? report?.laps_metadata?.find((l) => l.role === 'user') : undefined
+  const soloTotalLaps = report ? report.reference_lap_ids.length + 1 : 0
   const hasGps = (report?.telemetry.user_lat?.length ?? 0) > 0
   const trackLength =
     report && report.telemetry.distances.length > 0
@@ -448,98 +451,180 @@ export default function ReportPage() {
 
         {report && (
           <>
-            {/* Lap metadata bar — collapsed summary + expandable detail */}
-            <div className="mb-5 card p-0 overflow-hidden">
-              {/* Always-visible summary row */}
-              <button
-                onClick={() => setMetaExpanded((v) => !v)}
-                className="w-full flex items-center gap-x-5 gap-y-1.5 flex-wrap px-3 py-2.5 text-xs text-slate-400 hover:bg-slate-800/60 transition-colors text-left"
-              >
-                {/* Mode badge */}
-                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium border ${
-                  isSolo
-                    ? 'bg-violet-500/15 border-violet-500/30 text-violet-300'
-                    : 'bg-orange-500/15 border-orange-500/30 text-orange-300'
-                }`}>
-                  {isSolo ? 'Session Analysis' : 'vs Reference'}
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                  <span className="text-slate-300">
-                    {new Date(report.created_at).toLocaleString(undefined, {
-                      year: 'numeric', month: 'short', day: 'numeric',
-                      hour: '2-digit', minute: '2-digit',
-                    })}
+            {/* Lap metadata bar */}
+            {isSolo ? (
+              /* Session analysis — compact non-expandable header */
+              <div className="mb-5 card p-0 overflow-hidden">
+                <div className="flex items-center gap-x-5 gap-y-1.5 flex-wrap px-3 py-2.5 text-xs text-slate-400">
+                  {/* Mode badge */}
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium border bg-violet-500/15 border-violet-500/30 text-violet-300">
+                    Session Analysis
                   </span>
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                  <span className="text-slate-500">{isSolo ? 'Best lap:' : 'Your lap:'}</span>
-                  <span className={`font-mono ${isSolo ? 'text-amber-400' : 'text-blue-400'}`}>
-                    {report.lap_id.slice(0, 8)}
-                  </span>
-                </span>
-                {report.reference_lap_ids.length > 0 && (
+                  {/* Timestamp */}
                   <span className="flex items-center gap-1.5">
-                    <Layers className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                    <span className="text-slate-500">
-                      {isSolo
-                        ? `${report.reference_lap_ids.length} other ${report.reference_lap_ids.length === 1 ? 'lap' : 'laps'} in session`
-                        : report.reference_lap_ids.length === 1 ? '1 reference' : `${report.reference_lap_ids.length} references`}
+                    <Clock className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                    <span className="text-slate-300">
+                      {new Date(report.created_at).toLocaleString(undefined, {
+                        year: 'numeric', month: 'short', day: 'numeric',
+                        hour: '2-digit', minute: '2-digit',
+                      })}
                     </span>
                   </span>
-                )}
-                <span className="ml-auto flex items-center gap-1 text-slate-500">
-                  <span>{metaExpanded ? 'Less' : 'Details'}</span>
-                  {metaExpanded
-                    ? <ChevronUp className="w-3.5 h-3.5" />
-                    : <ChevronDown className="w-3.5 h-3.5" />}
-                </span>
-              </button>
+                  {/* Best lap time */}
+                  {soloUserLap && (
+                    <span className="flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                      <span className="text-slate-500">Best lap:</span>
+                      <span className="font-mono text-amber-400">{formatLapTime(soloUserLap.lap_time)}</span>
+                    </span>
+                  )}
+                  {/* Total laps */}
+                  <span className="flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                    <span className="text-slate-500">{soloTotalLaps} {soloTotalLaps === 1 ? 'lap' : 'laps'} analyzed</span>
+                  </span>
+                  {/* Link to best lap on Garage61 */}
+                  <a
+                    href={`https://garage61.net/app/laps/${report.lap_id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-auto flex items-center gap-1.5 text-violet-400 hover:text-violet-300 transition-colors"
+                  >
+                    <span>View session lap</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              </div>
+            ) : (
+              /* Comparative analysis — collapsed summary + expandable detail */
+              <div className="mb-5 card p-0 overflow-hidden">
+                {/* Always-visible summary row */}
+                <button
+                  onClick={() => setMetaExpanded((v) => !v)}
+                  className="w-full flex items-center gap-x-5 gap-y-1.5 flex-wrap px-3 py-2.5 text-xs text-slate-400 hover:bg-slate-800/60 transition-colors text-left"
+                >
+                  {/* Mode badge */}
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium border bg-orange-500/15 border-orange-500/30 text-orange-300">
+                    vs Reference
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                    <span className="text-slate-300">
+                      {new Date(report.created_at).toLocaleString(undefined, {
+                        year: 'numeric', month: 'short', day: 'numeric',
+                        hour: '2-digit', minute: '2-digit',
+                      })}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                    <span className="text-slate-500">Your lap:</span>
+                    <span className="font-mono text-blue-400">
+                      {report.lap_id.slice(0, 8)}
+                    </span>
+                  </span>
+                  {report.reference_lap_ids.length > 0 && (
+                    <span className="flex items-center gap-1.5">
+                      <Layers className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                      <span className="text-slate-500">
+                        {report.reference_lap_ids.length === 1 ? '1 reference' : `${report.reference_lap_ids.length} references`}
+                      </span>
+                    </span>
+                  )}
+                  <span className="ml-auto flex items-center gap-1 text-slate-500">
+                    <span>{metaExpanded ? 'Less' : 'Details'}</span>
+                    {metaExpanded
+                      ? <ChevronUp className="w-3.5 h-3.5" />
+                      : <ChevronDown className="w-3.5 h-3.5" />}
+                  </span>
+                </button>
 
-              {/* Expanded detail */}
-              {metaExpanded && (
-                <div className="border-t border-slate-700/60 px-3 py-3">
-                  {report.laps_metadata && report.laps_metadata.length > 0 ? (
-                    <LapMetaTable
-                      laps={report.laps_metadata}
-                      userLapId={report.lap_id}
-                      isSolo={isSolo}
-                    />
-                  ) : (
-                    /* Fallback: show raw IDs when metadata not stored (old analyses) */
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-slate-500 w-20 flex-shrink-0">Your lap</span>
-                        <a
-                          href={`https://garage61.net/app/laps/${report.lap_id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-mono text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
-                        >
-                          {report.lap_id.slice(0, 8)}
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </div>
-                      {report.reference_lap_ids.map((id) => (
-                        <div key={id} className="flex items-center gap-2">
-                          <span className="text-xs text-slate-500 w-20 flex-shrink-0">Reference</span>
+                {/* Expanded detail */}
+                {metaExpanded && (
+                  <div className="border-t border-slate-700/60 px-3 py-3">
+                    {report.laps_metadata && report.laps_metadata.length > 0 ? (
+                      <LapMetaTable
+                        laps={report.laps_metadata}
+                        userLapId={report.lap_id}
+                        isSolo={false}
+                      />
+                    ) : (
+                      /* Fallback: show raw IDs when metadata not stored (old analyses) */
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-500 w-20 flex-shrink-0">Your lap</span>
                           <a
-                            href={`https://garage61.net/app/laps/${id}`}
+                            href={`https://garage61.net/app/laps/${report.lap_id}`}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="font-mono text-xs text-orange-400 hover:text-orange-300 flex items-center gap-1"
+                            className="font-mono text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
                           >
-                            {id.slice(0, 8)}
+                            {report.lap_id.slice(0, 8)}
                             <ExternalLink className="w-3 h-3" />
                           </a>
                         </div>
-                      ))}
-                    </div>
+                        {report.reference_lap_ids.map((id) => (
+                          <div key={id} className="flex items-center gap-2">
+                            <span className="text-xs text-slate-500 w-20 flex-shrink-0">Reference</span>
+                            <a
+                              href={`https://garage61.net/app/laps/${id}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-mono text-xs text-orange-400 hover:text-orange-300 flex items-center gap-1"
+                            >
+                              {id.slice(0, 8)}
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Comparison description */}
+            {(() => {
+              const meta = report.laps_metadata
+              if (isSolo) {
+                const userLap = meta?.find((l) => l.role === 'user')
+                const refLaps = meta?.filter((l) => l.role === 'reference') ?? []
+                const n = soloTotalLaps
+                return (
+                  <p className="text-xs text-slate-500 mb-4 px-0.5">
+                    Analyzing <span className="text-slate-300">{n} session laps</span> by {userLap?.driver_name || 'you'}
+                    {userLap?.lap_time ? <> — fastest <span className="font-mono text-amber-400">{formatLapTime(userLap.lap_time)}</span></> : null}
+                    {refLaps.length > 0 ? <> compared point-by-point against the <span className="text-slate-300">median of {refLaps.length} other {refLaps.length === 1 ? 'lap' : 'laps'}</span></> : null}.
+                  </p>
+                )
+              }
+              // vs_reference
+              const userLap = meta?.find((l) => l.role === 'user')
+              const refLaps = meta?.filter((l) => l.role === 'reference') ?? []
+              const bestRef = refLaps.sort((a, b) => a.lap_time - b.lap_time)[0]
+              if (!userLap && refLaps.length === 0) return null
+              return (
+                <p className="text-xs text-slate-500 mb-4 px-0.5">
+                  {userLap ? (
+                    <>
+                      <span className="text-slate-300">{userLap.driver_name || 'Your'}</span> lap
+                      {userLap.lap_time ? <> <span className="font-mono text-blue-400">{formatLapTime(userLap.lap_time)}</span></> : null}
+                    </>
+                  ) : 'Your lap'}
+                  {' '}vs.{' '}
+                  {refLaps.length === 1 && bestRef ? (
+                    <>
+                      <span className="text-slate-300">{bestRef.driver_name || 'reference'}</span>
+                      {bestRef.lap_time ? <> <span className="font-mono text-orange-400">{formatLapTime(bestRef.lap_time)}</span></> : null}
+                    </>
+                  ) : (
+                    <><span className="text-slate-300">{refLaps.length} reference laps</span>{bestRef?.lap_time ? <>, fastest <span className="font-mono text-orange-400">{formatLapTime(bestRef.lap_time)}</span></> : null}</>
                   )}
-                </div>
-              )}
-            </div>
+                  {' '}on <span className="text-slate-300">{report.track_name}</span>.
+                </p>
+              )
+            })()}
 
             {/* Control bar: sector pills (left) + tab buttons (right) */}
             <div className="sticky top-14 z-10 -mx-4 px-4 py-2 mb-4 bg-slate-900/95 backdrop-blur border-b border-slate-700/50 flex items-center gap-3 overflow-x-auto scrollbar-hide">
@@ -606,6 +691,8 @@ export default function ReportPage() {
                     trackLength={trackLength}
                     highlightRange={activeSectorRange}
                     highlightCornerNums={activeCornerNums}
+                    title="Track Guide"
+                    showRef={false}
                   />
                 </div>
               )}
@@ -658,30 +745,61 @@ export default function ReportPage() {
                 )}
 
                 {activeTab === 'telemetry' && (
-                  <TelemetryChart
-                    distances={report.telemetry.distances}
-                    userSpeed={report.telemetry.user_speed}
-                    refSpeed={report.telemetry.ref_speed}
-                    userThrottle={report.telemetry.user_throttle}
-                    refThrottle={report.telemetry.ref_throttle}
-                    userBrake={report.telemetry.user_brake}
-                    refBrake={report.telemetry.ref_brake}
-                    deltaMs={report.telemetry.delta_ms}
-                    corners={report.telemetry.corners}
-                    onHoverIndex={setHoverIdx}
-                    xRange={activeSectorRange}
-                  />
+                  <div className="space-y-3">
+                    {isSolo && (
+                      <div className="flex items-start gap-2.5 bg-slate-800/60 border border-slate-700/50 rounded-xl px-3.5 py-2.5 text-xs text-slate-400">
+                        <svg className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                        </svg>
+                        <span>
+                          <span className="text-slate-300 font-medium">Session mode — </span>
+                          your fastest lap from the session is shown as <span className="text-amber-400 font-medium">You</span>.
+                          The <span className="text-orange-400 font-medium">Ref</span> line is the point-by-point median of all your other session laps,
+                          showing where your fastest lap deviates from your typical driving.
+                        </span>
+                      </div>
+                    )}
+                    <TelemetryChart
+                      distances={report.telemetry.distances}
+                      userSpeed={report.telemetry.user_speed}
+                      refSpeed={report.telemetry.ref_speed}
+                      userThrottle={report.telemetry.user_throttle}
+                      refThrottle={report.telemetry.ref_throttle}
+                      userBrake={report.telemetry.user_brake}
+                      refBrake={report.telemetry.ref_brake}
+                      deltaMs={report.telemetry.delta_ms}
+                      corners={report.telemetry.corners}
+                      onHoverIndex={setHoverIdx}
+                      xRange={activeSectorRange}
+                    />
+                  </div>
                 )}
 
                 {activeTab === 'heatmap' && (
-                  <HeatMap
-                    lat={report.telemetry.user_lat ?? []}
-                    lon={report.telemetry.user_lon ?? []}
-                    speed={report.telemetry.user_speed}
-                    refSpeed={report.telemetry.ref_speed}
-                    brake={report.telemetry.user_brake}
-                    throttle={report.telemetry.user_throttle}
-                  />
+                  <div className="space-y-4">
+                    {isSolo && (
+                      <DeltaHeatmap
+                        distances={report.telemetry.distances}
+                        delta_ms={report.telemetry.delta_ms}
+                        corners={report.telemetry.corners}
+                        isSolo={isSolo}
+                        xRange={activeSectorRange}
+                      />
+                    )}
+                    <HeatMap
+                      lat={report.telemetry.user_lat ?? []}
+                      lon={report.telemetry.user_lon ?? []}
+                      speed={report.telemetry.user_speed}
+                      refSpeed={report.telemetry.ref_speed}
+                      brake={report.telemetry.user_brake}
+                      refBrake={report.telemetry.ref_brake}
+                      throttle={report.telemetry.user_throttle}
+                      refThrottle={report.telemetry.ref_throttle}
+                      xRange={activeSectorRange}
+                      distances={report.telemetry.distances}
+                      isSolo={isSolo}
+                    />
+                  </div>
                 )}
 
                 {activeTab === 'sectors' && (

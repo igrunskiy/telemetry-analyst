@@ -131,4 +131,5 @@ export interface AnalysisHistoryItem {
   track_name: string
   created_at: string
   estimated_time_gain_seconds: number | null
+  analysis_mode?: 'vs_reference' | 'solo'
 }

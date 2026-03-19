@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
+import { Globe, Map, EyeOff } from 'lucide-react'
 import { MapContainer, TileLayer, Polyline, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 
@@ -8,10 +9,15 @@ interface HeatMapProps {
   speed: number[]
   refSpeed: number[]
   brake: number[]
+  refBrake: number[]
   throttle: number[]
+  refThrottle: number[]
+  distances?: number[]
+  xRange?: [number, number] | null
+  isSolo?: boolean
 }
 
-type Metric = 'speedDelta' | 'speed' | 'brake' | 'throttle'
+type Metric = 'speedDelta' | 'brakeDelta' | 'throttleDelta'
 type MapStyle = 'satellite' | 'street' | 'none'
 
 /** Dims tile layer via CSS filter; re-applies whenever mapStyle changes. */
@@ -43,11 +49,20 @@ function FitBounds({ lat, lon }: { lat: number[]; lon: number[] }) {
   return null
 }
 
-const METRIC_CONFIG: Record<Metric, { label: string; unit: string; diverging?: boolean; reversed?: boolean }> = {
-  speedDelta: { label: 'Speed Δ vs Ref', unit: 'km/h', diverging: true },
-  speed:      { label: 'Speed',          unit: 'km/h' },
-  brake:      { label: 'Brake',          unit: '%',   reversed: true },
-  throttle:   { label: 'Throttle',       unit: '%' },
+interface MetricConfig {
+  label: string
+  soloLabel: string
+  unit: string
+  diverging: true
+  reversed?: boolean
+  /** Multiply raw delta by this for colorbar label display (e.g. 100 for 0–1 → %) */
+  displayScale?: number
+}
+
+const METRIC_CONFIG: Record<Metric, MetricConfig> = {
+  speedDelta:    { label: 'Speed Δ',    soloLabel: 'Speed Consistency',    unit: 'km/h', diverging: true },
+  brakeDelta:    { label: 'Brake Δ',    soloLabel: 'Brake Consistency',    unit: '%',    diverging: true, reversed: true, displayScale: 100 },
+  throttleDelta: { label: 'Throttle Δ', soloLabel: 'Throttle Consistency', unit: '%',    diverging: true, displayScale: 100 },
 }
 
 const N_BINS = 16
@@ -56,25 +71,15 @@ const ESRI_SAT_URL =
   'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
 const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 
-/** t ∈ [0, 1] → CSS rgb string */
-function lerpColor(t: number, diverging: boolean): string {
-  const u = Math.max(0, Math.min(1, t))
-  if (diverging) {
-    // red (0) → white (0.5) → green (1)
-    if (u <= 0.5) {
-      const s = u * 2
-      return `rgb(239,${Math.round(68 + 182 * s)},${Math.round(68 + 182 * s)})`
-    }
-    const s = (u - 0.5) * 2
-    return `rgb(${Math.round(248 - 214 * s)},${Math.round(250 - 53 * s)},${Math.round(250 - 156 * s)})`
-  }
-  // red (0) → yellow (0.5) → green (1)  RdYlGn
+/** t ∈ [0, 1] → CSS rgb string, diverging: red (0) → white (0.5) → green (1) */
+function lerpColor(t: number, reversed: boolean): string {
+  const u = reversed ? 1 - Math.max(0, Math.min(1, t)) : Math.max(0, Math.min(1, t))
   if (u <= 0.5) {
     const s = u * 2
-    return `rgb(239,${Math.round(68 + 183 * s)},0)`
+    return `rgb(239,${Math.round(68 + 182 * s)},${Math.round(68 + 182 * s)})`
   }
   const s = (u - 0.5) * 2
-  return `rgb(${Math.round(239 - 205 * s)},251,${Math.round(34 * s)})`
+  return `rgb(${Math.round(248 - 214 * s)},${Math.round(250 - 53 * s)},${Math.round(250 - 156 * s)})`
 }
 
 /** Split track path into runs of the same colour bin, carrying over the boundary
@@ -85,7 +90,6 @@ function buildSegments(
   values: number[],
   cmin: number,
   cmax: number,
-  diverging: boolean,
   reversed: boolean,
 ): { points: [number, number][]; color: string }[] {
   if (lat.length === 0) return []
@@ -95,15 +99,14 @@ function buildSegments(
   let curSeg: [number, number][] = []
 
   for (let i = 0; i < lat.length; i++) {
-    let t = (values[i] - cmin) / range
-    if (reversed) t = 1 - t
+    const t = (values[i] - cmin) / range
     const binIdx = Math.min(N_BINS - 1, Math.max(0, Math.floor(Math.max(0, Math.min(1, t)) * N_BINS)))
 
     if (binIdx !== curBin) {
       if (curSeg.length >= 2) {
         result.push({
           points: curSeg,
-          color: lerpColor((curBin + 0.5) / N_BINS, diverging),
+          color: lerpColor((curBin + 0.5) / N_BINS, reversed),
         })
       }
       // Carry last point over so segments share boundary (no gap)
@@ -114,65 +117,90 @@ function buildSegments(
   }
 
   if (curSeg.length >= 2) {
-    result.push({ points: curSeg, color: lerpColor((curBin + 0.5) / N_BINS, diverging) })
+    result.push({ points: curSeg, color: lerpColor((curBin + 0.5) / N_BINS, reversed) })
   }
   return result
 }
 
-export default function HeatMap({ lat, lon, speed, refSpeed, brake, throttle }: HeatMapProps) {
+export default function HeatMap({
+  lat, lon, speed, refSpeed, brake, refBrake, throttle, refThrottle,
+  distances, xRange, isSolo,
+}: HeatMapProps) {
   const [metric, setMetric] = useState<Metric>('speedDelta')
   const [mapStyle, setMapStyle] = useState<MapStyle>('satellite')
 
   const hasGps = lat.length > 0 && lon.length > 0
 
-  const speedDelta = useMemo(
-    () => speed.map((s, i) => s - (refSpeed[i] ?? s)),
-    [speed, refSpeed],
+  // Compute sliced indices when a sector range is active
+  const { startIdx, endIdx } = useMemo(() => {
+    if (!xRange || !distances || distances.length === 0) {
+      return { startIdx: 0, endIdx: lat.length - 1 }
+    }
+    let start = 0
+    let end = distances.length - 1
+    for (let i = 0; i < distances.length; i++) {
+      if (distances[i] >= xRange[0]) { start = i; break }
+    }
+    for (let i = distances.length - 1; i >= 0; i--) {
+      if (distances[i] <= xRange[1]) { end = i; break }
+    }
+    return { startIdx: start, endIdx: end }
+  }, [xRange, distances, lat.length])
+
+  const activeLat = useMemo(
+    () => (xRange && distances ? lat.slice(startIdx, endIdx + 1) : lat),
+    [xRange, distances, lat, startIdx, endIdx],
+  )
+  const activeLon = useMemo(
+    () => (xRange && distances ? lon.slice(startIdx, endIdx + 1) : lon),
+    [xRange, distances, lon, startIdx, endIdx],
   )
 
-  const allValues: Record<Metric, number[]> = { speedDelta, speed, brake, throttle }
-  const values = allValues[metric]
+  const speedDelta    = useMemo(() => speed.map((v, i) => v - (refSpeed[i] ?? v)),    [speed, refSpeed])
+  const brakeDelta    = useMemo(() => brake.map((v, i) => v - (refBrake[i] ?? v)),    [brake, refBrake])
+  const throttleDelta = useMemo(() => throttle.map((v, i) => v - (refThrottle[i] ?? v)), [throttle, refThrottle])
+
+  const allValues: Record<Metric, number[]> = { speedDelta, brakeDelta, throttleDelta }
+  const fullValues = allValues[metric]
+  const activeValues = useMemo(
+    () => (xRange && distances ? fullValues.slice(startIdx, endIdx + 1) : fullValues),
+    [xRange, distances, fullValues, startIdx, endIdx],
+  )
+  const values = activeValues
   const config = METRIC_CONFIG[metric]
 
   const { cmin, cmax } = useMemo(() => {
-    if (!values.length) return { cmin: 0, cmax: 1 }
-    if (config.diverging) {
-      let maxAbs = 1
-      for (const v of values) {
-        const a = Math.abs(v)
-        if (a > maxAbs) maxAbs = a
-      }
-      return { cmin: -maxAbs, cmax: maxAbs }
-    }
-    let mn = values[0], mx = values[0]
+    if (!values.length) return { cmin: -1, cmax: 1 }
+    let maxAbs = 1e-6
     for (const v of values) {
-      if (v < mn) mn = v
-      if (v > mx) mx = v
+      const a = Math.abs(v)
+      if (a > maxAbs) maxAbs = a
     }
-    return { cmin: mn, cmax: mx }
-  }, [values, config.diverging])
+    return { cmin: -maxAbs, cmax: maxAbs }
+  }, [values])
 
   const segments = useMemo(
     () =>
       hasGps
-        ? buildSegments(lat, lon, values, cmin, cmax, config.diverging ?? false, config.reversed ?? false)
+        ? buildSegments(activeLat, activeLon, values, cmin, cmax, config.reversed ?? false)
         : [],
-    [hasGps, lat, lon, values, cmin, cmax, config.diverging, config.reversed],
+    [hasGps, activeLat, activeLon, values, cmin, cmax, config.reversed],
   )
 
   const center = useMemo((): [number, number] => {
     if (!hasGps) return [0, 0]
     let sLat = 0, sLon = 0
-    for (const v of lat) sLat += v
-    for (const v of lon) sLon += v
-    return [sLat / lat.length, sLon / lon.length]
-  }, [hasGps, lat, lon])
+    for (const v of activeLat) sLat += v
+    for (const v of activeLon) sLon += v
+    return [sLat / activeLat.length, sLon / activeLon.length]
+  }, [hasGps, activeLat, activeLon])
 
-  const gradientCss = config.diverging
-    ? 'linear-gradient(to right, #ef4444, #f8fafc, #22c55e)'
-    : config.reversed
-    ? 'linear-gradient(to right, #22c55e, #fbbf24, #ef4444)'
-    : 'linear-gradient(to right, #ef4444, #fbbf24, #22c55e)'
+  const gradientCss = config.reversed
+    ? 'linear-gradient(to right, #22c55e, #f8fafc, #ef4444)'
+    : 'linear-gradient(to right, #ef4444, #f8fafc, #22c55e)'
+
+  const scale = config.displayScale ?? 1
+  const activeLabel = isSolo ? config.soloLabel : config.label
 
   if (!hasGps) {
     return (
@@ -205,23 +233,28 @@ export default function HeatMap({ lat, lon, speed, refSpeed, brake, throttle }: 
                   : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
               }`}
             >
-              {METRIC_CONFIG[m].label}
+              {isSolo ? METRIC_CONFIG[m].soloLabel : METRIC_CONFIG[m].label}
             </button>
           ))}
         </div>
-        {/* Map style toggle */}
+        {/* Map style toggle — icon buttons */}
         <div className="flex gap-1.5">
-          {([['satellite', 'Satellite'], ['street', 'Street'], ['none', 'None']] as [MapStyle, string][]).map(([s, label]) => (
+          {([
+            ['satellite', 'Satellite',     <Globe  className="w-3.5 h-3.5" />],
+            ['street',    'Street map',    <Map    className="w-3.5 h-3.5" />],
+            ['none',      'No background', <EyeOff className="w-3.5 h-3.5" />],
+          ] as [MapStyle, string, React.ReactNode][]).map(([s, title, icon]) => (
             <button
               key={s}
+              title={title}
               onClick={() => setMapStyle(s)}
-              className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${
+              className={`px-2 py-1 rounded-lg font-medium transition-colors ${
                 mapStyle === s
                   ? 'bg-slate-500 text-white'
                   : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
               }`}
             >
-              {label}
+              {icon}
             </button>
           ))}
         </div>
@@ -229,6 +262,7 @@ export default function HeatMap({ lat, lon, speed, refSpeed, brake, throttle }: 
 
       {/* Map */}
       <MapContainer
+        key={xRange ? `${xRange[0]}-${xRange[1]}` : 'full'}
         center={center}
         zoom={15}
         maxZoom={22}
@@ -237,7 +271,7 @@ export default function HeatMap({ lat, lon, speed, refSpeed, brake, throttle }: 
         attributionControl={false}
       >
         <TilePaneFader mapStyle={mapStyle} />
-        <FitBounds lat={lat} lon={lon} />
+        <FitBounds lat={activeLat} lon={activeLon} />
         {mapStyle !== 'none' && (
           mapStyle === 'satellite'
             ? <TileLayer url={ESRI_SAT_URL} attribution="Tiles &copy; Esri" maxNativeZoom={18} maxZoom={22} />
@@ -253,17 +287,32 @@ export default function HeatMap({ lat, lon, speed, refSpeed, brake, throttle }: 
       </MapContainer>
 
       {/* Colorbar */}
-      <div className="px-4 py-2.5 flex items-center gap-3 bg-slate-800/80 border-t border-slate-700/50">
-        <span className="text-xs text-slate-400 font-mono flex-shrink-0 w-14 text-right">
-          {config.diverging ? `−${Math.abs(cmin).toFixed(0)}` : cmin.toFixed(0)}
-        </span>
-        <div className="flex-1 h-2.5 rounded-full" style={{ background: gradientCss }} />
-        <span className="text-xs text-slate-400 font-mono flex-shrink-0 w-14">
-          +{cmax.toFixed(0)}
-        </span>
-        <span className="text-xs text-slate-500 ml-2 flex-shrink-0">
-          {config.label} ({config.unit})
-        </span>
+      <div className="px-4 py-2.5 bg-slate-800/80 border-t border-slate-700/50">
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-400 font-mono flex-shrink-0 w-14 text-right">
+            {config.reversed ? `+${(cmax * scale).toFixed(scale === 1 ? 0 : 0)}` : `−${(Math.abs(cmin) * scale).toFixed(scale === 1 ? 0 : 0)}`}
+          </span>
+          <div className="flex-1 h-2.5 rounded-full" style={{ background: gradientCss }} />
+          <span className="text-xs text-slate-400 font-mono flex-shrink-0 w-14">
+            {config.reversed ? `−${(Math.abs(cmin) * scale).toFixed(scale === 1 ? 0 : 0)}` : `+${(cmax * scale).toFixed(scale === 1 ? 0 : 0)}`}
+          </span>
+          <span className="text-xs text-slate-500 ml-2 flex-shrink-0">
+            {activeLabel} ({config.unit})
+          </span>
+        </div>
+        <p className="mt-1.5 text-slate-400 text-xs italic">
+          {metric === 'speedDelta' && isSolo
+            ? 'Green = consistent with your best lap here. Red = highest variance — where your lap times diverge most.'
+            : metric === 'speedDelta'
+            ? 'Green = faster than reference. Red = slower than reference.'
+            : metric === 'brakeDelta' && isSolo
+            ? 'Green = consistent braking. Red = highest variance in brake point or pressure.'
+            : metric === 'brakeDelta'
+            ? 'Green = lighter braking than reference. Red = heavier brake pressure than reference.'
+            : metric === 'throttleDelta' && isSolo
+            ? 'Green = consistent throttle application. Red = highest variance in throttle pickup.'
+            : 'Green = more throttle than reference. Red = less throttle than reference.'}
+        </p>
       </div>
     </div>
   )
