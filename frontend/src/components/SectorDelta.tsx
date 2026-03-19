@@ -5,6 +5,8 @@ import type { SectorData } from '../types'
 
 interface SectorDeltaProps {
   sectors: SectorData[]
+  selectedSector?: number | null
+  onSectorClick?: (sector: number | null) => void
 }
 
 function formatMs(ms: number): string {
@@ -22,7 +24,7 @@ function formatSectorTime(ms: number): string {
   return `${totalSeconds.toFixed(3)}s`
 }
 
-export default function SectorDelta({ sectors }: SectorDeltaProps) {
+export default function SectorDelta({ sectors, selectedSector, onSectorClick }: SectorDeltaProps) {
   if (!sectors || sectors.length === 0) {
     return (
       <div className="card py-16 text-center">
@@ -139,12 +141,14 @@ export default function SectorDelta({ sectors }: SectorDeltaProps) {
             <tbody className="divide-y divide-slate-700/50">
               {sectors.map((s, i) => {
                 const delta = deltas[i]
+                const isSelected = selectedSector === s.sector
                 return (
                   <tr
                     key={s.sector}
-                    className="hover:bg-slate-700/30 transition-colors"
+                    onClick={() => onSectorClick?.(isSelected ? null : Number(s.sector))}
+                    className={`transition-colors cursor-pointer ${isSelected ? 'bg-amber-500/10' : 'hover:bg-slate-700/30'}`}
                   >
-                    <td className="px-4 py-2.5 text-slate-300 font-medium">
+                    <td className={`px-4 py-2.5 font-medium ${isSelected ? 'text-amber-400' : 'text-slate-300'}`}>
                       S{s.sector}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-white">

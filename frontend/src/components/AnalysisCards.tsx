@@ -1,6 +1,20 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronUp, AlertTriangle, Info, Zap, CheckCircle, TrendingDown, FileText } from 'lucide-react'
-import type { ImprovementArea } from '../types'
+import type { ImprovementArea, Corner } from '../types'
+import CornerSnippet from './CornerSnippet'
+
+interface Telemetry {
+  distances: number[]
+  userLat?: number[]
+  userLon?: number[]
+  refLat?: number[]
+  refLon?: number[]
+  userSpeed: number[]
+  refSpeed: number[]
+  userBrake: number[]
+  userThrottle: number[]
+  corners: Corner[]
+}
 
 interface AnalysisCardsProps {
   improvement_areas: ImprovementArea[]
@@ -8,6 +22,9 @@ interface AnalysisCardsProps {
   summary: string
   estimated_time_gain: number
   sector_notes: string[]
+  telemetry: Telemetry
+  onActiveCorners?: (corners: number[]) => void
+  onHoverIndex?: (idx: number | null) => void
 }
 
 const SEVERITY_CONFIG = {
@@ -36,11 +53,19 @@ const SEVERITY_CONFIG = {
 
 interface ImprovementCardProps {
   area: ImprovementArea
+  telemetry: Telemetry
+  onActiveCorners?: (corners: number[]) => void
+  onHoverIndex?: (idx: number | null) => void
 }
 
-function ImprovementCard({ area }: ImprovementCardProps) {
+function ImprovementCard({ area, telemetry, onActiveCorners, onHoverIndex }: ImprovementCardProps) {
   const [expanded, setExpanded] = useState(false)
   const sev = SEVERITY_CONFIG[area.severity]
+
+  // Resolve Corner objects for each referenced corner number
+  const referencedCorners = area.corner_refs
+    .map((num) => telemetry.corners.find((c) => c.corner_num === num))
+    .filter((c): c is Corner => c !== undefined)
 
   return (
     <div
@@ -48,7 +73,11 @@ function ImprovementCard({ area }: ImprovementCardProps) {
     >
       <button
         className="w-full text-left p-4"
-        onClick={() => setExpanded((v) => !v)}
+        onClick={() => {
+          const next = !expanded
+          setExpanded(next)
+          onActiveCorners?.(next ? area.corner_refs : [])
+        }}
       >
         <div className="flex items-start gap-3">
           <div className="flex-shrink-0 mt-0.5">{sev.icon}</div>
@@ -86,7 +115,29 @@ function ImprovementCard({ area }: ImprovementCardProps) {
       </button>
 
       {expanded && (
-        <div className="px-4 pb-4 space-y-3 border-t border-slate-700/50 pt-3">
+        <div className="px-4 pb-4 space-y-4 border-t border-slate-700/50 pt-3">
+          {/* Corner visual snippets */}
+          {referencedCorners.length > 0 && (
+            <div className={`grid gap-3 ${referencedCorners.length > 1 ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
+              {referencedCorners.map((corner) => (
+                <CornerSnippet
+                  key={corner.corner_num}
+                  corner={corner}
+                  distances={telemetry.distances}
+                  userLat={telemetry.userLat}
+                  userLon={telemetry.userLon}
+                  refLat={telemetry.refLat}
+                  refLon={telemetry.refLon}
+                  userSpeed={telemetry.userSpeed}
+                  refSpeed={telemetry.refSpeed}
+                  userBrake={telemetry.userBrake}
+                  userThrottle={telemetry.userThrottle}
+                  onHoverIndex={onHoverIndex}
+                />
+              ))}
+            </div>
+          )}
+
           <div>
             <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
               Description
@@ -125,9 +176,12 @@ export default function AnalysisCards({
   summary,
   estimated_time_gain,
   sector_notes,
+  telemetry,
+  onActiveCorners,
+  onHoverIndex,
 }: AnalysisCardsProps) {
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6">
       {/* Overall Assessment */}
       <div className="card">
         <div className="flex items-start justify-between gap-4 mb-3">
@@ -154,7 +208,7 @@ export default function AnalysisCards({
           </h2>
           <div className="space-y-3">
             {improvement_areas.map((area) => (
-              <ImprovementCard key={area.rank} area={area} />
+              <ImprovementCard key={area.rank} area={area} telemetry={telemetry} onActiveCorners={onActiveCorners} onHoverIndex={onHoverIndex} />
             ))}
           </div>
         </div>

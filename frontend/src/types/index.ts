@@ -28,6 +28,8 @@ export interface Lap {
   track_id?: number
   driver_name: string
   recorded_at: string
+  irating?: number
+  season?: string
 }
 
 export interface Corner {
@@ -69,8 +71,18 @@ export interface SectorData {
   delta_ms: number
 }
 
+export interface LapMeta {
+  id: string
+  role: 'user' | 'reference'
+  driver_name: string
+  lap_time: number   // milliseconds
+  irating?: number
+}
+
 export interface AnalysisReport {
   id: string
+  lap_id: string
+  reference_lap_ids: string[]
   car_name: string
   track_name: string
   created_at: string
@@ -79,6 +91,7 @@ export interface AnalysisReport {
   improvement_areas: ImprovementArea[]
   strengths: string[]
   sector_notes: string[]
+  laps_metadata?: LapMeta[]
   telemetry: {
     distances: number[]
     user_speed: number[]
@@ -99,9 +112,10 @@ export interface AnalysisReport {
 
 export interface AnalysisHistoryItem {
   id: string
+  lap_id: string
+  reference_lap_ids: string[]
   car_name: string
   track_name: string
   created_at: string
-  summary: string
   estimated_time_gain_seconds: number | null
 }

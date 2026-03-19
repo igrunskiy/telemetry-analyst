@@ -35,9 +35,17 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
     depends_on:
       - backend
       - frontend
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

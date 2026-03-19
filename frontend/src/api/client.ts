@@ -86,12 +86,14 @@ export async function runAnalysis(
   referenceLapIds: string[],
   carName: string,
   trackName: string,
+  analysisMode: 'vs_reference' | 'solo' = 'vs_reference',
 ): Promise<AnalysisReport> {
   const { data } = await api.post<AnalysisReport>('/api/analysis/run', {
     lap_id: lapId,
     reference_lap_ids: referenceLapIds,
     car_name: carName,
     track_name: trackName,
+    analysis_mode: analysisMode,
   })
   return data
 }
@@ -104,6 +106,10 @@ export async function getAnalysisHistory(): Promise<AnalysisHistoryItem[]> {
 export async function getAnalysis(id: string): Promise<AnalysisReport> {
   const { data } = await api.get<AnalysisReport>(`/api/analysis/${id}`)
   return data
+}
+
+export async function deleteAnalysis(id: string): Promise<void> {
+  await api.delete(`/api/analysis/${id}`)
 }
 
 export async function updateClaudeKey(apiKey: string): Promise<void> {

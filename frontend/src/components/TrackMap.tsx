@@ -1,6 +1,6 @@
-import { useMemo } from 'react'
-import Plot from 'react-plotly.js'
-import type * as Plotly from 'plotly.js'
+import { useState, useMemo, useEffect, useRef } from 'react'
+import { MapContainer, TileLayer, Polyline, CircleMarker, Tooltip, useMap } from 'react-leaflet'
+import 'leaflet/dist/leaflet.css'
 import type { Corner } from '../types'
 
 interface TrackMapProps {
@@ -11,60 +11,162 @@ interface TrackMapProps {
   userSpeed: number[]
   refSpeed: number[]
   corners: Corner[]
+  hoverIndex?: number | null
+  height?: number
+  trackLength?: number
+  highlightRange?: [number, number] | null
+  highlightCornerNums?: number[]
 }
 
-const DARK_LAYOUT = {
-  paper_bgcolor: '#0f172a',
-  plot_bgcolor: '#0f172a',
-  font: { color: '#94a3b8' },
+type MapStyle = 'satellite' | 'street' | 'none'
+
+function TilePaneFader({ mapStyle }: { mapStyle: MapStyle }) {
+  const map = useMap()
+  useEffect(() => {
+    const pane = map.getPane('tilePane')
+    if (pane) pane.style.filter = mapStyle === 'none' ? '' : 'brightness(0.38) saturate(0.45)'
+  }, [map, mapStyle])
+  return null
 }
+
+function FitBounds({ lat, lon }: { lat: number[]; lon: number[] }) {
+  const map = useMap()
+  const fitted = useRef(false)
+  useEffect(() => {
+    if (fitted.current || lat.length === 0) return
+    fitted.current = true
+    let minLat = lat[0], maxLat = lat[0], minLon = lon[0], maxLon = lon[0]
+    for (let i = 1; i < lat.length; i++) {
+      if (lat[i] < minLat) minLat = lat[i]
+      if (lat[i] > maxLat) maxLat = lat[i]
+      if (lon[i] < minLon) minLon = lon[i]
+      if (lon[i] > maxLon) maxLon = lon[i]
+    }
+    map.fitBounds([[minLat, minLon], [maxLat, maxLon]], { padding: [24, 24] })
+  }, [map, lat, lon])
+  return null
+}
+
+function RightClickPan() {
+  const map = useMap()
+
+  useEffect(() => {
+    const container = map.getContainer()
+    let state: { startX: number; startY: number; startCenter: [number, number] } | null = null
+    let rafId: number | null = null
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button !== 2) return
+      e.preventDefault()
+      e.stopPropagation()
+      const c = map.getCenter()
+      state = { startX: e.clientX, startY: e.clientY, startCenter: [c.lat, c.lng] }
+    }
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!state) return
+      const { clientX, clientY } = e
+      if (rafId !== null) cancelAnimationFrame(rafId)
+      rafId = requestAnimationFrame(() => {
+        if (!state) return
+        const startPoint = map.latLngToContainerPoint(state.startCenter)
+        const dx = clientX - state.startX
+        const dy = clientY - state.startY
+        const newCenter = map.containerPointToLatLng([startPoint.x - dx, startPoint.y - dy])
+        map.setView(newCenter, map.getZoom(), { animate: false })
+      })
+    }
+
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button === 2) state = null
+    }
+
+    const onContextMenu = (e: Event) => e.preventDefault()
+
+    container.addEventListener('mousedown', onMouseDown, true)
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    container.addEventListener('contextmenu', onContextMenu, true)
+
+    return () => {
+      container.removeEventListener('mousedown', onMouseDown, true)
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+      container.removeEventListener('contextmenu', onContextMenu, true)
+      if (rafId !== null) cancelAnimationFrame(rafId)
+    }
+  }, [map])
+
+  return null
+}
+
+const ESRI_SAT_URL =
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 
 export default function TrackMap({
   userLat,
   userLon,
   refLat,
   refLon,
-  userSpeed,
-  refSpeed,
   corners,
+  hoverIndex,
+  height = 576,
+  trackLength = 3000,
+  highlightRange,
+  highlightCornerNums = [],
 }: TrackMapProps) {
-  const hasGpsData =
-    userLat.length > 0 && userLon.length > 0
+  const [mapStyle, setMapStyle] = useState<MapStyle>('satellite')
 
-  const cornerAnnotations = useMemo(() => {
+  const hasGpsData = userLat.length > 0 && userLon.length > 0
+
+  const center = useMemo((): [number, number] => {
+    if (!hasGpsData) return [0, 0]
+    let sLat = 0, sLon = 0
+    for (const v of userLat) sLat += v
+    for (const v of userLon) sLon += v
+    return [sLat / userLat.length, sLon / userLon.length]
+  }, [hasGpsData, userLat, userLon])
+
+  // User racing line — split into dim/bright/dim when a highlight range is active
+  const userSegments = useMemo(() => {
+    if (!hasGpsData) return []
+    const n = userLat.length
+    const all: [number, number][] = userLat.map((la, i) => [la, userLon[i]])
+    if (!highlightRange) {
+      return [{ positions: all, opacity: 0.9, weight: 1.5 }]
+    }
+    const rStart = Math.max(0, Math.round((highlightRange[0] / trackLength) * (n - 1)))
+    const rEnd = Math.min(n - 1, Math.round((highlightRange[1] / trackLength) * (n - 1)))
+    const segs: { positions: [number, number][]; opacity: number; weight: number }[] = []
+    if (rStart > 0)   segs.push({ positions: all.slice(0, rStart + 1), opacity: 0.18, weight: 1 })
+    segs.push({ positions: all.slice(rStart, rEnd + 1), opacity: 1.0, weight: 2.5 })
+    if (rEnd < n - 1) segs.push({ positions: all.slice(rEnd), opacity: 0.18, weight: 1 })
+    return segs
+  }, [hasGpsData, userLat, userLon, highlightRange, trackLength])
+
+  const refPositions = useMemo(
+    (): [number, number][] => refLat.map((la, i) => [la, refLon[i]]),
+    [refLat, refLon],
+  )
+
+  // Map dist_apex of each corner to a GPS index
+  const cornerData = useMemo(() => {
     if (!hasGpsData) return []
     return corners.map((c) => {
-      // Find the closest point on the user's line to this corner's apex distance
-      // For annotation positioning, we'll use a rough index
       const idx = Math.min(
-        Math.round((c.dist_apex / 100) * (userLat.length - 1)),
+        Math.round((c.dist_apex / trackLength) * (userLat.length - 1)),
         userLat.length - 1,
       )
-      return {
-        x: userLon[idx],
-        y: userLat[idx],
-        text: `C${c.corner_num}`,
-        showarrow: false,
-        font: { size: 10, color: '#fbbf24' },
-        bgcolor: 'rgba(15,23,42,0.7)',
-        borderpad: 2,
-      }
+      return { lat: userLat[idx], lon: userLon[idx], num: c.corner_num }
     })
-  }, [corners, userLat, userLon, hasGpsData])
+  }, [corners, userLat, userLon, hasGpsData, trackLength])
 
   if (!hasGpsData) {
     return (
       <div className="card flex flex-col items-center justify-center py-16 text-center">
         <div className="w-12 h-12 rounded-full bg-slate-700 flex items-center justify-center mb-4">
-          <svg
-            width="24"
-            height="24"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            className="text-slate-500"
-          >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-slate-500">
             <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
             <circle cx="12" cy="9" r="2.5" />
           </svg>
@@ -77,99 +179,105 @@ export default function TrackMap({
     )
   }
 
-  const minSpeed = Math.min(...userSpeed, ...refSpeed)
-  const maxSpeed = Math.max(...userSpeed, ...refSpeed)
-
-  const userTrace: Plotly.Data = {
-    type: 'scatter',
-    mode: 'markers',
-    x: userLon,
-    y: userLat,
-    name: 'You',
-    marker: {
-      color: userSpeed,
-      colorscale: 'RdYlGn',
-      cmin: minSpeed,
-      cmax: maxSpeed,
-      size: 3,
-      colorbar: {
-        title: { text: 'Speed (km/h)', font: { color: '#94a3b8' } },
-        tickfont: { color: '#94a3b8' },
-        bgcolor: 'rgba(15,23,42,0)',
-        bordercolor: 'rgba(148,163,184,0.2)',
-        len: 0.5,
-        y: 0.75,
-      },
-      showscale: true,
-    },
-    showlegend: true,
-  }
-
-  const refTrace: Plotly.Data = {
-    type: 'scatter',
-    mode: 'markers',
-    x: refLon,
-    y: refLat,
-    name: 'Reference',
-    marker: {
-      color: refSpeed,
-      colorscale: 'RdYlGn',
-      cmin: minSpeed,
-      cmax: maxSpeed,
-      size: 2,
-      opacity: 0.5,
-      showscale: false,
-    },
-    showlegend: true,
-  }
-
   return (
-    <div className="card p-2">
-      <div className="flex items-center justify-between mb-2 px-2">
-        <h3 className="text-white font-medium text-sm">Racing Lines</h3>
+    <div className="card p-0 overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/50 bg-slate-800/80">
         <div className="flex items-center gap-4 text-xs">
+          <h3 className="text-white font-medium text-sm">Racing Lines</h3>
           <span className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-full bg-blue-500 inline-block" />
+            <span className="w-5 h-0.5 bg-amber-500 inline-block" />
             <span className="text-slate-400">You</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-full bg-orange-400 inline-block opacity-60" />
+            <span className="w-5 h-0.5 bg-green-500 inline-block opacity-70" />
             <span className="text-slate-400">Reference</span>
           </span>
         </div>
+        <div className="flex gap-1.5">
+          {([['satellite', 'Satellite'], ['street', 'Street'], ['none', 'None']] as [MapStyle, string][]).map(([s, label]) => (
+            <button
+              key={s}
+              onClick={() => setMapStyle(s)}
+              className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-colors ${
+                mapStyle === s
+                  ? 'bg-slate-500 text-white'
+                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
-      <Plot
-        data={[userTrace, refTrace]}
-        layout={{
-          ...DARK_LAYOUT,
-          autosize: true,
-          height: 480,
-          margin: { t: 10, r: 80, b: 10, l: 10 },
-          xaxis: {
-            showgrid: false,
-            zeroline: false,
-            showticklabels: false,
-            scaleanchor: 'y',
-            scaleratio: 1,
-          },
-          yaxis: {
-            showgrid: false,
-            zeroline: false,
-            showticklabels: false,
-          },
-          annotations: cornerAnnotations,
-          legend: {
-            bgcolor: 'rgba(15,23,42,0.8)',
-            bordercolor: 'rgba(148,163,184,0.2)',
-            borderwidth: 1,
-            font: { color: '#94a3b8', size: 11 },
-          },
-          hovermode: 'closest',
-        }}
-        config={{ responsive: true, displayModeBar: false }}
-        style={{ width: '100%' }}
-        useResizeHandler
-      />
+
+      <MapContainer
+        center={center}
+        zoom={15}
+        maxZoom={22}
+        style={{ height, background: '#0f172a' }}
+        zoomControl
+        attributionControl={false}
+      >
+        <TilePaneFader mapStyle={mapStyle} />
+        <FitBounds lat={userLat} lon={userLon} />
+        <RightClickPan />
+        {mapStyle !== 'none' && (
+          mapStyle === 'satellite'
+            ? <TileLayer url={ESRI_SAT_URL} attribution="Tiles &copy; Esri" maxNativeZoom={18} maxZoom={22} />
+            : <TileLayer url={OSM_URL} attribution="&copy; OpenStreetMap contributors" maxNativeZoom={19} maxZoom={22} />
+        )}
+
+        {/* Reference racing line */}
+        {refPositions.length > 0 && (
+          <Polyline
+            positions={refPositions}
+            pathOptions={{ color: '#22c55e', weight: 1.5, opacity: 0.7 }}
+          />
+        )}
+
+        {/* User racing line (optionally dim/bright/dim) */}
+        {userSegments.map((seg, i) => (
+          <Polyline
+            key={i}
+            positions={seg.positions}
+            pathOptions={{ color: '#f59e0b', weight: seg.weight, opacity: seg.opacity }}
+          />
+        ))}
+
+        {/* Corner labels */}
+        {cornerData.map((c) => {
+          const highlighted = highlightCornerNums.includes(c.num)
+          return (
+            <CircleMarker
+              key={c.num}
+              center={[c.lat, c.lon]}
+              radius={highlighted ? 8 : 5}
+              pathOptions={{
+                color: highlighted ? '#f97316' : '#fbbf24',
+                fillColor: highlighted ? '#f97316' : '#fbbf24',
+                fillOpacity: highlighted ? 0.9 : 0.7,
+                weight: highlighted ? 2 : 1,
+              }}
+            >
+              <Tooltip permanent direction="top" offset={[0, -8]} opacity={1}>
+                <span style={{ fontSize: 10, fontWeight: 600, color: highlighted ? '#f97316' : '#fbbf24' }}>
+                  C{c.num}
+                </span>
+              </Tooltip>
+            </CircleMarker>
+          )
+        })}
+
+        {/* Hover cursor */}
+        {hoverIndex != null && hoverIndex >= 0 && hoverIndex < userLat.length && (
+          <CircleMarker
+            center={[userLat[hoverIndex], userLon[hoverIndex]]}
+            radius={7}
+            pathOptions={{ color: '#0f172a', fillColor: '#ffffff', fillOpacity: 1, weight: 2 }}
+          />
+        )}
+      </MapContainer>
     </div>
   )
 }

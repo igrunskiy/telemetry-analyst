@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { useQuery, useMutation } from '@tanstack/react-query'
-import { LogOut, User, ChevronRight, Clock, Calendar, Loader2, Car, MapPin, BarChart2 } from 'lucide-react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { LogOut, User, ChevronRight, Clock, Calendar, Loader2, Car, MapPin, BarChart2, Trash2, Zap, ExternalLink } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import {
   getCars,
@@ -11,6 +11,7 @@ import {
   getReferenceLaps,
   getAnalysisHistory,
   runAnalysis,
+  deleteAnalysis,
   logout,
 } from '../api/client'
 import type { Lap, AnalysisHistoryItem, Track } from '../types'
@@ -97,6 +98,17 @@ function formatDate(dateStr: string): string {
   })
 }
 
+function formatDateTime(dateStr: string): string {
+  const parsed = parseDate(dateStr)
+  if (!parsed) return '—'
+  const date = parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  // Only show time if the value contained a time component (not just a date string)
+  const hasTime = /[T ]/.test(dateStr) && !/T00:00:00/.test(dateStr)
+  if (!hasTime) return date
+  const time = parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  return `${date} ${time}`
+}
+
 function formatTrackName(track: Track): string {
   const variant = track.variant || track.config
   if (variant && variant.trim() && variant !== track.name) {
@@ -117,13 +129,17 @@ export default function LapSelectorPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
 
+  const [analysisMode, setAnalysisMode] = useState<'vs_reference' | 'solo'>('vs_reference')
   const [selectedCarId, setSelectedCarId] = useState<number | null>(null)
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null)
   const [selectedLapId, setSelectedLapId] = useState<string | null>(null)
   const [selectedRefIds, setSelectedRefIds] = useState<Set<string>>(new Set())
+  const [selectedSoloLapIds, setSelectedSoloLapIds] = useState<Set<string>>(new Set())
   const [analysisStep, setAnalysisStep] = useState(0)
-  const [myLapsLimit, setMyLapsLimit] = useState(25)
+  const [myLapsLimit, setMyLapsLimit] = useState(10)
   const [myLapsPage, setMyLapsPage] = useState(0)
+  const [recentPage, setRecentPage] = useState(0)
+  const RECENT_PAGE_SIZE = 5
 
   // Data fetching
   const { data: cars = [], isLoading: carsLoading } = useQuery({
@@ -157,7 +173,39 @@ export default function LapSelectorPage() {
 
   const { data: recentLaps = [], isLoading: recentLoading } = useQuery({
     queryKey: ['recentLaps'],
-    queryFn: () => getRecentLaps(5),
+    queryFn: () => getRecentLaps(25),
+  })
+  const filteredRecentLaps = recentLaps.filter((lap) => {
+    if (selectedCarId && lap.car_id !== selectedCarId) return false
+    if (selectedTrackId && lap.track_id !== selectedTrackId) return false
+    return true
+  })
+  const recentPageLaps = filteredRecentLaps.slice(recentPage * RECENT_PAGE_SIZE, (recentPage + 1) * RECENT_PAGE_SIZE)
+  const recentTotalPages = Math.ceil(filteredRecentLaps.length / RECENT_PAGE_SIZE)
+
+  const recentCarIds = new Set(
+    recentLaps
+      .filter((l: Lap) => !selectedTrackId || l.track_id === selectedTrackId)
+      .map((l: Lap) => l.car_id)
+      .filter(Boolean)
+  )
+  const recentTrackIds = new Set(
+    recentLaps
+      .filter((l: Lap) => !selectedCarId || l.car_id === selectedCarId)
+      .map((l: Lap) => l.track_id)
+      .filter(Boolean)
+  )
+
+  const filteredHistory = history.filter((item: AnalysisHistoryItem) => {
+    if (selectedCarId) {
+      const car = cars.find((c) => c.id === selectedCarId)
+      if (car && item.car_name !== car.name) return false
+    }
+    if (selectedTrackId) {
+      const track = tracks.find((t) => t.id === selectedTrackId)
+      if (track && item.track_name !== formatTrackName(track)) return false
+    }
+    return true
   })
 
   // Auto-select top 5 reference laps when they load
@@ -172,14 +220,18 @@ export default function LapSelectorPage() {
     setSelectedCarId(carId)
     setSelectedLapId(null)
     setSelectedRefIds(new Set())
+    setSelectedSoloLapIds(new Set())
     setMyLapsPage(0)
+    setRecentPage(0)
   }
 
   function handleTrackChange(trackId: number | null) {
     setSelectedTrackId(trackId)
     setSelectedLapId(null)
     setSelectedRefIds(new Set())
+    setSelectedSoloLapIds(new Set())
     setMyLapsPage(0)
+    setRecentPage(0)
   }
 
   function applyRecentFilters(carId: number | null, trackId: number | null) {
@@ -190,6 +242,7 @@ export default function LapSelectorPage() {
     setSelectedTrackId(trackId)
     setSelectedLapId(null)
     setSelectedRefIds(new Set())
+    setSelectedSoloLapIds(new Set())
     setMyLapsPage(0)
   }
 
@@ -214,11 +267,28 @@ export default function LapSelectorPage() {
     })
   }
 
+  function toggleSoloLap(lapId: string) {
+    setSelectedSoloLapIds((prev: Set<string>) => {
+      const next = new Set(prev)
+      if (next.has(lapId)) {
+        next.delete(lapId)
+      } else {
+        next.add(lapId)
+      }
+      return next
+    })
+  }
+
+  function handleModeChange(mode: 'vs_reference' | 'solo') {
+    setAnalysisMode(mode)
+    setSelectedLapId(null)
+    setSelectedRefIds(new Set())
+    setSelectedSoloLapIds(new Set())
+  }
+
   // Analysis mutation
   const analysisMutation = useMutation({
     mutationFn: async () => {
-      const lap = myLaps.find((l) => l.id === selectedLapId)!
-      // Cycle through status messages while waiting
       let step = 0
       const interval = setInterval(() => {
         step = Math.min(step + 1, ANALYSIS_STEPS.length - 1)
@@ -226,12 +296,26 @@ export default function LapSelectorPage() {
       }, 3500)
 
       try {
-        const result = await runAnalysis(
-          selectedLapId!,
-          Array.from(selectedRefIds),
-          lap.car_name,
-          lap.track_name,
-        )
+        let result
+        if (analysisMode === 'solo') {
+          // Sort selected laps by time, fastest first — it becomes the primary
+          const sorted = Array.from(selectedSoloLapIds)
+            .map((id) => myLaps.find((l: Lap) => l.id === id))
+            .filter((l): l is Lap => l !== undefined)
+            .sort((a, b) => parseLapTime(a.lap_time) - parseLapTime(b.lap_time))
+          const primary = sorted[0]
+          const rest = sorted.slice(1).map((l) => l.id)
+          result = await runAnalysis(primary.id, rest, primary.car_name, primary.track_name, 'solo')
+        } else {
+          const lap = myLaps.find((l) => l.id === selectedLapId)!
+          result = await runAnalysis(
+            selectedLapId!,
+            Array.from(selectedRefIds),
+            lap.car_name,
+            lap.track_name,
+            'vs_reference',
+          )
+        }
         clearInterval(interval)
         return result
       } catch (e) {
@@ -247,6 +331,17 @@ export default function LapSelectorPage() {
     },
   })
 
+  const queryClient = useQueryClient()
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteAnalysis(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['analysisHistory'] })
+      setConfirmDeleteId(null)
+    },
+  })
+
   const handleLogout = async () => {
     try {
       await logout()
@@ -255,14 +350,15 @@ export default function LapSelectorPage() {
     }
   }
 
-  const canAnalyse =
-    selectedLapId !== null && selectedRefIds.size > 0 && !analysisMutation.isPending
+  const canAnalyse = analysisMode === 'solo'
+    ? selectedSoloLapIds.size >= 2 && !analysisMutation.isPending
+    : selectedLapId !== null && selectedRefIds.size > 0 && !analysisMutation.isPending
 
   return (
     <div className="min-h-screen bg-slate-900">
       {/* Header */}
       <header className="bg-slate-800 border-b border-slate-700 sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
+        <div className="max-w-[80%] mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 bg-amber-500 rounded-lg flex items-center justify-center">
               <BarChart2 className="w-4 h-4 text-slate-900" />
@@ -302,11 +398,42 @@ export default function LapSelectorPage() {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 py-6">
+      <main className="max-w-[80%] mx-auto px-4 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left column: Steps 1-4 */}
           <div className="flex flex-col gap-5">
-            <h2 className="text-lg font-semibold text-white">New Analysis</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-white">New Analysis</h2>
+              {/* Mode toggle */}
+              <div className="flex items-center bg-slate-800 border border-slate-700 rounded-lg p-0.5 text-xs font-medium">
+                <button
+                  onClick={() => handleModeChange('vs_reference')}
+                  className={`px-3 py-1.5 rounded-md transition-colors ${
+                    analysisMode === 'vs_reference'
+                      ? 'bg-amber-500 text-slate-900'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  vs Reference
+                </button>
+                <button
+                  onClick={() => handleModeChange('solo')}
+                  className={`px-3 py-1.5 rounded-md transition-colors ${
+                    analysisMode === 'solo'
+                      ? 'bg-amber-500 text-slate-900'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  My Laps Only
+                </button>
+              </div>
+            </div>
+
+            {analysisMode === 'solo' && (
+              <p className="text-slate-500 text-xs -mt-2">
+                Select 2 or more of your own laps. The fastest will be used as the baseline to find patterns and improvement areas across your sessions.
+              </p>
+            )}
 
             {/* Step 1: Car */}
             <div className="card">
@@ -317,6 +444,15 @@ export default function LapSelectorPage() {
                 <span className="text-white font-medium text-sm flex items-center gap-1.5">
                   <Car className="w-4 h-4 text-slate-400" /> Select Car
                 </span>
+                {selectedCarId && (
+                  <button
+                    type="button"
+                    onClick={() => handleCarChange(null)}
+                    className="ml-auto text-xs text-slate-400 hover:text-white px-2 py-1 rounded-md hover:bg-slate-700 transition-colors"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
               {carsLoading ? (
                 <div className="h-10 bg-slate-700 rounded-lg animate-pulse" />
@@ -328,11 +464,18 @@ export default function LapSelectorPage() {
                   data-testid="car-select"
                 >
                   <option value="">-- Choose a car --</option>
-                  {cars.map((car) => (
-                    <option key={car.id} value={car.id}>
-                      {car.name}
-                    </option>
-                  ))}
+                  {cars.filter((c) => recentCarIds.has(c.id)).length > 0 && (
+                    <optgroup label="Recent">
+                      {cars.filter((c) => recentCarIds.has(c.id)).map((car) => (
+                        <option key={car.id} value={car.id}>{car.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <optgroup label={cars.some((c) => recentCarIds.has(c.id)) ? 'All' : ''}>
+                    {cars.filter((c) => !recentCarIds.has(c.id)).map((car) => (
+                      <option key={car.id} value={car.id}>{car.name}</option>
+                    ))}
+                  </optgroup>
                 </select>
               )}
             </div>
@@ -346,6 +489,15 @@ export default function LapSelectorPage() {
                 <span className="text-white font-medium text-sm flex items-center gap-1.5">
                   <MapPin className="w-4 h-4 text-slate-400" /> Select Track
                 </span>
+                {selectedTrackId && (
+                  <button
+                    type="button"
+                    onClick={() => handleTrackChange(null)}
+                    className="ml-auto text-xs text-slate-400 hover:text-white px-2 py-1 rounded-md hover:bg-slate-700 transition-colors"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
               {tracksLoading ? (
                 <div className="h-10 bg-slate-700 rounded-lg animate-pulse" />
@@ -357,11 +509,18 @@ export default function LapSelectorPage() {
                   data-testid="track-select"
                 >
                   <option value="">-- Choose a track --</option>
-                  {tracks.map((track) => (
-                    <option key={track.id} value={track.id}>
-                      {formatTrackName(track)}
-                    </option>
-                  ))}
+                  {tracks.filter((t) => recentTrackIds.has(t.id)).length > 0 && (
+                    <optgroup label="Recent">
+                      {tracks.filter((t) => recentTrackIds.has(t.id)).map((track) => (
+                        <option key={track.id} value={track.id}>{formatTrackName(track)}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <optgroup label={tracks.some((t) => recentTrackIds.has(t.id)) ? 'All' : ''}>
+                    {tracks.filter((t) => !recentTrackIds.has(t.id)).map((track) => (
+                      <option key={track.id} value={track.id}>{formatTrackName(track)}</option>
+                    ))}
+                  </optgroup>
                 </select>
               )}
             </div>
@@ -373,8 +532,15 @@ export default function LapSelectorPage() {
                   <div className="w-6 h-6 rounded-full bg-amber-500 text-slate-900 text-xs font-bold flex items-center justify-center">
                     3
                   </div>
-                  <span className="text-white font-medium text-sm">Your Laps</span>
-                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <span className="text-white font-medium text-sm">
+                    {analysisMode === 'solo' ? 'Select Your Laps' : 'Your Laps'}
+                  </span>
+                  {analysisMode === 'solo' && (
+                    <span className="text-slate-500 text-xs">
+                      ({selectedSoloLapIds.size} selected, need ≥ 2)
+                    </span>
+                  )}
+                  <div className="flex items-center gap-2 text-xs text-slate-400 ml-auto">
                     <span>Rows</span>
                     <select
                       className="bg-slate-800 border border-slate-700 rounded-md px-2 py-1 text-xs text-slate-200"
@@ -419,33 +585,49 @@ export default function LapSelectorPage() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-700/50">
-                          {myLaps.map((lap: Lap) => (
-                            <tr
-                              key={lap.id}
-                              className={`cursor-pointer transition-colors ${
-                                selectedLapId === lap.id
-                                  ? 'bg-amber-500/10'
-                                  : 'hover:bg-slate-700/50'
-                              }`}
-                              onClick={() => setSelectedLapId(lap.id)}
-                            >
-                              <td className="py-2.5 pr-3">
-                                <input
-                                  type="radio"
-                                  name="userLap"
-                                  checked={selectedLapId === lap.id}
-                                  onChange={() => setSelectedLapId(lap.id)}
-                                  className="accent-amber-500"
-                                />
-                              </td>
-                              <td className="py-2.5 font-mono text-white">
-                                {formatLapTime(lap.lap_time)}
-                              </td>
-                              <td className="py-2.5 text-slate-400">
-                                {formatDate(lap.recorded_at)}
-                              </td>
-                            </tr>
-                          ))}
+                          {myLaps.map((lap: Lap) => {
+                            const isSoloSelected = selectedSoloLapIds.has(lap.id)
+                            const isRefSelected = selectedLapId === lap.id
+                            const isHighlighted = analysisMode === 'solo' ? isSoloSelected : isRefSelected
+                            return (
+                              <tr
+                                key={lap.id}
+                                className={`cursor-pointer transition-colors ${
+                                  isHighlighted ? 'bg-amber-500/10' : 'hover:bg-slate-700/50'
+                                }`}
+                                onClick={() =>
+                                  analysisMode === 'solo'
+                                    ? toggleSoloLap(lap.id)
+                                    : setSelectedLapId(lap.id)
+                                }
+                              >
+                                <td className="py-2.5 pr-3">
+                                  {analysisMode === 'solo' ? (
+                                    <input
+                                      type="checkbox"
+                                      checked={isSoloSelected}
+                                      onChange={() => toggleSoloLap(lap.id)}
+                                      className="accent-amber-500"
+                                    />
+                                  ) : (
+                                    <input
+                                      type="radio"
+                                      name="userLap"
+                                      checked={isRefSelected}
+                                      onChange={() => setSelectedLapId(lap.id)}
+                                      className="accent-amber-500"
+                                    />
+                                  )}
+                                </td>
+                                <td className="py-2.5 font-mono text-white">
+                                  {formatLapTime(lap.lap_time)}
+                                </td>
+                                <td className="py-2.5 text-slate-400">
+                                  {formatDate(lap.recorded_at)}
+                                </td>
+                              </tr>
+                            )
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -473,8 +655,8 @@ export default function LapSelectorPage() {
               </div>
             )}
 
-            {/* Step 4: Reference Laps */}
-            {selectedCarId && selectedTrackId && (
+            {/* Step 4: Reference Laps — hidden in solo mode */}
+            {selectedCarId && selectedTrackId && analysisMode === 'vs_reference' && (
               <div className="card">
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-6 h-6 rounded-full bg-amber-500 text-slate-900 text-xs font-bold flex items-center justify-center">
@@ -495,14 +677,14 @@ export default function LapSelectorPage() {
                     No reference laps available.
                   </p>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-1">
                     {refLaps.map((lap: Lap, idx: number) => (
                       <label
                         key={lap.id}
-                        className={`flex items-center gap-3 p-2.5 rounded-lg cursor-pointer transition-colors ${
+                        className={`flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
                           selectedRefIds.has(lap.id)
                             ? 'bg-orange-500/10 border border-orange-500/30'
-                            : 'bg-slate-700/50 border border-transparent hover:bg-slate-700'
+                            : 'bg-slate-700/40 border border-transparent hover:bg-slate-700/70'
                         }`}
                       >
                         <input
@@ -511,19 +693,25 @@ export default function LapSelectorPage() {
                           onChange={() => toggleRefLap(lap.id)}
                           className="accent-orange-500 flex-shrink-0"
                         />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-slate-500 font-mono">
-                              #{idx + 1}
-                            </span>
-                            <span className="text-white text-sm truncate">
-                              {lap.driver_name}
-                            </span>
-                          </div>
-                          <span className="text-orange-400 font-mono text-xs">
-                            {formatLapTime(lap.lap_time)}
+                        <span className="text-slate-500 font-mono text-xs w-5 text-right flex-shrink-0">
+                          {idx + 1}
+                        </span>
+                        <span className="text-orange-400 font-mono text-xs flex-shrink-0">
+                          {formatLapTime(lap.lap_time)}
+                        </span>
+                        <span className="text-white text-xs truncate flex-1 min-w-0">
+                          {lap.driver_name}
+                        </span>
+                        {lap.irating != null && (
+                          <span className="text-slate-500 text-xs flex-shrink-0 font-mono">
+                            iR {lap.irating.toLocaleString()}
                           </span>
-                        </div>
+                        )}
+                        {lap.season && (
+                          <span className="text-slate-600 text-xs flex-shrink-0 truncate max-w-[72px]">
+                            {lap.season}
+                          </span>
+                        )}
                       </label>
                     ))}
                   </div>
@@ -578,44 +766,80 @@ export default function LapSelectorPage() {
                 <p className="text-slate-500 text-xs mt-1">Your latest laps will show up here.</p>
               </div>
             ) : (
-              <div className="space-y-3">
-                {recentLaps.map((lap) => {
-                  const { carId, trackId } = resolveRecentIds(lap)
-                  const canApply = Boolean(carId && trackId)
-                  return (
+              <>
+                <div className="space-y-3">
+                  {recentPageLaps.map((lap) => {
+                    const { carId, trackId } = resolveRecentIds(lap)
+                    const canApply = Boolean(carId && trackId)
+                    return (
+                      <button
+                        key={lap.id}
+                        type="button"
+                        onClick={() => applyRecentFilters(carId, trackId)}
+                        disabled={!canApply}
+                        title={
+                          canApply
+                            ? 'Use this car and track for filtering'
+                            : 'Car or track not available for filtering'
+                        }
+                        className={`card text-left transition-colors w-full ${
+                          canApply ? 'hover:bg-slate-700' : 'opacity-70 cursor-not-allowed'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 text-sm">
+                              <Car className="w-4 h-4 text-slate-500" />
+                              <span className="text-white truncate">{lap.car_name}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-sm mt-1">
+                              <MapPin className="w-4 h-4 text-slate-500" />
+                              <span className="text-slate-300 truncate">{lap.track_name}</span>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                            <span className="text-slate-500 text-xs text-right">
+                              {formatDateTime(lap.recorded_at)}
+                            </span>
+                            <a
+                              href={`https://garage61.net/app/laps`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex items-center gap-1 text-slate-500 hover:text-amber-400 text-xs transition-colors"
+                              title="Open in Garage61"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                              <span>Garage61</span>
+                            </a>
+                          </div>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+                {recentTotalPages > 1 && (
+                  <div className="flex items-center justify-between text-xs text-slate-500 mt-2">
                     <button
-                      key={lap.id}
                       type="button"
-                      onClick={() => applyRecentFilters(carId, trackId)}
-                      disabled={!canApply}
-                      title={
-                        canApply
-                          ? 'Use this car and track for filtering'
-                          : 'Car or track not available for filtering'
-                      }
-                      className={`card text-left transition-colors ${
-                        canApply ? 'hover:bg-slate-700' : 'opacity-70 cursor-not-allowed'
-                      }`}
+                      onClick={() => setRecentPage((p) => Math.max(0, p - 1))}
+                      disabled={recentPage === 0}
+                      className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
                     >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 text-sm">
-                          <Car className="w-4 h-4 text-slate-500" />
-                          <span className="text-white truncate">{lap.car_name}</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-sm mt-1">
-                          <MapPin className="w-4 h-4 text-slate-500" />
-                          <span className="text-slate-300 truncate">{lap.track_name}</span>
-                        </div>
-                      </div>
-                      <span className="text-slate-500 text-xs flex-shrink-0">
-                        {formatDate(lap.recorded_at)}
-                      </span>
-                    </div>
-                  </button>
-                  )
-                })}
-              </div>
+                      Previous
+                    </button>
+                    <span>Page {recentPage + 1} / {recentTotalPages}</span>
+                    <button
+                      type="button"
+                      onClick={() => setRecentPage((p) => Math.min(recentTotalPages - 1, p + 1))}
+                      disabled={recentPage >= recentTotalPages - 1}
+                      className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
+              </>
             )}
 
             <div className="flex items-center justify-between">
@@ -628,7 +852,7 @@ export default function LapSelectorPage() {
                   <div key={i} className="h-20 bg-slate-800 rounded-xl border border-slate-700 animate-pulse" />
                 ))}
               </div>
-            ) : history.length === 0 ? (
+            ) : filteredHistory.length === 0 ? (
               <div
                 className="card flex flex-col items-center py-10 text-center"
                 data-testid="analysis-history-empty"
@@ -641,34 +865,83 @@ export default function LapSelectorPage() {
               </div>
             ) : (
               <div className="space-y-3">
-                {history.map((item: AnalysisHistoryItem) => (
-                  <button
-                    key={item.id}
-                    data-testid="analysis-history-item"
-                    onClick={() => navigate(`/report/${item.id}`)}
-                    className="w-full card text-left hover:bg-slate-700 transition-colors group"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-white font-medium text-sm truncate">
-                            {item.car_name}
-                          </span>
-                          <span className="text-slate-500 text-xs">@</span>
-                          <span className="text-slate-300 text-sm truncate">
-                            {item.track_name}
+                {filteredHistory.map((item: AnalysisHistoryItem) => (
+                  <div key={item.id} className="relative group">
+                    <button
+                      data-testid="analysis-history-item"
+                      onClick={() => navigate(`/report/${item.id}`)}
+                      className="w-full card text-left hover:bg-slate-700 transition-colors pr-10"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                            <span className="text-white font-medium text-sm truncate">
+                              {item.car_name}
+                            </span>
+                            <span className="text-slate-500 text-xs">@</span>
+                            <span className="text-slate-300 text-sm truncate">
+                              {item.track_name}
+                            </span>
+                            {item.estimated_time_gain_seconds != null && item.estimated_time_gain_seconds > 0 && (
+                              <span className="inline-flex items-center gap-1 bg-amber-500/20 border border-amber-500/30 text-amber-400 font-semibold text-xs px-2 py-0.5 rounded-full flex-shrink-0">
+                                <Zap className="w-3 h-3" />
+                                +{item.estimated_time_gain_seconds.toFixed(1)}s
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-wrap text-xs text-slate-500 mb-1">
+                            <span className="font-mono bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-400">
+                              {item.lap_id.slice(0, 8)}
+                            </span>
+                            {item.reference_lap_ids.length > 0 && (
+                              <>
+                                <span>vs</span>
+                                {item.reference_lap_ids.slice(0, 3).map((rid) => (
+                                  <span key={rid} className="font-mono bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-500">
+                                    {rid.slice(0, 8)}
+                                  </span>
+                                ))}
+                                {item.reference_lap_ids.length > 3 && (
+                                  <span className="text-slate-600">+{item.reference_lap_ids.length - 3} more</span>
+                                )}
+                              </>
+                            )}
+                          </div>
+                          <span className="text-slate-600 text-xs">
+                            {formatDateTime(item.created_at)}
                           </span>
                         </div>
-                        <p className="text-slate-500 text-xs line-clamp-2 leading-relaxed">
-                          {item.summary}
-                        </p>
-                        <span className="text-slate-600 text-xs mt-1 block">
-                          {formatDate(item.created_at)}
-                        </span>
+                        <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-amber-500 flex-shrink-0 mt-1 transition-colors" />
                       </div>
-                      <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-amber-500 flex-shrink-0 mt-1 transition-colors" />
-                    </div>
-                  </button>
+                    </button>
+
+                    {/* Delete button — confirm on second click */}
+                    {confirmDeleteId === item.id ? (
+                      <div className="absolute top-2 right-2 flex items-center gap-1">
+                        <button
+                          onClick={() => deleteMutation.mutate(item.id)}
+                          disabled={deleteMutation.isPending}
+                          className="px-2 py-0.5 rounded text-xs bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
+                        >
+                          {deleteMutation.isPending ? '…' : 'Delete'}
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="px-2 py-0.5 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(item.id) }}
+                        className="absolute top-2 right-2 p-1.5 rounded-md text-red-500 hover:text-red-400 hover:bg-slate-700 opacity-0 group-hover:opacity-100 transition-all"
+                        title="Delete analysis"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
             )}

@@ -66,7 +66,158 @@ When given telemetry data, provide coaching that is:
 4. Encouraging — acknowledge strengths before pointing out weaknesses
 5. Educational — explain the "why" behind each recommendation
 
+**Data Units (important)**
+- All speeds are in **km/h**
+- All distances are in **metres** (m)
+- All times are in **milliseconds** (ms) unless labelled otherwise
+- Positive delta time = user is slower; negative = user is faster
+
 Always return your analysis as a single valid JSON object with no additional text before or after it."""
+
+
+def _build_corner_table(processed: dict, weak_zones: list[dict]) -> str:
+    """Build a per-corner telemetry data table for the LLM prompt."""
+    corners = processed.get("corners", [])
+    user_lap = processed.get("user_lap", {})
+    ref_laps = processed.get("reference_laps", [])
+    if not corners:
+        return "No corner data available."
+
+    user_speed = user_lap.get("speed", [])
+    ref_speed = ref_laps[0].get("speed", []) if ref_laps else []
+    dist_grid = user_lap.get("dist", [])
+
+    zone_by_corner: dict[int, list] = {}
+    for z in weak_zones:
+        cn = z.get("corner_num")
+        if cn is not None:
+            zone_by_corner.setdefault(cn, []).append(z)
+
+    rows = []
+    for c in corners[:15]:
+        c_num = c["corner_num"]
+        d_apex = c["dist_apex"]
+
+        u_apex_speeds = [v for v, d in zip(user_speed, dist_grid) if d is not None and abs(d - d_apex) <= 50 and v is not None]
+        r_apex_speeds = [v for v, d in zip(ref_speed, dist_grid) if d is not None and abs(d - d_apex) <= 50 and v is not None]
+
+        u_min = f"{min(u_apex_speeds):.0f}" if u_apex_speeds else "—"
+        r_min = f"{min(r_apex_speeds):.0f}" if r_apex_speeds else "—"
+        spd_delta = f"{min(r_apex_speeds) - min(u_apex_speeds):+.0f}" if u_apex_speeds and r_apex_speeds else "—"
+
+        zones = zone_by_corner.get(c_num, [])
+        brake_z = next((z for z in zones if z["zone_type"] == "braking_point"), None)
+        throttle_z = next((z for z in zones if z["zone_type"] == "throttle_pickup"), None)
+        brake_str = f"{abs(brake_z['delta']):.0f}m early" if brake_z else "ok"
+        throttle_str = f"{abs(throttle_z['delta']):.0f}m late" if throttle_z else "ok"
+
+        rows.append(f"| T{c_num} | {d_apex:.0f}m | {u_min} | {r_min} | {spd_delta} | {brake_str} | {throttle_str} |")
+
+    header = (
+        "| Corner | Apex dist | User min spd (km/h) | Ref min spd (km/h) | Δ spd | Braking | Throttle |\n"
+        "|--------|-----------|--------------------|--------------------|-------|---------|----------|\n"
+    )
+    return header + "\n".join(rows)
+
+
+def _build_sector_table(processed: dict) -> str:
+    """Build a sector time comparison table for the LLM prompt."""
+    sectors = processed.get("sectors", [])
+    if not sectors:
+        return "No sector data available."
+
+    rows = []
+    for s in sectors:
+        u_s = s["user_time_ms"] / 1000
+        r_s = s["ref_time_ms"] / 1000
+        d_s = s["delta_ms"] / 1000
+        sign = "+" if d_s >= 0 else ""
+        rows.append(f"| S{s['sector']} | {u_s:.3f}s | {r_s:.3f}s | {sign}{d_s:.3f}s |")
+
+    header = "| Sector | Your time | Ref time | Delta |\n|--------|-----------|----------|-------|\n"
+    return header + "\n".join(rows)
+
+
+def _build_solo_prompt(
+    processed: dict,
+    weak_zones: list[dict],
+    car_name: str,
+    track_name: str,
+) -> str:
+    """Construct the analysis prompt for solo (own-laps) mode."""
+
+    if weak_zones:
+        table_rows = []
+        for z in weak_zones[:15]:
+            corner = f"T{z['corner_num']}" if z.get("corner_num") else "Straight"
+            table_rows.append(
+                f"| {corner} | {z['zone_type']} | {z['metric']} "
+                f"| Best: {z['ref_value']} vs Other: {z['user_value']} "
+                f"| Δ {z['delta']} | {z['severity']} |"
+            )
+        weak_table = (
+            "| Corner | Type | Metric | Values | Delta | Severity |\n"
+            "|--------|------|--------|--------|-------|----------|\n"
+            + "\n".join(table_rows)
+        )
+    else:
+        weak_table = "No significant variance detected — very consistent across laps."
+
+    corners = processed.get("corners", [])
+    corner_summary = ", ".join(
+        f"T{c['corner_num']} @ {c['dist_apex']:.0f}m (min {c['min_speed']:.0f} km/h)"
+        for c in corners[:12]
+    )
+
+    corner_table = _build_corner_table(processed, weak_zones)
+    sector_table = _build_sector_table(processed)
+
+    return f"""## Solo Lap Analysis Request
+
+**Car:** {car_name}
+**Track:** {track_name}
+
+**Context:** These are all laps from the SAME driver. The "best lap" is compared against the driver's own other laps to find consistency patterns and recurring mistakes. There is no external benchmark — focus entirely on the driver's own variance and recurring weak spots.
+
+### Corner Map
+{corner_summary or "No corners detected."}
+
+### Per-Corner Telemetry (best lap vs. driver's other laps)
+{corner_table}
+
+### Sector Times
+{sector_table}
+
+### Variance Zones (corners where the driver loses time on non-best laps)
+{weak_table}
+
+### Task
+Analyse these laps and identify the driver's own patterns, inconsistencies, and areas where they could be more consistent or improve their technique. Do NOT mention "reference lap" or "reference driver" — these are all the same driver's laps.
+
+Return your analysis as a valid JSON object matching EXACTLY this schema:
+```json
+{{
+  "summary": "2-3 sentence overall assessment of the driver's consistency and patterns",
+  "estimated_time_gain_seconds": 1.2,
+  "improvement_areas": [
+    {{
+      "rank": 1,
+      "title": "short descriptive title",
+      "corner_refs": [3, 4],
+      "issue_type": "braking_point|throttle_pickup|racing_line|corner_speed|exit_speed",
+      "severity": "high|medium|low",
+      "time_loss_ms": 450,
+      "description": "detailed explanation of the inconsistency or pattern and its impact",
+      "technique": "specific actionable technique advice for achieving consistency here",
+      "telemetry_evidence": "what the telemetry numbers specifically show about the variance"
+    }}
+  ],
+  "strengths": ["area where the driver is consistent lap-to-lap", "another consistent strength"],
+  "sector_notes": ["note about sector 1 consistency", "note about sector 2", "note about sector 3"]
+}}
+```
+
+Return ONLY the JSON object. Do not include markdown code fences, explanations, or any other text."""
 
 
 def _build_user_prompt(
@@ -125,9 +276,12 @@ def _build_user_prompt(
 
     # Corner summary
     corner_summary = ", ".join(
-        f"T{c['corner_num']} @ {c['dist_apex']:.3f} (min {c['min_speed']:.0f} km/h)"
+        f"T{c['corner_num']} @ {c['dist_apex']:.0f}m (min {c['min_speed']:.0f} km/h)"
         for c in corners[:12]
     )
+
+    corner_table = _build_corner_table(processed, weak_zones)
+    sector_table = _build_sector_table(processed)
 
     prompt = f"""## Telemetry Analysis Request
 
@@ -136,6 +290,12 @@ def _build_user_prompt(
 
 ### Corner Map
 {corner_summary or "No corners detected."}
+
+### Per-Corner Telemetry (user vs. reference)
+{corner_table}
+
+### Sector Times
+{sector_table}
 
 ### Weak Zones (sorted by severity)
 {weak_table}
@@ -185,6 +345,7 @@ async def analyze_with_claude(
     car_name: str,
     track_name: str,
     claude_api_key: str,
+    analysis_mode: str = "vs_reference",
 ) -> dict:
     """
     Call Claude to produce a structured coaching analysis.
@@ -216,11 +377,14 @@ async def analyze_with_claude(
 
     client = anthropic.AsyncAnthropic(api_key=effective_key)
 
-    user_prompt = _build_user_prompt(processed, weak_zones, car_name, track_name)
+    if analysis_mode == "solo":
+        user_prompt = _build_solo_prompt(processed, weak_zones, car_name, track_name)
+    else:
+        user_prompt = _build_user_prompt(processed, weak_zones, car_name, track_name)
 
     message = await client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=4096,
+        max_tokens=6000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )

@@ -86,8 +86,11 @@ if [ ! -f "$APP_DIR/.env" ]; then
   echo "    You MUST edit it to fill in:"
   echo "      - GARAGE61_CLIENT_ID"
   echo "      - GARAGE61_CLIENT_SECRET"
-  echo "      - GARAGE61_REDIRECT_URI (http://<your-vm-ip>/auth/callback)"
   echo "      - CLAUDE_API_KEY"
+  echo "    Once you have a domain, also set:"
+  echo "      - DOMAIN=yourdomain.com"
+  echo "      - GARAGE61_REDIRECT_URI=https://yourdomain.com/auth/callback"
+  echo "      - CORS_ORIGINS=[\"https://yourdomain.com\"]"
   echo "    ================================================="
   echo ""
 fi
@@ -104,7 +107,7 @@ Type=oneshot
 RemainAfterExit=yes
 User=${APP_USER}
 WorkingDirectory=${APP_DIR}
-ExecStart=/usr/bin/docker compose up -d --build --remove-orphans
+ExecStart=/usr/bin/docker compose -f ${APP_DIR}/docker-compose.prod.yml up -d --remove-orphans
 ExecStop=/usr/bin/docker compose down
 TimeoutStartSec=600
 

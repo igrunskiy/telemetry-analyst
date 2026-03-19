@@ -174,7 +174,7 @@ class Garage61Client:
         self,
         car_id: int | None = None,
         track_id: int | None = None,
-        limit: int = 25,
+        limit: int = 50,
         offset: int = 0,
     ) -> list[dict]:
         """GET /laps filtered to the current user's laps."""
@@ -182,7 +182,7 @@ class Garage61Client:
             "limit": limit,
             "offset": offset,
             "drivers": "me",
-            "group": "none",
+            "clean": 1,
         }
         if car_id is not None:
             params["cars"] = car_id
@@ -198,7 +198,7 @@ class Garage61Client:
         self,
         car_id: int,
         track_id: int,
-        limit: int = 5,
+        limit: int = 10,
     ) -> list[dict]:
         """GET /laps sorted by fastest time, excluding the current user."""
         params: dict[str, Any] = {
@@ -215,7 +215,7 @@ class Garage61Client:
     async def get_recent_laps(self, limit: int = 5) -> list[dict]:
         """GET /laps — return the most recent laps for the current user."""
         attempt_params = [
-            {"limit": limit, "drivers": "me", "group": "none"},
+            {"limit": limit, "drivers": "me", "group": "none", "clean": 1},
         ]
         data = None
         for params in attempt_params:
@@ -247,6 +247,14 @@ class Garage61Client:
             return data
         logger.info(f"Garage61 /me/statistics unexpected type: {type(data)}")
         return {}
+
+    async def get_lap(self, lap_id: str) -> dict:
+        """GET /laps/{lap_id} — return lap metadata (best-effort, returns {} on failure)."""
+        try:
+            data = await self._request("GET", f"/laps/{lap_id}")
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
 
     async def get_lap_csv(self, lap_id: str) -> str:
         """GET /laps/{lap_id}/csv — return raw CSV text."""

@@ -90,7 +90,17 @@ def _normalize_lap(item: dict, fallback_id: str) -> dict:
     )
     lap_id = _first_value(item.get("id"), item.get("lapId"), item.get("lap_id"), fallback_id)
 
-    return {
+    irating = _coerce_int(_first_value(
+        item.get("driverRating"),
+    ))
+
+    season = _first_value(
+        item.get("season"),
+        item.get("seasonName"),
+        item.get("season_name"),
+    )
+
+    result: dict = {
         "id": str(lap_id),
         "lap_time": lap_time or 0,
         "car_name": car_name,
@@ -100,6 +110,11 @@ def _normalize_lap(item: dict, fallback_id: str) -> dict:
         "driver_name": driver_name,
         "recorded_at": recorded_at,
     }
+    if irating is not None:
+        result["irating"] = irating
+    if season is not None:
+        result["season"] = str(season.get("shortName") if isinstance(season, dict) else season)
+    return result
 
 
 @router.get("/cars")
@@ -146,11 +161,11 @@ async def list_my_laps(
 
 @router.get("/recent")
 async def list_recent_laps(
-    limit: int = Query(default=5, ge=1, le=20),
+    limit: int = Query(default=25, ge=1, le=50),
     client: Garage61Client = Depends(get_garage61_client),
     _current_user: User = Depends(get_current_user),
 ) -> list[dict]:
-    """Return recent laps for the current user."""
+    """Return recent laps for the current user, unique car+track combinations."""
     stats = await client.get_me_statistics()
 
     driving_stats = stats.get("drivingStatistics")
@@ -165,12 +180,12 @@ async def list_recent_laps(
             reverse=True,
         )
         normalized = []
-        seen = set()
-        for idx, item in enumerate(items[:limit]):
+        seen: set = set()
+        for item in items:
             car_id = item.get("car")
             track_id = item.get("track")
-            day = item.get("day") or ""
-            key = (day, car_id, track_id)
+            # Deduplicate by car+track combo only (keep most recent occurrence)
+            key = (car_id, track_id)
             if key in seen:
                 continue
             seen.add(key)
@@ -183,7 +198,7 @@ async def list_recent_laps(
                     "car_id": car_id,
                     "track_id": track_id,
                     "driver_name": "",
-                    "recorded_at": day,
+                    "recorded_at": item.get("day") or "",
                 }
             )
             if len(normalized) >= limit:

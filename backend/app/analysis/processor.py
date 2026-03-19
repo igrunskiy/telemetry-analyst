@@ -56,6 +56,7 @@ def _rename_columns(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 INTERP_POINTS = 1000
+DEFAULT_TRACK_LENGTH_M = 3000.0
 
 
 class TelemetryProcessor:
@@ -94,6 +95,24 @@ class TelemetryProcessor:
 
         df = df.dropna(subset=["LapDistPct"])
         return df
+
+    # ------------------------------------------------------------------
+    # Track length detection
+    # ------------------------------------------------------------------
+
+    def detect_track_length(self, df: pd.DataFrame) -> float:
+        """
+        Infer track length in metres from the raw LapDistPct column.
+
+        iRacing exports 'LapDist' in metres (aliased to LapDistPct here).
+        If the raw max exceeds 500, we treat the column as metres and return
+        its maximum as the track length.  Otherwise we fall back to the
+        default constant.
+        """
+        raw_max = float(df["LapDistPct"].max())
+        if raw_max > 500:
+            return raw_max
+        return DEFAULT_TRACK_LENGTH_M
 
     # ------------------------------------------------------------------
     # Normalisation
@@ -172,7 +191,7 @@ class TelemetryProcessor:
     # Corner detection
     # ------------------------------------------------------------------
 
-    def identify_corners(self, df: pd.DataFrame) -> list[dict]:
+    def identify_corners(self, df: pd.DataFrame, track_length_m: float = DEFAULT_TRACK_LENGTH_M) -> list[dict]:
         """
         Detect corners by finding local speed minima in the normalised trace.
 
@@ -206,9 +225,9 @@ class TelemetryProcessor:
             corners.append(
                 {
                     "corner_num": i + 1,
-                    "dist_start": float(dist[start_idx]),
-                    "dist_apex": apex_dist,
-                    "dist_end": float(dist[end_idx]),
+                    "dist_start": float(dist[start_idx]) * track_length_m,
+                    "dist_apex": apex_dist * track_length_m,
+                    "dist_end": float(dist[end_idx]) * track_length_m,
                     "min_speed": min_speed,
                     "label": f"T{i + 1}",
                 }
@@ -224,7 +243,7 @@ class TelemetryProcessor:
         self,
         user_df: pd.DataFrame,
         ref_df: pd.DataFrame,
-        lap_distance_m: float = 3000.0,
+        lap_distance_m: float = DEFAULT_TRACK_LENGTH_M,
     ) -> list[float]:
         """
         Compute cumulative time delta in milliseconds between user and reference lap.
@@ -242,11 +261,12 @@ class TelemetryProcessor:
         user_speed = pd.Series(user_df["Speed"].values).ffill().bfill().fillna(1.0).values
         ref_speed = pd.Series(ref_df["Speed"].values).ffill().bfill().fillna(1.0).values
 
-        user_speed = np.maximum(user_speed, 0.5)
-        ref_speed = np.maximum(ref_speed, 0.5)
+        # Convert km/h → m/s before time integration
+        user_speed_ms = np.maximum(user_speed, 0.5) / 3.6
+        ref_speed_ms = np.maximum(ref_speed, 0.5) / 3.6
 
-        user_dt = dDist * lap_distance_m / user_speed
-        ref_dt = dDist * lap_distance_m / ref_speed
+        user_dt = dDist * lap_distance_m / user_speed_ms
+        ref_dt = dDist * lap_distance_m / ref_speed_ms
 
         delta_ms = np.cumsum(user_dt - ref_dt) * 1000.0
         return delta_ms.tolist()
@@ -256,7 +276,7 @@ class TelemetryProcessor:
         user_df: pd.DataFrame,
         ref_df: pd.DataFrame,
         n_sectors: int = 3,
-        lap_distance_m: float = 3000.0,
+        lap_distance_m: float = DEFAULT_TRACK_LENGTH_M,
     ) -> list[dict]:
         """
         Split the lap into n_sectors equal segments and compute estimated time
@@ -272,11 +292,12 @@ class TelemetryProcessor:
         user_speed = pd.Series(user_df["Speed"].values).ffill().bfill().fillna(1.0).values
         ref_speed = pd.Series(ref_df["Speed"].values).ffill().bfill().fillna(1.0).values
 
-        user_speed = np.maximum(user_speed, 0.5)
-        ref_speed = np.maximum(ref_speed, 0.5)
+        # Convert km/h → m/s before time integration
+        user_speed_ms = np.maximum(user_speed, 0.5) / 3.6
+        ref_speed_ms = np.maximum(ref_speed, 0.5) / 3.6
 
-        user_dt = dDist * lap_distance_m / user_speed
-        ref_dt = dDist * lap_distance_m / ref_speed
+        user_dt = dDist * lap_distance_m / user_speed_ms
+        ref_dt = dDist * lap_distance_m / ref_speed_ms
 
         n = len(dist)
         sector_size = n // n_sectors
@@ -327,6 +348,7 @@ class TelemetryProcessor:
         """
         # Parse
         user_df_raw = self.parse_csv(user_csv)
+        track_length_m = self.detect_track_length(user_df_raw)
         user_df = self.normalize_by_distance(user_df_raw)
 
         ref_dfs: list[pd.DataFrame] = []
@@ -339,31 +361,34 @@ class TelemetryProcessor:
 
         if not ref_dfs:
             # No valid references; return user lap only with empty delta/corners
-            return self._build_result(user_df, [], None, None, [])
+            return self._build_result(user_df, [], None, None, [], track_length_m=track_length_m)
 
         # Best reference = first (assumed to be sorted by fastest lap time)
         best_ref = ref_dfs[0]
 
         delta_df = self.compute_delta(user_df, best_ref)
-        corners = self.identify_corners(user_df)
-        time_delta_ms = self.compute_time_delta(user_df, best_ref)
-        sectors = self.compute_sectors(user_df, best_ref)
+        corners = self.identify_corners(best_ref, track_length_m)
+        time_delta_ms = self.compute_time_delta(user_df, best_ref, track_length_m)
+        sectors = self.compute_sectors(user_df, best_ref, lap_distance_m=track_length_m)
 
-        return self._build_result(user_df, ref_dfs, delta_df, corners, time_delta_ms, sectors)
+        return self._build_result(user_df, ref_dfs, delta_df, corners, time_delta_ms, sectors, track_length_m=track_length_m)
 
     # ------------------------------------------------------------------
     # Result serialisation
     # ------------------------------------------------------------------
 
-    def _df_to_series(self, df: pd.DataFrame) -> dict:
+    def _df_to_series(self, df: pd.DataFrame, track_length_m: float = DEFAULT_TRACK_LENGTH_M) -> dict:
         """Extract key telemetry series from a normalised DataFrame."""
         def _col(name: str) -> list:
             if name in df.columns:
                 return df[name].where(df[name].notna(), other=None).tolist()
             return []
 
+        # Scale LapDistPct (0–1) to metres
+        dist_m = (df["LapDistPct"] * track_length_m).tolist() if "LapDistPct" in df.columns else []
+
         result = {
-            "dist": _col("LapDistPct"),
+            "dist": dist_m,
             "speed": _col("Speed"),
             "throttle": _col("Throttle"),
             "brake": _col("Brake"),
@@ -386,6 +411,7 @@ class TelemetryProcessor:
         corners: list[dict] | None = None,
         time_delta_ms: list[float] | None = None,
         sectors: list[dict] | None = None,
+        track_length_m: float = DEFAULT_TRACK_LENGTH_M,
     ) -> dict:
         track_coords: list[dict] = []
         if "Lat" in user_df.columns and "Lon" in user_df.columns:
@@ -399,8 +425,9 @@ class TelemetryProcessor:
 
         delta_data: dict = {}
         if delta_df is not None:
+            dist_m = (delta_df["LapDistPct"] * track_length_m).tolist() if "LapDistPct" in delta_df.columns else []
             delta_data = {
-                "dist": delta_df["LapDistPct"].tolist(),
+                "dist": dist_m,
                 "speed_delta": delta_df["speed_delta"].tolist()
                 if "speed_delta" in delta_df.columns
                 else [],
@@ -414,12 +441,13 @@ class TelemetryProcessor:
             }
 
         return {
-            "user_lap": self._df_to_series(user_df),
-            "reference_laps": [self._df_to_series(r) for r in ref_dfs],
+            "user_lap": self._df_to_series(user_df, track_length_m),
+            "reference_laps": [self._df_to_series(r, track_length_m) for r in ref_dfs],
             "delta": delta_data,
             "corners": corners or [],
             "sectors": sectors or [],
             "track_coordinates": track_coords,
+            "track_length_m": track_length_m,
         }
 
 

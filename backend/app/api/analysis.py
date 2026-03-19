@@ -36,15 +36,16 @@ class RunAnalysisRequest(BaseModel):
     reference_lap_ids: list[str]
     car_name: str
     track_name: str
+    analysis_mode: str = "vs_reference"  # "vs_reference" or "solo"
 
 
 class AnalysisHistoryItemResponse(BaseModel):
     id: str
     lap_id: str
+    reference_lap_ids: list[str]
     car_name: str
     track_name: str
     created_at: datetime
-    summary: str
     estimated_time_gain_seconds: float | None
 
 
@@ -73,7 +74,7 @@ async def run_analysis(
     if not body.reference_lap_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="At least one reference lap ID is required",
+            detail="At least one additional lap ID is required",
         )
 
     # ----- Cache lookup -----
@@ -88,20 +89,55 @@ async def run_analysis(
         # Match if same set of reference laps — return cached result with 200
         if set(record.reference_lap_ids) == set(body.reference_lap_ids):
             response.status_code = status.HTTP_200_OK
-            return record.result_json
+            enriched = dict(record.result_json)
+            enriched["id"] = str(record.id)
+            enriched["created_at"] = record.created_at.isoformat()
+            return enriched
 
-    # ----- Fetch CSVs concurrently -----
+    # ----- Fetch CSVs + metadata concurrently -----
     all_lap_ids = [body.lap_id] + list(body.reference_lap_ids)
     try:
-        csv_results = await asyncio.gather(
-            *[client.get_lap_csv(lap_id) for lap_id in all_lap_ids],
-            return_exceptions=True,
+        csv_results, meta_results = await asyncio.gather(
+            asyncio.gather(*[client.get_lap_csv(lap_id) for lap_id in all_lap_ids], return_exceptions=True),
+            asyncio.gather(*[client.get_lap(lap_id) for lap_id in all_lap_ids], return_exceptions=True),
         )
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to fetch telemetry data from Garage61: {exc}",
         )
+
+    # Build laps_metadata list (best-effort — missing fields become None)
+    def _extract_meta(raw: Any, lap_id: str, role: str) -> dict:
+        if not isinstance(raw, dict):
+            raw = {}
+        driver = raw.get("driver") or raw.get("user") or {}
+        first = driver.get("firstName", "") or ""
+        last = driver.get("lastName", "") or ""
+        driver_name = f"{first} {last}".strip() or raw.get("driver_name", "")
+        lap_time = raw.get("lapTime") or raw.get("lap_time") or raw.get("lapTimeMs") or 0
+        irating = raw.get("driverRating")
+        entry: dict = {
+            "id": lap_id,
+            "role": role,
+            "driver_name": driver_name,
+            "lap_time": float(lap_time) if lap_time else 0,
+        }
+        if irating is not None:
+            try:
+                entry["irating"] = int(irating)
+            except (TypeError, ValueError):
+                pass
+        return entry
+
+    laps_metadata = [
+        _extract_meta(
+            meta_results[i] if not isinstance(meta_results[i], Exception) else {},
+            lap_id,
+            "user" if i == 0 else "reference",
+        )
+        for i, lap_id in enumerate(all_lap_ids)
+    ]
 
     user_csv = csv_results[0]
     if isinstance(user_csv, Exception):
@@ -141,6 +177,7 @@ async def run_analysis(
             car_name=body.car_name,
             track_name=body.track_name,
             claude_api_key=claude_key,
+            analysis_mode=body.analysis_mode,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -194,6 +231,8 @@ async def run_analysis(
         "telemetry": telemetry,
         # Keep weak_zones for potential future use
         "weak_zones": weak_zones,
+        # Per-lap metadata (driver, irating, lap time)
+        "laps_metadata": laps_metadata,
     }
 
     # ----- Persist to DB -----
@@ -210,7 +249,8 @@ async def run_analysis(
     await db.flush()
     await db.refresh(record)
 
-    full_result["analysis_id"] = str(record.id)
+    full_result["id"] = str(record.id)
+    full_result["created_at"] = record.created_at.isoformat()
     return full_result
 
 
@@ -231,23 +271,52 @@ async def get_history(
     history = []
     for r in records:
         rj = r.result_json or {}
-        summary_snippet = rj.get("summary", "")
-        if summary_snippet and len(summary_snippet) > 120:
-            summary_snippet = summary_snippet[:120] + "…"
 
         history.append(
             AnalysisHistoryItemResponse(
                 id=str(r.id),
                 lap_id=r.lap_id,
+                reference_lap_ids=r.reference_lap_ids or [],
                 car_name=r.car_name,
                 track_name=r.track_name,
                 created_at=r.created_at,
-                summary=summary_snippet,
                 estimated_time_gain_seconds=rj.get("estimated_time_gain_seconds"),
             )
         )
 
     return history
+
+
+@router.delete("/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_analysis(
+    analysis_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Delete an analysis result owned by the current user."""
+    try:
+        uid = uuid.UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid analysis ID format",
+        )
+
+    result = await db.execute(
+        select(AnalysisResult).where(
+            AnalysisResult.id == uid,
+            AnalysisResult.user_id == current_user.id,
+        )
+    )
+    record = result.scalar_one_or_none()
+
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Analysis not found",
+        )
+
+    await db.delete(record)
 
 
 @router.get("/{analysis_id}")
@@ -279,4 +348,7 @@ async def get_analysis(
             detail="Analysis not found",
         )
 
-    return record.result_json
+    enriched = dict(record.result_json)
+    enriched["id"] = str(record.id)
+    enriched["created_at"] = record.created_at.isoformat()
+    return enriched
