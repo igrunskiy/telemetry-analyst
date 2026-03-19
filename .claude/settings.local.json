@@ -10,7 +10,10 @@
       "Bash(find /d/Claude/telemetry-analyst/node_modules/@types/plotly.js -type f -name *.d.ts)",
       "Bash(docker ps:*)",
       "Bash(npm ci:*)",
-      "Bash(docker run:*)"
+      "Bash(docker run:*)",
+      "Bash(gh pr:*)",
+      "Bash(where gh:*)",
+      "Read(//usr/local/bin/**)"
     ]
   }
 }
