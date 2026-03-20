@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, DateTime, ForeignKey
+from sqlalchemy import String, DateTime, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -27,8 +27,21 @@ class AnalysisResult(Base):
     car_name: Mapped[str] = mapped_column(String, nullable=False)
     track_name: Mapped[str] = mapped_column(String, nullable=False)
     result_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    share_token: Mapped[str | None] = mapped_column(
+        String, nullable=True, unique=True, index=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+    # Queue fields
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="completed",
+        index=True,
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Stores processing inputs needed by the worker: analysis_mode, laps_metadata
+    input_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)

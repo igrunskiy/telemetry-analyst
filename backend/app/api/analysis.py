@@ -4,7 +4,6 @@ Analysis execution, caching, and history endpoints.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -14,13 +13,10 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.llm import analyze_with_claude
-from app.analysis.processor import TelemetryProcessor
-from app.analysis.zones import detect_weak_zones
-from app.auth.crypto import decrypt
+from app.analysis.worker import get_active_job_count
 from app.auth.jwt import get_current_user
+from app.config import settings
 from app.database import get_db
-from app.garage61.client import Garage61Client, get_garage61_client
 from app.models.analysis import AnalysisResult
 from app.models.user import User
 
@@ -57,29 +53,73 @@ class AnalysisHistoryItemResponse(BaseModel):
     created_at: datetime
     estimated_time_gain_seconds: float | None
     analysis_mode: str = "vs_reference"
+    status: str = "completed"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _enqueued_response(record: AnalysisResult) -> dict[str, Any]:
+    """Return a minimal response for a newly enqueued or in-progress record."""
+    return {
+        "id": str(record.id),
+        "status": record.status,
+        "lap_id": record.lap_id,
+        "reference_lap_ids": record.reference_lap_ids,
+        "car_name": record.car_name,
+        "track_name": record.track_name,
+        "created_at": record.created_at.isoformat(),
+        "analysis_mode": (record.input_json or {}).get("analysis_mode", "vs_reference"),
+    }
+
+
+def _completed_response(record: AnalysisResult) -> dict[str, Any]:
+    enriched = dict(record.result_json or {})
+    enriched["id"] = str(record.id)
+    enriched["status"] = record.status
+    enriched["created_at"] = record.created_at.isoformat()
+    return enriched
+
+
+def _failed_response(record: AnalysisResult) -> dict[str, Any]:
+    return {
+        "id": str(record.id),
+        "status": "failed",
+        "error_message": record.error_message or "Analysis failed",
+        "lap_id": record.lap_id,
+        "reference_lap_ids": record.reference_lap_ids,
+        "car_name": record.car_name,
+        "track_name": record.track_name,
+        "created_at": record.created_at.isoformat(),
+    }
+
+
+def _record_response(record: AnalysisResult) -> dict[str, Any]:
+    if record.status == "completed":
+        return _completed_response(record)
+    if record.status == "failed":
+        return _failed_response(record)
+    return _enqueued_response(record)
 
 
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.post("/run", status_code=status.HTTP_201_CREATED)
+@router.post("/run", status_code=status.HTTP_202_ACCEPTED)
 async def run_analysis(
     body: RunAnalysisRequest,
     response: Response,
     current_user: User = Depends(get_current_user),
-    client: Garage61Client = Depends(get_garage61_client),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
-    Execute a full telemetry analysis for the given lap vs reference laps.
+    Enqueue a telemetry analysis job.
 
-    Checks the DB cache first. On cache miss:
-    1. Fetches all CSVs concurrently from Garage61
-    2. Processes telemetry and detects weak zones
-    3. Calls Claude for AI coaching analysis
-    4. Persists result to DB
-    5. Returns the full result
+    On cache hit (same lap + same reference set, completed status): returns 200 with full result.
+    On new job: creates an 'enqueued' record and returns 202. The background worker will
+    process it and update the record to 'completed' or 'failed'.
     """
     if not body.reference_lap_ids:
         raise HTTPException(
@@ -87,164 +127,110 @@ async def run_analysis(
             detail="At least one additional lap ID is required",
         )
 
-    # ----- Cache lookup -----
+    # ----- Cache lookup (only match completed records) -----
     cache_hit = await db.execute(
         select(AnalysisResult).where(
             AnalysisResult.user_id == current_user.id,
             AnalysisResult.lap_id == body.lap_id,
+            AnalysisResult.status == "completed",
         )
     )
-    existing = cache_hit.scalars().all()
-    for record in existing:
-        # Match if same set of reference laps — return cached result with 200
+    for record in cache_hit.scalars().all():
         if set(record.reference_lap_ids) == set(body.reference_lap_ids):
             response.status_code = status.HTTP_200_OK
-            enriched = dict(record.result_json)
-            enriched["id"] = str(record.id)
-            enriched["created_at"] = record.created_at.isoformat()
-            # Inject fresh metadata on cache hit if caller supplied it
+            enriched = _completed_response(record)
             if body.laps_metadata:
                 enriched["laps_metadata"] = [m.model_dump() for m in body.laps_metadata]
             return enriched
 
-    # ----- Fetch CSVs -----
-    all_lap_ids = [body.lap_id] + list(body.reference_lap_ids)
-    try:
-        csv_results = await asyncio.gather(
-            *[client.get_lap_csv(lap_id) for lap_id in all_lap_ids],
-            return_exceptions=True,
-        )
-    except Exception as exc:
+    # ----- Queue size check -----
+    active_count = await get_active_job_count(db)
+    if active_count >= settings.ANALYSIS_QUEUE_SIZE:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch telemetry data from Garage61: {exc}",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Analysis queue is full ({active_count}/{settings.ANALYSIS_QUEUE_SIZE} active jobs). "
+                "Please wait for a slot to open up."
+            ),
         )
 
-    # Build laps_metadata — use client-supplied values when available (reliable),
-    # otherwise fall back to empty placeholders
-    if body.laps_metadata:
-        laps_metadata = [m.model_dump() for m in body.laps_metadata]
-    else:
-        laps_metadata = [
-            {"id": lap_id, "role": "user" if i == 0 else "reference",
-             "driver_name": "", "lap_time": 0}
-            for i, lap_id in enumerate(all_lap_ids)
-        ]
-
-    user_csv = csv_results[0]
-    if isinstance(user_csv, Exception):
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch user lap CSV: {user_csv}",
-        )
-
-    reference_csvs = [
-        r for r in csv_results[1:] if not isinstance(r, Exception) and r
-    ]
-
-    # ----- Telemetry processing -----
-    processor = TelemetryProcessor()
-    try:
-        processed = processor.process_laps(user_csv, reference_csvs, analysis_mode=body.analysis_mode)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Telemetry processing failed: {exc}",
-        )
-
-    # ----- Weak zone detection -----
-    weak_zones = detect_weak_zones(processed)
-
-    # ----- Claude analysis -----
-    claude_key = (
-        decrypt(current_user.claude_api_key_enc)
-        if current_user.claude_api_key_enc
-        else ""
+    # ----- Create enqueued record -----
+    laps_metadata = (
+        [m.model_dump() for m in body.laps_metadata] if body.laps_metadata else None
     )
-
-    try:
-        llm_result = await analyze_with_claude(
-            processed=processed,
-            weak_zones=weak_zones,
-            car_name=body.car_name,
-            track_name=body.track_name,
-            claude_api_key=claude_key,
-            analysis_mode=body.analysis_mode,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Claude analysis failed: {exc}",
-        )
-
-    # ----- Build telemetry object for frontend visualizations -----
-    user_lap = processed.get("user_lap", {})
-    ref_laps = processed.get("reference_laps", [])
-    ref_lap = ref_laps[0] if ref_laps else {}
-    delta = processed.get("delta", {})
-
-    telemetry: dict[str, Any] = {
-        "distances": user_lap.get("dist", []),
-        "user_speed": user_lap.get("speed", []),
-        "ref_speed": ref_lap.get("speed", []),
-        "user_throttle": user_lap.get("throttle", []),
-        "ref_throttle": ref_lap.get("throttle", []),
-        "user_brake": user_lap.get("brake", []),
-        "ref_brake": ref_lap.get("brake", []),
-        "delta_ms": delta.get("time_delta_ms", []),
-        "corners": processed.get("corners", []),
-        "sectors": processed.get("sectors", []),
-    }
-    if "lat" in user_lap:
-        telemetry["user_lat"] = user_lap["lat"]
-        telemetry["user_lon"] = user_lap.get("lon", [])
-    if "lat" in ref_lap:
-        telemetry["ref_lat"] = ref_lap["lat"]
-        telemetry["ref_lon"] = ref_lap.get("lon", [])
-
-    # ----- Build full result (LLM fields flattened to top level) -----
-    full_result: dict[str, Any] = {
-        "lap_id": body.lap_id,
-        "reference_lap_ids": body.reference_lap_ids,
-        "car_name": body.car_name,
-        "track_name": body.track_name,
-        "analysis_mode": body.analysis_mode,
-        # LLM coaching fields at top level (matches frontend AnalysisReport type)
-        "summary": llm_result.get("summary", ""),
-        "estimated_time_gain_seconds": llm_result.get("estimated_time_gain_seconds"),
-        "improvement_areas": llm_result.get("improvement_areas", []),
-        "strengths": llm_result.get("strengths", []),
-        "sector_notes": llm_result.get("sector_notes", []),
-        # Telemetry object for visualizations
-        "telemetry": telemetry,
-        # Keep weak_zones for potential future use
-        "weak_zones": weak_zones,
-        # Per-lap metadata (driver, irating, lap time)
-        "laps_metadata": laps_metadata,
-    }
-
-    # ----- Persist to DB -----
     record = AnalysisResult(
         user_id=current_user.id,
         lap_id=body.lap_id,
         reference_lap_ids=body.reference_lap_ids,
         car_name=body.car_name,
         track_name=body.track_name,
-        result_json=full_result,
+        result_json={},
+        status="enqueued",
+        input_json={
+            "analysis_mode": body.analysis_mode,
+            "laps_metadata": laps_metadata,
+        },
         created_at=datetime.now(timezone.utc),
     )
     db.add(record)
     await db.flush()
     await db.refresh(record)
 
-    full_result["id"] = str(record.id)
-    full_result["created_at"] = record.created_at.isoformat()
-    return full_result
+    return _enqueued_response(record)
+
+
+@router.post("/{analysis_id}/regenerate", status_code=status.HTTP_202_ACCEPTED)
+async def regenerate_analysis(
+    analysis_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Re-enqueue an existing analysis record for reprocessing.
+    Resets status to 'enqueued' and clears the previous result.
+    """
+    try:
+        uid = uuid.UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID format")
+
+    result = await db.execute(
+        select(AnalysisResult).where(
+            AnalysisResult.id == uid,
+            AnalysisResult.user_id == current_user.id,
+        )
+    )
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not found")
+
+    if record.status in ("enqueued", "processing"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Analysis is already queued or being processed",
+        )
+
+    active_count = await get_active_job_count(db)
+    if active_count >= settings.ANALYSIS_QUEUE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Analysis queue is full ({active_count}/{settings.ANALYSIS_QUEUE_SIZE} active jobs).",
+        )
+
+    # Preserve input_json (analysis_mode + laps_metadata); backfill from result_json for old records
+    existing_rj = record.result_json or {}
+    if not record.input_json:
+        record.input_json = {
+            "analysis_mode": existing_rj.get("analysis_mode", "vs_reference"),
+            "laps_metadata": existing_rj.get("laps_metadata"),
+        }
+
+    record.status = "enqueued"
+    record.result_json = {}
+    record.error_message = None
+    await db.flush()
+
+    return _enqueued_response(record)
 
 
 @router.get("/history", response_model=list[AnalysisHistoryItemResponse])
@@ -264,6 +250,8 @@ async def get_history(
     history = []
     for r in records:
         rj = r.result_json or {}
+        input_data = r.input_json or {}
+        analysis_mode = rj.get("analysis_mode") or input_data.get("analysis_mode", "vs_reference")
 
         history.append(
             AnalysisHistoryItemResponse(
@@ -274,7 +262,8 @@ async def get_history(
                 track_name=r.track_name,
                 created_at=r.created_at,
                 estimated_time_gain_seconds=rj.get("estimated_time_gain_seconds"),
-                analysis_mode=rj.get("analysis_mode", "vs_reference"),
+                analysis_mode=analysis_mode,
+                status=r.status,
             )
         )
 
@@ -319,7 +308,7 @@ async def get_analysis(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Return a full cached analysis result by ID."""
+    """Return an analysis result by ID. Includes status for in-progress jobs."""
     try:
         uid = uuid.UUID(analysis_id)
     except ValueError:
@@ -342,7 +331,4 @@ async def get_analysis(
             detail="Analysis not found",
         )
 
-    enriched = dict(record.result_json)
-    enriched["id"] = str(record.id)
-    enriched["created_at"] = record.created_at.isoformat()
-    return enriched
+    return _record_response(record)

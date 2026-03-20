@@ -75,6 +75,98 @@ def _build_corner_table(processed: dict, weak_zones: list[dict]) -> str:
     return header + "\n".join(rows)
 
 
+def _build_sector_corner_map(processed: dict) -> str:
+    """Build a mapping of which corners belong to each sector."""
+    sectors = processed.get("sectors", [])
+    corners = processed.get("corners", [])
+    track_length = processed.get("track_length_m", 3000.0)
+    if not sectors or not corners:
+        return ""
+
+    n = len(sectors)
+    sector_size = track_length / n
+    rows = []
+    for s in sectors:
+        s_num = s["sector"]
+        s_start = (s_num - 1) * sector_size
+        s_end = s_num * sector_size
+        sector_corners = [
+            f"T{c['corner_num']} ({c['dist_apex']:.0f}m)"
+            for c in corners
+            if s_start <= c["dist_apex"] < s_end
+        ]
+        rows.append(f"Sector {s_num} ({s_start:.0f}–{s_end:.0f}m): {', '.join(sector_corners) or 'no corners'}")
+    return "\n".join(rows)
+
+
+def _build_gear_table(processed: dict) -> str:
+    """Build a per-corner gear table for the LLM prompt."""
+    corners = processed.get("corners", [])
+    user_lap = processed.get("user_lap", {})
+    ref_laps = processed.get("reference_laps", [])
+    if not corners:
+        return "No corner data available."
+
+    user_gear = user_lap.get("gear", [])
+    ref_gear = ref_laps[0].get("gear", []) if ref_laps else []
+    dist_grid = user_lap.get("dist", [])
+
+    if not user_gear:
+        return "No gear data available."
+
+    rows = []
+    for c in corners[:15]:
+        d_apex = c["dist_apex"]
+        c_num = c["corner_num"]
+
+        u_gears = [int(round(v)) for v, d in zip(user_gear, dist_grid) if d is not None and abs(d - d_apex) <= 30 and v is not None]
+        r_gears = [int(round(v)) for v, d in zip(ref_gear, dist_grid) if d is not None and abs(d - d_apex) <= 30 and v is not None] if ref_gear else []
+
+        u_apex_gear = max(set(u_gears), key=u_gears.count) if u_gears else None
+        r_apex_gear = max(set(r_gears), key=r_gears.count) if r_gears else None
+
+        u_str = str(u_apex_gear) if u_apex_gear is not None else "—"
+        r_str = str(r_apex_gear) if r_apex_gear is not None else "—"
+        diff = ""
+        if u_apex_gear is not None and r_apex_gear is not None and u_apex_gear != r_apex_gear:
+            diff = f" ⚠ {u_apex_gear - r_apex_gear:+d}"
+
+        rows.append(f"| T{c_num} | {d_apex:.0f}m | {u_str} | {r_str} |{diff} |")
+
+    header = (
+        "| Corner | Apex dist | User gear | Ref gear | Note |\n"
+        "|--------|-----------|-----------|----------|------|\n"
+    )
+    return header + "\n".join(rows)
+
+
+def _build_sector_corner_map(processed: dict) -> str:
+    """Build a table mapping sectors to the corners they contain."""
+    corners = processed.get("corners", [])
+    sectors = processed.get("sectors", [])
+    if not corners or not sectors:
+        return "No sector–corner mapping available."
+
+    track_length_m = float(processed.get("track_length_m", 3000.0))
+    n_sectors = len(sectors)
+    sector_size_m = track_length_m / n_sectors
+
+    rows = []
+    for s_idx in range(n_sectors):
+        s_start = s_idx * sector_size_m
+        s_end = (s_idx + 1) * sector_size_m
+        in_sector = [
+            f"T{c['corner_num']}"
+            for c in corners
+            if s_start <= c["dist_apex"] < s_end
+        ]
+        corners_str = ", ".join(in_sector) if in_sector else "—"
+        rows.append(f"| S{s_idx + 1} | {corners_str} |")
+
+    header = "| Sector | Corners |\n|--------|--------|\n"
+    return header + "\n".join(rows)
+
+
 def _build_sector_table(processed: dict) -> str:
     """Build a sector time comparison table for the LLM prompt."""
     sectors = processed.get("sectors", [])
@@ -126,6 +218,8 @@ def _build_solo_prompt(
 
     corner_table = _build_corner_table(processed, weak_zones)
     sector_table = _build_sector_table(processed)
+    gear_table = _build_gear_table(processed)
+    sector_corner_map = _build_sector_corner_map(processed)
 
     return _SOLO_PROMPT_TEMPLATE.format_map({
         "car_name": car_name,
@@ -133,6 +227,8 @@ def _build_solo_prompt(
         "corner_summary": corner_summary or "No corners detected.",
         "corner_table": corner_table,
         "sector_table": sector_table,
+        "gear_table": gear_table,
+        "sector_corner_map": sector_corner_map,
         "weak_table": weak_table,
     })
 
@@ -199,6 +295,8 @@ def _build_user_prompt(
 
     corner_table = _build_corner_table(processed, weak_zones)
     sector_table = _build_sector_table(processed)
+    gear_table = _build_gear_table(processed)
+    sector_corner_map = _build_sector_corner_map(processed)
 
     return _USER_PROMPT_TEMPLATE.format_map({
         "car_name": car_name,
@@ -206,6 +304,8 @@ def _build_user_prompt(
         "corner_summary": corner_summary or "No corners detected.",
         "corner_table": corner_table,
         "sector_table": sector_table,
+        "gear_table": gear_table,
+        "sector_corner_map": sector_corner_map,
         "weak_table": weak_table,
         "strength_bullets": strength_bullets,
     })

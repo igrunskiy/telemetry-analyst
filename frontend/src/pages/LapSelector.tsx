@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { LogOut, User, ChevronRight, Clock, Calendar, Loader2, Car, MapPin, BarChart2, Trash2, Zap, ExternalLink } from 'lucide-react'
+import { ThemeToggle } from '../components/ThemeToggle'
 import { useAuth } from '../hooks/useAuth'
 import {
   getCars,
@@ -118,14 +119,6 @@ function formatTrackName(track: Track): string {
   return track.name
 }
 
-const ANALYSIS_STEPS = [
-  'Fetching telemetry data...',
-  'Processing lap channels...',
-  'Comparing racing lines...',
-  'Running AI analysis...',
-  'Generating coaching report...',
-]
-
 export default function LapSelectorPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
@@ -137,7 +130,6 @@ export default function LapSelectorPage() {
   const [selectedRefIds, setSelectedRefIds] = useState<Set<string>>(new Set())
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null)
-  const [analysisStep, setAnalysisStep] = useState(0)
   const [myLapsLimit, setMyLapsLimit] = useState(10)
   const [myLapsPage, setMyLapsPage] = useState(0)
   const [mySessionsLimit, setMySessionsLimit] = useState(10)
@@ -302,56 +294,44 @@ export default function LapSelectorPage() {
   // Analysis mutation
   const analysisMutation = useMutation({
     mutationFn: async () => {
-      let step = 0
-      const interval = setInterval(() => {
-        step = Math.min(step + 1, ANALYSIS_STEPS.length - 1)
-        setAnalysisStep(step)
-      }, 3500)
-
-      try {
-        let result
-        if (analysisMode === 'sessions') {
-          const session = mySessions.find((s: Session) => s.id === selectedSessionId)!
-          const sorted = [...session.laps].sort(
-            (a, b) => parseLapTime(a.lap_time) - parseLapTime(b.lap_time)
-          )
-          const primary = sorted[0]
-          const rest = sorted.slice(1)
-          const lapsMetadata = [
-            { id: primary.id, role: 'user' as const, driver_name: primary.driver_name, lap_time: parseLapTime(primary.lap_time) },
-            ...rest.map((l) => ({ id: l.id, role: 'reference' as const, driver_name: l.driver_name, lap_time: parseLapTime(l.lap_time) })),
-          ]
-          result = await runAnalysis(primary.id, rest.map((l) => l.id), primary.car_name, primary.track_name, 'solo', lapsMetadata)
-        } else {
-          const lap = myLaps.find((l) => l.id === selectedLapId)!
-          const lapsMetadata = [
-            { id: lap.id, role: 'user' as const, driver_name: lap.driver_name, lap_time: parseLapTime(lap.lap_time) },
-            ...Array.from(selectedRefIds).map((id) => {
-              const ref = refLaps.find((r) => r.id === id)
-              return { id, role: 'reference' as const, driver_name: ref?.driver_name ?? '', lap_time: parseLapTime(ref?.lap_time ?? 0), irating: ref?.irating }
-            }),
-          ]
-          result = await runAnalysis(
-            selectedLapId!,
-            Array.from(selectedRefIds),
-            lap.car_name,
-            lap.track_name,
-            'vs_reference',
-            lapsMetadata,
-          )
-        }
-        clearInterval(interval)
-        return result
-      } catch (e) {
-        clearInterval(interval)
-        throw e
+      if (analysisMode === 'sessions') {
+        const session = mySessions.find((s: Session) => s.id === selectedSessionId)!
+        const sorted = [...session.laps].sort(
+          (a, b) => parseLapTime(a.lap_time) - parseLapTime(b.lap_time)
+        )
+        const primary = sorted[0]
+        const rest = sorted.slice(1)
+        const lapsMetadata = [
+          { id: primary.id, role: 'user' as const, driver_name: primary.driver_name, lap_time: parseLapTime(primary.lap_time) },
+          ...rest.map((l) => ({ id: l.id, role: 'reference' as const, driver_name: l.driver_name, lap_time: parseLapTime(l.lap_time) })),
+        ]
+        return runAnalysis(primary.id, rest.map((l) => l.id), primary.car_name, primary.track_name, 'solo', lapsMetadata)
+      } else {
+        const lap = myLaps.find((l) => l.id === selectedLapId)!
+        const lapsMetadata = [
+          { id: lap.id, role: 'user' as const, driver_name: lap.driver_name, lap_time: parseLapTime(lap.lap_time) },
+          ...Array.from(selectedRefIds).map((id) => {
+            const ref = refLaps.find((r) => r.id === id)
+            return { id, role: 'reference' as const, driver_name: ref?.driver_name ?? '', lap_time: parseLapTime(ref?.lap_time ?? 0), irating: ref?.irating }
+          }),
+        ]
+        return runAnalysis(
+          selectedLapId!,
+          Array.from(selectedRefIds),
+          lap.car_name,
+          lap.track_name,
+          'vs_reference',
+          lapsMetadata,
+        )
       }
     },
-    onSuccess: (report) => {
-      navigate(`/report/${report.id}`)
-    },
-    onMutate: () => {
-      setAnalysisStep(0)
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['analysisHistory'] })
+      // Reset lap/session selection so the user can queue another analysis
+      setSelectedLapId(null)
+      setSelectedRefIds(new Set())
+      setSelectedSessionId(null)
+      setExpandedSessionId(null)
     },
   })
 
@@ -412,6 +392,7 @@ export default function LapSelectorPage() {
                 </span>
               </Link>
             )}
+            <ThemeToggle />
             <button
               onClick={handleLogout}
               className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
@@ -849,7 +830,7 @@ export default function LapSelectorPage() {
                 {analysisMutation.isPending ? (
                   <>
                     <Loader2 className="w-5 h-5 animate-spin" />
-                    <span>{ANALYSIS_STEPS[analysisStep]}</span>
+                    <span>Submitting...</span>
                   </>
                 ) : (
                   <>
@@ -1011,6 +992,23 @@ export default function LapSelectorPage() {
                               }`}>
                                 {isSoloItem ? 'Session' : 'Reference'}
                               </span>
+                              {item.status === 'enqueued' && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-slate-600/40 text-slate-400 flex-shrink-0">
+                                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                  In queue
+                                </span>
+                              )}
+                              {item.status === 'processing' && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-400 flex-shrink-0">
+                                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                  Processing
+                                </span>
+                              )}
+                              {item.status === 'failed' && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-500/15 text-red-400 flex-shrink-0">
+                                  Failed
+                                </span>
+                              )}
                               <span className="text-white font-medium text-sm truncate">
                                 {item.car_name}
                               </span>

@@ -9,8 +9,14 @@
 ### Per-Corner Telemetry (user vs. reference)
 {corner_table}
 
+### Gear Selection at Corner Apexes
+{gear_table}
+
 ### Sector Times
 {sector_table}
+
+### Sector–Corner Map
+{sector_corner_map}
 
 ### Weak Zones (sorted by severity)
 {weak_table}
@@ -41,8 +47,41 @@ Return your analysis as a valid JSON object matching EXACTLY this schema:
     }}
   ],
   "strengths": ["strength 1", "strength 2"],
-  "sector_notes": ["note about sector 1", "note about sector 2", "note about sector 3"]
+  "sector_notes": ["note about sector 1", "note about sector 2", "note about sector 3"],
+  "driving_scores": {{
+    "braking_points": {{
+      "score": 75,
+      "comment": "1-2 sentence assessment of braking point consistency and accuracy across corners"
+    }},
+    "brake_application": {{
+      "score": 68,
+      "comment": "1-2 sentence assessment of brake pressure modulation, threshold braking, and trail braking into corners"
+    }},
+    "throttle_pickup": {{
+      "score": 82,
+      "comment": "1-2 sentence assessment of throttle application timing and progressiveness on corner exits"
+    }},
+    "steering": {{
+      "score": 71,
+      "comment": "1-2 sentence assessment of steering smoothness, correction frequency, and line accuracy"
+    }}
+  }},
+  "sector_scores": [
+    {{
+      "sector": 1,
+      "driving_scores": {{
+        "braking_points": {{"score": 75, "comment": "sector 1 specific braking assessment based on corners in this sector"}},
+        "brake_application": {{"score": 68, "comment": "sector 1 brake pressure and trail braking"}},
+        "throttle_pickup": {{"score": 82, "comment": "sector 1 throttle timing and progressiveness"}},
+        "steering": {{"score": 71, "comment": "sector 1 steering smoothness and line accuracy"}}
+      }}
+    }}
+  ]
 }}
 ```
+
+Score meaning: 0 = very poor, 50 = average amateur, 75 = competent, 90+ = excellent.
+Base scores on the telemetry evidence — braking points on brake zone distances vs reference, brake application on pressure trace shape, throttle pickup on throttle pickup distance vs reference, steering on mid-corner speed stability and correction events.
+For sector_scores, produce one entry per sector (use the Sector–Corner Map to identify which corners belong to each sector) and score only the technique areas relevant to corners in that sector.
 
 Return ONLY the JSON object. Do not include markdown code fences, explanations, or any other text.

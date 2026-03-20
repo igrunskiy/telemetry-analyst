@@ -12,6 +12,8 @@ interface TelemetryChartProps {
   refThrottle: number[]
   userBrake: number[]
   refBrake: number[]
+  userGear?: number[]
+  refGear?: number[]
   deltaMs: number[]
   corners: Corner[]
   onHoverIndex?: (idx: number | null) => void
@@ -67,13 +69,14 @@ interface SingleChartProps {
   refValues?: number[]
   corners: Corner[]
   isDelta?: boolean
+  isStep?: boolean
   height?: number
   onHoverIndex?: (idx: number | null) => void
   xRange?: [number, number] | null
   onRangeChange?: (range: [number, number] | null) => void
 }
 
-function SingleChart({
+export function SingleChart({
   title,
   yLabel,
   distances,
@@ -81,6 +84,7 @@ function SingleChart({
   refValues,
   corners,
   isDelta = false,
+  isStep = false,
   height = 180,
   onHoverIndex,
   xRange,
@@ -154,23 +158,25 @@ function SingleChart({
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
     }
   }, [onRangeChange])
+  // When isDelta the displayed values are negated and converted to seconds, so range must match
+  const displayValues = isDelta ? userValues.map((v) => -v / 1000) : userValues
   const yMin = useMemo(
     () =>
       Math.min(
-        ...userValues,
+        ...displayValues,
         ...(refValues ?? []),
-        isDelta ? -50 : 0,
+        isDelta ? -0.05 : 0,
       ),
-    [userValues, refValues, isDelta],
+    [displayValues, refValues, isDelta],
   )
   const yMax = useMemo(
     () =>
       Math.max(
-        ...userValues,
+        ...displayValues,
         ...(refValues ?? []),
-        isDelta ? 50 : 1,
+        isDelta ? 0.05 : 1,
       ),
-    [userValues, refValues, isDelta],
+    [displayValues, refValues, isDelta],
   )
 
   const shapes = useMemo(
@@ -185,9 +191,11 @@ function SingleChart({
 
   const traces: Plotly.Data[] = useMemo(() => {
     if (isDelta) {
-      // Delta: split into green (user ahead) and red (user behind) filled areas
-      const posY = userValues.map((v) => (v >= 0 ? v : 0))
-      const negY = userValues.map((v) => (v < 0 ? v : 0))
+      // Backend delta_ms: positive = user slower (behind). Negate so that + = user ahead (conventional motorsport display).
+      // Convert ms → s for display (hundredths precision).
+      const corrected = userValues.map((v) => -v / 1000)
+      const posY = corrected.map((v) => (v >= 0 ? v : 0))
+      const negY = corrected.map((v) => (v < 0 ? v : 0))
 
       return [
         {
@@ -198,9 +206,9 @@ function SingleChart({
           fill: 'tozeroy',
           fillcolor: 'rgba(34,197,94,0.25)',
           line: { color: 'rgba(34,197,94,0.6)', width: 1 },
-          name: 'User ahead',
+          name: 'You ahead',
           showlegend: false,
-          hovertemplate: '%{y:.0f} ms<extra>User ahead</extra>',
+          hovertemplate: '%{y:.2f} s<extra>You ahead</extra>',
         },
         {
           type: 'scatter',
@@ -210,19 +218,19 @@ function SingleChart({
           fill: 'tozeroy',
           fillcolor: 'rgba(239,68,68,0.25)',
           line: { color: 'rgba(239,68,68,0.6)', width: 1 },
-          name: 'User behind',
+          name: 'You behind',
           showlegend: false,
-          hovertemplate: '%{y:.0f} ms<extra>User behind</extra>',
+          hovertemplate: '%{y:.2f} s<extra>You behind</extra>',
         },
         {
           type: 'scatter',
           mode: 'lines',
           x: distances,
-          y: userValues,
+          y: corrected,
           line: { color: '#94a3b8', width: 1 },
           name: 'Delta',
           showlegend: false,
-          hovertemplate: '%{y:.0f} ms<extra>Delta</extra>',
+          hovertemplate: '%{y:.2f} s<extra>Delta</extra>',
         },
       ]
     }
@@ -234,8 +242,8 @@ function SingleChart({
         x: distances,
         y: userValues,
         name: 'You',
-        line: { color: USER_COLOR, width: 1 },
-        hovertemplate: `%{y:.1f}<extra>You</extra>`,
+        line: { color: USER_COLOR, width: 1.5, shape: isStep ? 'hv' : 'linear' },
+        hovertemplate: isStep ? `%{y:.0f}<extra>You</extra>` : `%{y:.1f}<extra>You</extra>`,
       },
     ]
 
@@ -246,13 +254,13 @@ function SingleChart({
         x: distances,
         y: refValues,
         name: 'Reference',
-        line: { color: REF_COLOR, width: 1, dash: 'dot' },
-        hovertemplate: `%{y:.1f}<extra>Reference</extra>`,
+        line: { color: REF_COLOR, width: 1.5, dash: 'dot', shape: isStep ? 'hv' : 'linear' },
+        hovertemplate: isStep ? `%{y:.0f}<extra>Reference</extra>` : `%{y:.1f}<extra>Reference</extra>`,
       })
     }
 
     return result
-  }, [distances, userValues, refValues, isDelta])
+  }, [distances, userValues, refValues, isDelta, isStep])
 
   return (
     <div ref={containerRef}>
@@ -342,6 +350,8 @@ export default function TelemetryChart({
   refThrottle,
   userBrake,
   refBrake,
+  userGear,
+  refGear,
   deltaMs,
   corners,
   onHoverIndex,
@@ -469,9 +479,21 @@ export default function TelemetryChart({
         {...sharedProps}
       />
 
+      {userGear && userGear.length > 0 && (
+        <SingleChart
+          title="Gear"
+          yLabel="gear"
+          userValues={userGear}
+          refValues={refGear && refGear.length > 0 ? refGear : undefined}
+          isStep
+          height={120}
+          {...sharedProps}
+        />
+      )}
+
       <SingleChart
         title="Delta Time (+ = you ahead)"
-        yLabel="ms"
+        yLabel="s"
         userValues={deltaMs}
         isDelta
         height={150}

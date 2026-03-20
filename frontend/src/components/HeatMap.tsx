@@ -2,6 +2,10 @@ import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { Globe, Map, EyeOff } from 'lucide-react'
 import { MapContainer, TileLayer, Polyline, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
+import {
+  buildSegments,
+  percentileSymmetricRange,
+} from '../utils/heatmapColors'
 
 interface HeatMapProps {
   lat: number[]
@@ -65,62 +69,10 @@ const METRIC_CONFIG: Record<Metric, MetricConfig> = {
   throttleDelta: { label: 'Throttle Δ', soloLabel: 'Throttle Consistency', unit: '%',    diverging: true, displayScale: 100 },
 }
 
-const N_BINS = 16
-
 const ESRI_SAT_URL =
   'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
 const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 
-/** t ∈ [0, 1] → CSS rgb string, diverging: red (0) → white (0.5) → green (1) */
-function lerpColor(t: number, reversed: boolean): string {
-  const u = reversed ? 1 - Math.max(0, Math.min(1, t)) : Math.max(0, Math.min(1, t))
-  if (u <= 0.5) {
-    const s = u * 2
-    return `rgb(239,${Math.round(68 + 182 * s)},${Math.round(68 + 182 * s)})`
-  }
-  const s = (u - 0.5) * 2
-  return `rgb(${Math.round(248 - 214 * s)},${Math.round(250 - 53 * s)},${Math.round(250 - 156 * s)})`
-}
-
-/** Split track path into runs of the same colour bin, carrying over the boundary
- *  point between adjacent bins so the line stays visually continuous. */
-function buildSegments(
-  lat: number[],
-  lon: number[],
-  values: number[],
-  cmin: number,
-  cmax: number,
-  reversed: boolean,
-): { points: [number, number][]; color: string }[] {
-  if (lat.length === 0) return []
-  const range = Math.max(cmax - cmin, 1e-6)
-  const result: { points: [number, number][]; color: string }[] = []
-  let curBin = -1
-  let curSeg: [number, number][] = []
-
-  for (let i = 0; i < lat.length; i++) {
-    const t = (values[i] - cmin) / range
-    const binIdx = Math.min(N_BINS - 1, Math.max(0, Math.floor(Math.max(0, Math.min(1, t)) * N_BINS)))
-
-    if (binIdx !== curBin) {
-      if (curSeg.length >= 2) {
-        result.push({
-          points: curSeg,
-          color: lerpColor((curBin + 0.5) / N_BINS, reversed),
-        })
-      }
-      // Carry last point over so segments share boundary (no gap)
-      curSeg = curSeg.length > 0 ? [curSeg[curSeg.length - 1]] : []
-      curBin = binIdx
-    }
-    curSeg.push([lat[i], lon[i]])
-  }
-
-  if (curSeg.length >= 2) {
-    result.push({ points: curSeg, color: lerpColor((curBin + 0.5) / N_BINS, reversed) })
-  }
-  return result
-}
 
 export default function HeatMap({
   lat, lon, speed, refSpeed, brake, refBrake, throttle, refThrottle,
@@ -169,15 +121,7 @@ export default function HeatMap({
   const values = activeValues
   const config = METRIC_CONFIG[metric]
 
-  const { cmin, cmax } = useMemo(() => {
-    if (!values.length) return { cmin: -1, cmax: 1 }
-    let maxAbs = 1e-6
-    for (const v of values) {
-      const a = Math.abs(v)
-      if (a > maxAbs) maxAbs = a
-    }
-    return { cmin: -maxAbs, cmax: maxAbs }
-  }, [values])
+  const { cmin, cmax } = useMemo(() => percentileSymmetricRange(values), [values])
 
   const segments = useMemo(
     () =>

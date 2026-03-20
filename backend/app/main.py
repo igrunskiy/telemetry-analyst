@@ -49,12 +49,42 @@ async def lifespan(app: FastAPI):
         await conn.execute(text("SELECT pg_advisory_lock(987654321)"))
         try:
             await conn.run_sync(Base.metadata.create_all)
+            # Add columns that may not exist in pre-existing tables
+            await conn.execute(text(
+                "ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS "
+                "share_token VARCHAR UNIQUE"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS "
+                "status VARCHAR(20) NOT NULL DEFAULT 'completed'"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS "
+                "error_message TEXT"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS "
+                "input_json JSONB"
+            ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_analysis_results_status "
+                "ON analysis_results (status)"
+            ))
         finally:
             await conn.execute(text("SELECT pg_advisory_unlock(987654321)"))
 
+    # Start the background analysis queue worker
+    from app.analysis.worker import start_worker
+    worker_task = start_worker()
+
     yield
 
-    # Cleanup: dispose the engine connection pool on shutdown
+    # Cancel the worker and dispose the engine connection pool on shutdown
+    worker_task.cancel()
+    try:
+        await worker_task
+    except Exception:
+        pass
     await engine.dispose()
 
 

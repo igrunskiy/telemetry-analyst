@@ -41,6 +41,18 @@ export default function SectorDelta({ sectors, selectedSector, onSectorClick }: 
 
   const totalDelta = deltas.reduce((a, b) => a + b, 0)
 
+  // For row color intensity: scale each sector's delta relative to the worst sector
+  const maxAbsDelta = Math.max(...deltas.map(Math.abs), 1)
+  const sectorRowStyle = (delta: number) => {
+    const intensity = Math.min(Math.abs(delta) / maxAbsDelta, 1)
+    if (delta > 0) {
+      // You are faster — green tint, proportional to advantage
+      return { borderLeftColor: `rgba(34,197,94,${0.3 + intensity * 0.5})`, borderLeftWidth: '3px', borderLeftStyle: 'solid' as const }
+    }
+    // You are slower — red tint, proportional to time loss
+    return { borderLeftColor: `rgba(239,68,68,${0.3 + intensity * 0.5})`, borderLeftWidth: '3px', borderLeftStyle: 'solid' as const }
+  }
+
   const barColors = deltas.map((d) =>
     d > 0 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)',
   )
@@ -147,6 +159,7 @@ export default function SectorDelta({ sectors, selectedSector, onSectorClick }: 
                     key={s.sector}
                     onClick={() => onSectorClick?.(isSelected ? null : Number(s.sector))}
                     className={`transition-colors cursor-pointer ${isSelected ? 'bg-amber-500/10' : 'hover:bg-slate-700/30'}`}
+                    style={sectorRowStyle(delta)}
                   >
                     <td className={`px-4 py-2.5 font-medium ${isSelected ? 'text-amber-400' : 'text-slate-300'}`}>
                       S{s.sector}

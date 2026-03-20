@@ -50,6 +50,7 @@ export default function App() {
           </ProtectedRoute>
         }
       />
+      <Route path="/shared/:shareToken" element={<ReportPage readOnly />} />
       <Route
         path="/profile"
         element={

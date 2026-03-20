@@ -55,7 +55,7 @@ def _rename_columns(df: pd.DataFrame) -> pd.DataFrame:
 # TelemetryProcessor
 # ---------------------------------------------------------------------------
 
-INTERP_POINTS = 1000
+INTERP_POINTS = 5000
 DEFAULT_TRACK_LENGTH_M = 3000.0
 
 
@@ -93,6 +93,11 @@ class TelemetryProcessor:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
+        # iRacing exports Speed in m/s. Convert to km/h if max < 130
+        # (no race car exceeds 130 m/s = 468 km/h, but all exceed 130 km/h).
+        if "Speed" in df.columns and df["Speed"].max() < 130:
+            df["Speed"] = df["Speed"] * 3.6
+
         df = df.dropna(subset=["LapDistPct"])
         return df
 
@@ -126,9 +131,12 @@ class TelemetryProcessor:
         """
         df = df.copy()
 
-        # Normalise to 0–1 if stored as 0–100
-        if df["LapDistPct"].max() > 1.5:
-            df["LapDistPct"] = df["LapDistPct"] / 100.0
+        # Normalise to 0–1 regardless of whether the column is in 0–100 percent
+        # or raw metres (e.g. iRacing LapDist). Dividing by the actual max
+        # handles all three cases: 0–1 (no-op), 0–100, and 0–N metres.
+        max_val = df["LapDistPct"].max()
+        if max_val > 1.5:
+            df["LapDistPct"] = df["LapDistPct"] / max_val
 
         df = df.sort_values("LapDistPct").reset_index(drop=True)
         df = df.drop_duplicates(subset=["LapDistPct"])

@@ -128,6 +128,24 @@ export async function deleteAnalysis(id: string): Promise<void> {
   await api.delete(`/api/analysis/${id}`)
 }
 
+export async function regenerateAnalysis(id: string): Promise<AnalysisReport> {
+  const { data } = await api.post<AnalysisReport>(`/api/analysis/${id}/regenerate`)
+  return data
+}
+
+export async function shareAnalysis(id: string): Promise<{ share_token: string }> {
+  const { data } = await api.post<{ share_token: string }>(`/api/analysis/${id}/share`)
+  return data
+}
+
+export async function getSharedAnalysis(shareToken: string): Promise<AnalysisReport> {
+  // Public endpoint — no auth header needed
+  const { data } = await api.get<AnalysisReport>(`/api/analysis/shared/${shareToken}`, {
+    headers: { Authorization: undefined },
+  })
+  return data
+}
+
 export async function updateClaudeKey(apiKey: string): Promise<void> {
   await api.put('/api/profile/claude-key', { api_key: apiKey })
 }

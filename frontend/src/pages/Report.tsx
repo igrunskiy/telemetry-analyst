@@ -1,14 +1,16 @@
 import React, { useState, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { useQuery, useMutation } from '@tanstack/react-query'
-import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User } from 'lucide-react'
-import { getAnalysis, deleteAnalysis } from '../api/client'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User, RefreshCw, Share2, Check } from 'lucide-react'
+import { getAnalysis, deleteAnalysis, regenerateAnalysis, shareAnalysis, getSharedAnalysis } from '../api/client'
 import TrackMap from '../components/TrackMap'
-import TelemetryChart from '../components/TelemetryChart'
+import TelemetryChart, { SingleChart } from '../components/TelemetryChart'
 import HeatMap from '../components/HeatMap'
 import DeltaHeatmap from '../components/DeltaHeatmap'
 import SectorDelta from '../components/SectorDelta'
 import AnalysisCards from '../components/AnalysisCards'
+import { ThemeToggle } from '../components/ThemeToggle'
+import TelemetryInsights from '../components/TelemetryInsights'
 import type { AnalysisReport, ImprovementArea, LapMeta, SectorData } from '../types'
 
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 }
@@ -292,42 +294,92 @@ type Tab = 'summary' | 'lines' | 'telemetry' | 'heatmap' | 'sectors'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'summary', label: 'Summary' },
-  { id: 'lines', label: 'Racing Lines' },
+  { id: 'lines', label: 'Slow Sectors' },
   { id: 'telemetry', label: 'Telemetry' },
   { id: 'heatmap', label: 'Heatmap' },
   { id: 'sectors', label: 'Sectors' },
 ]
 
-export default function ReportPage() {
-  const { analysisId } = useParams<{ analysisId: string }>()
+export default function ReportPage({ readOnly = false }: { readOnly?: boolean }) {
+  const { analysisId, shareToken } = useParams<{ analysisId?: string; shareToken?: string }>()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<Tab>('summary')
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [selectedSector, setSelectedSector] = useState<number | null>(null)
   const [activeCornerNums, setActiveCornerNums] = useState<number[]>([])
   const [metaExpanded, setMetaExpanded] = useState(false)
+  const [shareState, setShareState] = useState<'idle' | 'loading' | 'copied'>('idle')
+  // Snapshot of the report before regeneration starts — kept visible until the user dismisses
+  const [savedReport, setSavedReport] = useState<typeof report | null>(null)
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteAnalysis(analysisId!),
     onSuccess: () => navigate('/'),
   })
 
+  const regenerateMutation = useMutation({
+    mutationFn: () => regenerateAnalysis(analysisId!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['analysis', analysisId] })
+    },
+  })
+
+  const handleRegenerate = () => {
+    if (report && (!report.status || report.status === 'completed')) {
+      setSavedReport(report)
+    }
+    regenerateMutation.mutate()
+  }
+
+  const handleShare = async () => {
+    if (shareState !== 'idle' || !analysisId) return
+    setShareState('loading')
+    try {
+      // If already shared, use existing token from report; otherwise generate one
+      const token = report?.share_token ?? (await shareAnalysis(analysisId)).share_token
+      const url = `${window.location.origin}/shared/${token}`
+      await navigator.clipboard.writeText(url)
+      setShareState('copied')
+      setTimeout(() => setShareState('idle'), 2000)
+    } catch {
+      setShareState('idle')
+    }
+  }
+
   const {
     data: report,
     isLoading,
     isError,
   } = useQuery({
-    queryKey: ['analysis', analysisId],
-    queryFn: () => getAnalysis(analysisId!),
-    enabled: !!analysisId,
+    queryKey: readOnly ? ['shared-analysis', shareToken] : ['analysis', analysisId],
+    queryFn: () => readOnly ? getSharedAnalysis(shareToken!) : getAnalysis(analysisId!),
+    enabled: readOnly ? !!shareToken : !!analysisId,
+    // Poll every 2 seconds while the job is still queued or being processed
+    refetchInterval: (query) => {
+      const s = query.state.data?.status
+      if (!s || s === 'enqueued' || s === 'processing') return 2000
+      return false
+    },
   })
+
+  const isRegenerating =
+    regenerateMutation.isPending ||
+    report?.status === 'enqueued' ||
+    report?.status === 'processing'
+
+  // The report to render — fall back to the saved snapshot while regeneration is in flight
+  const displayReport = savedReport ?? report
+
+  // The new report has landed — show a "ready" banner so the user can switch to it
+  const newVersionReady = savedReport != null && report?.status === 'completed' && report.id === savedReport.id
 
   // Compute sector distance ranges from the distances array
   const sectorDistRanges = useMemo(() => {
-    if (!report) return []
-    const d = report.telemetry.distances
-    const n = report.telemetry.sectors.length || 3
+    if (!displayReport) return []
+    const d = displayReport.telemetry?.distances ?? []
+    const n = displayReport.telemetry?.sectors?.length || 3
     if (d.length === 0) return []
     const step = Math.floor(d.length / n)
     return Array.from({ length: n }, (_, i) => [
@@ -344,10 +396,10 @@ export default function ReportPage() {
   const handleSectorClick = (sector: number | null) => {
     setSelectedSector(sector)
     // When sector selected, highlight corners in that range
-    if (sector != null && report) {
+    if (sector != null && displayReport) {
       const range = sectorDistRanges[sector - 1]
       if (range) {
-        const nums = report.telemetry.corners
+        const nums = displayReport.telemetry?.corners
           .filter((c) => c.dist_apex >= range[0] && c.dist_apex <= range[1])
           .map((c) => c.corner_num)
         setActiveCornerNums(nums)
@@ -357,13 +409,13 @@ export default function ReportPage() {
     }
   }
 
-  const isSolo = report?.analysis_mode === 'solo'
-  const soloUserLap = isSolo ? report?.laps_metadata?.find((l) => l.role === 'user') : undefined
-  const soloTotalLaps = report ? report.reference_lap_ids.length + 1 : 0
-  const hasGps = (report?.telemetry.user_lat?.length ?? 0) > 0
+  const isSolo = displayReport?.analysis_mode === 'solo'
+  const soloUserLap = isSolo ? displayReport?.laps_metadata?.find((l) => l.role === 'user') : undefined
+  const soloTotalLaps = displayReport ? displayReport.reference_lap_ids.length + 1 : 0
+  const hasGps = (displayReport?.telemetry?.user_lat?.length ?? 0) > 0
   const trackLength =
-    report && report.telemetry.distances.length > 0
-      ? report.telemetry.distances[report.telemetry.distances.length - 1]
+    displayReport && displayReport.telemetry?.distances?.length > 0
+      ? displayReport.telemetry.distances[displayReport.telemetry.distances.length - 1]
       : 3000
 
   return (
@@ -372,12 +424,14 @@ export default function ReportPage() {
       <header className="bg-slate-800 border-b border-slate-700 sticky top-0 z-10">
         <div className="max-w-[80%] mx-auto px-4">
           <div className="h-14 flex items-center gap-3">
-            <Link
-              to="/"
-              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors flex-shrink-0"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </Link>
+            {!readOnly && (
+              <Link
+                to="/"
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors flex-shrink-0"
+              >
+                <ArrowLeft className="w-4 h-4" />
+              </Link>
+            )}
             <div className="flex items-center gap-2 flex-1 min-w-0">
               <div className="w-7 h-7 bg-amber-500 rounded-lg flex items-center justify-center flex-shrink-0">
                 <BarChart2 className="w-4 h-4 text-slate-900" />
@@ -397,35 +451,12 @@ export default function ReportPage() {
               )}
             </div>
 
-            {/* Delete control */}
-            {report && (
-              confirmDelete ? (
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <span className="text-slate-400 text-xs hidden sm:inline">Delete this analysis?</span>
-                  <button
-                    onClick={() => deleteMutation.mutate()}
-                    disabled={deleteMutation.isPending}
-                    className="px-2 py-1 rounded text-xs bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
-                  >
-                    {deleteMutation.isPending ? '…' : 'Delete'}
-                  </button>
-                  <button
-                    onClick={() => setConfirmDelete(false)}
-                    className="px-2 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setConfirmDelete(true)}
-                  className="p-1.5 text-red-500 hover:text-red-400 hover:bg-slate-700 rounded-lg transition-colors flex-shrink-0"
-                  title="Delete analysis"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )
+            {readOnly && (
+              <span className="text-xs text-slate-500 border border-slate-700 rounded px-2 py-0.5 flex-shrink-0">
+                Read-only
+              </span>
             )}
+            <ThemeToggle />
           </div>
 
         </div>
@@ -440,6 +471,35 @@ export default function ReportPage() {
           </div>
         )}
 
+        {!isLoading && (report?.status === 'enqueued' || report?.status === 'processing') && (
+          <div className="flex flex-col items-center justify-center py-24 gap-5">
+            <div className="w-12 h-12 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+            <div className="text-center">
+              <p className="text-white font-medium mb-1">
+                {report.status === 'enqueued' ? 'Waiting in queue…' : 'Analysing telemetry…'}
+              </p>
+              <p className="text-slate-500 text-sm">
+                {report.status === 'enqueued'
+                  ? 'Your analysis is queued and will start shortly.'
+                  : 'Fetching data, processing laps, and generating AI coaching report.'}
+              </p>
+            </div>
+            <Link to="/" className="text-slate-500 hover:text-slate-300 text-sm transition-colors">
+              &larr; Back to lap selector
+            </Link>
+          </div>
+        )}
+
+        {!isLoading && report?.status === 'failed' && (
+          <div className="card text-center py-12">
+            <p className="text-red-400 font-medium mb-2">Analysis failed</p>
+            <p className="text-slate-500 text-sm mb-4">{report.error_message || 'An unexpected error occurred.'}</p>
+            <Link to="/" className="text-amber-500 hover:text-amber-400 text-sm">
+              &larr; Back to lap selector
+            </Link>
+          </div>
+        )}
+
         {isError && (
           <div className="card text-center py-12">
             <p className="text-red-400 mb-2">Failed to load analysis report.</p>
@@ -449,7 +509,20 @@ export default function ReportPage() {
           </div>
         )}
 
-        {report && (
+        {newVersionReady && (
+          <div className="mb-4 flex items-center gap-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3">
+            <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
+            <span className="text-emerald-300 text-sm flex-1">New analysis is ready.</span>
+            <button
+              onClick={() => setSavedReport(null)}
+              className="px-3 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-xs font-medium transition-colors flex-shrink-0"
+            >
+              View new version
+            </button>
+          </div>
+        )}
+
+        {displayReport && (!displayReport.status || displayReport.status === 'completed') && (
           <>
             {/* Lap metadata bar */}
             {isSolo ? (
@@ -464,7 +537,7 @@ export default function ReportPage() {
                   <span className="flex items-center gap-1.5">
                     <Clock className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                     <span className="text-slate-300">
-                      {new Date(report.created_at).toLocaleString(undefined, {
+                      {new Date(displayReport.created_at).toLocaleString(undefined, {
                         year: 'numeric', month: 'short', day: 'numeric',
                         hour: '2-digit', minute: '2-digit',
                       })}
@@ -483,16 +556,73 @@ export default function ReportPage() {
                     <Layers className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                     <span className="text-slate-500">{soloTotalLaps} {soloTotalLaps === 1 ? 'lap' : 'laps'} analyzed</span>
                   </span>
+                  {/* Generation time */}
+                  {displayReport.generation_time_s != null && (
+                    <span className="flex items-center gap-1.5">
+                      <RefreshCw className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                      <span className="text-slate-500">Generated in</span>
+                      <span className="text-slate-300">{displayReport.generation_time_s}s</span>
+                    </span>
+                  )}
                   {/* Link to best lap on Garage61 */}
                   <a
-                    href={`https://garage61.net/app/laps/${report.lap_id}`}
+                    href={`https://garage61.net/app/laps/${displayReport.lap_id}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="ml-auto flex items-center gap-1.5 text-violet-400 hover:text-violet-300 transition-colors"
+                    className="flex items-center gap-1.5 text-violet-400 hover:text-violet-300 transition-colors"
                   >
                     <span>View session lap</span>
                     <ExternalLink className="w-3 h-3" />
                   </a>
+
+                  {/* Control buttons */}
+                  {!readOnly && (
+                    <div className="ml-auto flex items-center gap-1 flex-shrink-0">
+                      <button
+                        onClick={() => handleRegenerate()}
+                        disabled={isRegenerating}
+                        className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/60 rounded-lg transition-colors disabled:opacity-50"
+                        title="Regenerate analysis"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isRegenerating ? 'animate-spin' : ''}`} />
+                      </button>
+                      <button
+                        onClick={handleShare}
+                        disabled={shareState === 'loading'}
+                        className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/60 rounded-lg transition-colors disabled:opacity-50"
+                        title="Copy share link"
+                      >
+                        {shareState === 'copied'
+                          ? <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          : <Share2 className="w-3.5 h-3.5" />}
+                      </button>
+                      {confirmDelete ? (
+                        <>
+                          <button
+                            onClick={() => deleteMutation.mutate()}
+                            disabled={deleteMutation.isPending}
+                            className="px-2 py-0.5 rounded text-xs bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
+                          >
+                            {deleteMutation.isPending ? '…' : 'Delete'}
+                          </button>
+                          <button
+                            onClick={() => setConfirmDelete(false)}
+                            className="px-2 py-0.5 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDelete(true)}
+                          className="p-1.5 text-red-500 hover:text-red-400 hover:bg-slate-700/60 rounded-lg transition-colors"
+                          title="Delete analysis"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -510,7 +640,7 @@ export default function ReportPage() {
                   <span className="flex items-center gap-1.5">
                     <Clock className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                     <span className="text-slate-300">
-                      {new Date(report.created_at).toLocaleString(undefined, {
+                      {new Date(displayReport.created_at).toLocaleString(undefined, {
                         year: 'numeric', month: 'short', day: 'numeric',
                         hour: '2-digit', minute: '2-digit',
                       })}
@@ -520,32 +650,89 @@ export default function ReportPage() {
                     <Calendar className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                     <span className="text-slate-500">Your lap:</span>
                     <span className="font-mono text-blue-400">
-                      {report.lap_id.slice(0, 8)}
+                      {displayReport.lap_id.slice(0, 8)}
                     </span>
                   </span>
-                  {report.reference_lap_ids.length > 0 && (
+                  {displayReport.reference_lap_ids.length > 0 && (
                     <span className="flex items-center gap-1.5">
                       <Layers className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                       <span className="text-slate-500">
-                        {report.reference_lap_ids.length === 1 ? '1 reference' : `${report.reference_lap_ids.length} references`}
+                        {displayReport.reference_lap_ids.length === 1 ? '1 reference' : `${displayReport.reference_lap_ids.length} references`}
                       </span>
                     </span>
                   )}
-                  <span className="ml-auto flex items-center gap-1 text-slate-500">
-                    <span>{metaExpanded ? 'Less' : 'Details'}</span>
-                    {metaExpanded
-                      ? <ChevronUp className="w-3.5 h-3.5" />
-                      : <ChevronDown className="w-3.5 h-3.5" />}
-                  </span>
+                  {displayReport.generation_time_s != null && (
+                    <span className="flex items-center gap-1.5">
+                      <RefreshCw className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                      <span className="text-slate-500">Generated in</span>
+                      <span className="text-slate-300">{displayReport.generation_time_s}s</span>
+                    </span>
+                  )}
+                  <div className="ml-auto flex items-center gap-1 flex-shrink-0">
+                    {!readOnly && (
+                      <>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleRegenerate() }}
+                          disabled={regenerateMutation.isPending}
+                          className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/60 rounded-lg transition-colors disabled:opacity-50"
+                          title="Regenerate analysis"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${regenerateMutation.isPending ? 'animate-spin' : ''}`} />
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleShare() }}
+                          disabled={shareState === 'loading'}
+                          className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/60 rounded-lg transition-colors disabled:opacity-50"
+                          title="Copy share link"
+                        >
+                          {shareState === 'copied'
+                            ? <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            : <Share2 className="w-3.5 h-3.5" />}
+                        </button>
+                        {confirmDelete ? (
+                          <>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); deleteMutation.mutate() }}
+                              disabled={deleteMutation.isPending}
+                              className="px-2 py-0.5 rounded text-xs bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
+                            >
+                              {deleteMutation.isPending ? '…' : 'Delete'}
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setConfirmDelete(false) }}
+                              className="px-2 py-0.5 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setConfirmDelete(true) }}
+                            className="p-1.5 text-red-500 hover:text-red-400 hover:bg-slate-700/60 rounded-lg transition-colors"
+                            title="Delete analysis"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <span className="w-px h-4 bg-slate-700 mx-1" />
+                      </>
+                    )}
+                    <span className="flex items-center gap-1 text-slate-500">
+                      <span>{metaExpanded ? 'Less' : 'Details'}</span>
+                      {metaExpanded
+                        ? <ChevronUp className="w-3.5 h-3.5" />
+                        : <ChevronDown className="w-3.5 h-3.5" />}
+                    </span>
+                  </div>
                 </button>
 
                 {/* Expanded detail */}
                 {metaExpanded && (
                   <div className="border-t border-slate-700/60 px-3 py-3">
-                    {report.laps_metadata && report.laps_metadata.length > 0 ? (
+                    {displayReport.laps_metadata && displayReport.laps_metadata.length > 0 ? (
                       <LapMetaTable
-                        laps={report.laps_metadata}
-                        userLapId={report.lap_id}
+                        laps={displayReport.laps_metadata}
+                        userLapId={displayReport.lap_id}
                         isSolo={false}
                       />
                     ) : (
@@ -554,16 +741,16 @@ export default function ReportPage() {
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-slate-500 w-20 flex-shrink-0">Your lap</span>
                           <a
-                            href={`https://garage61.net/app/laps/${report.lap_id}`}
+                            href={`https://garage61.net/app/laps/${displayReport.lap_id}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="font-mono text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
                           >
-                            {report.lap_id.slice(0, 8)}
+                            {displayReport.lap_id.slice(0, 8)}
                             <ExternalLink className="w-3 h-3" />
                           </a>
                         </div>
-                        {report.reference_lap_ids.map((id) => (
+                        {displayReport.reference_lap_ids.map((id) => (
                           <div key={id} className="flex items-center gap-2">
                             <span className="text-xs text-slate-500 w-20 flex-shrink-0">Reference</span>
                             <a
@@ -586,7 +773,7 @@ export default function ReportPage() {
 
             {/* Comparison description */}
             {(() => {
-              const meta = report.laps_metadata
+              const meta = displayReport.laps_metadata
               if (isSolo) {
                 const userLap = meta?.find((l) => l.role === 'user')
                 const refLaps = meta?.filter((l) => l.role === 'reference') ?? []
@@ -621,14 +808,14 @@ export default function ReportPage() {
                   ) : (
                     <><span className="text-slate-300">{refLaps.length} reference laps</span>{bestRef?.lap_time ? <>, fastest <span className="font-mono text-orange-400">{formatLapTime(bestRef.lap_time)}</span></> : null}</>
                   )}
-                  {' '}on <span className="text-slate-300">{report.track_name}</span>.
+                  {' '}on <span className="text-slate-300">{displayReport.track_name}</span>.
                 </p>
               )
             })()}
 
             {/* Control bar: sector pills (left) + tab buttons (right) */}
             <div className="sticky top-14 z-10 -mx-4 px-4 py-2 mb-4 bg-slate-900/95 backdrop-blur border-b border-slate-700/50 flex items-center gap-3 overflow-x-auto scrollbar-hide">
-              {report.telemetry.sectors.length > 0 && (
+              {displayReport.telemetry.sectors.length > 0 && (
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   <span className="text-slate-500 text-xs mr-1">Sector:</span>
                   <button
@@ -641,7 +828,7 @@ export default function ReportPage() {
                   >
                     All
                   </button>
-                  {report.telemetry.sectors.map((s) => (
+                  {displayReport.telemetry.sectors.map((s) => (
                     <button
                       key={s.sector}
                       onClick={() => handleSectorClick(selectedSector === Number(s.sector) ? null : Number(s.sector))}
@@ -679,13 +866,13 @@ export default function ReportPage() {
               {hasGps && (
                 <div className="xl:sticky xl:top-20">
                   <TrackMap
-                    userLat={report.telemetry.user_lat ?? []}
-                    userLon={report.telemetry.user_lon ?? []}
-                    refLat={report.telemetry.ref_lat ?? []}
-                    refLon={report.telemetry.ref_lon ?? []}
-                    userSpeed={report.telemetry.user_speed}
-                    refSpeed={report.telemetry.ref_speed}
-                    corners={report.telemetry.corners}
+                    userLat={displayReport.telemetry.user_lat ?? []}
+                    userLon={displayReport.telemetry.user_lon ?? []}
+                    refLat={displayReport.telemetry.ref_lat ?? []}
+                    refLon={displayReport.telemetry.ref_lon ?? []}
+                    userSpeed={displayReport.telemetry.user_speed}
+                    refSpeed={displayReport.telemetry.ref_speed}
+                    corners={displayReport.telemetry.corners}
                     hoverIndex={hoverIdx}
                     height={480}
                     trackLength={trackLength}
@@ -699,26 +886,26 @@ export default function ReportPage() {
 
               {/* Tab content */}
               <div>
-                <TabInsights report={report} tab={activeTab} isSolo={isSolo} />
+                <TabInsights report={displayReport} tab={activeTab} isSolo={isSolo} />
 
                 {activeTab === 'summary' && (
                   <AnalysisCards
-                    improvement_areas={report.improvement_areas}
-                    strengths={report.strengths}
-                    summary={report.summary}
-                    estimated_time_gain={report.estimated_time_gain_seconds}
-                    sector_notes={report.sector_notes}
+                    improvement_areas={displayReport.improvement_areas}
+                    strengths={displayReport.strengths}
+                    summary={displayReport.summary}
+                    estimated_time_gain={displayReport.estimated_time_gain_seconds}
+                    sector_notes={displayReport.sector_notes}
                     telemetry={{
-                      distances: report.telemetry.distances,
-                      userLat: report.telemetry.user_lat,
-                      userLon: report.telemetry.user_lon,
-                      refLat: report.telemetry.ref_lat,
-                      refLon: report.telemetry.ref_lon,
-                      userSpeed: report.telemetry.user_speed,
-                      refSpeed: report.telemetry.ref_speed,
-                      userBrake: report.telemetry.user_brake,
-                      userThrottle: report.telemetry.user_throttle,
-                      corners: report.telemetry.corners,
+                      distances: displayReport.telemetry.distances,
+                      userLat: displayReport.telemetry.user_lat,
+                      userLon: displayReport.telemetry.user_lon,
+                      refLat: displayReport.telemetry.ref_lat,
+                      refLon: displayReport.telemetry.ref_lon,
+                      userSpeed: displayReport.telemetry.user_speed,
+                      refSpeed: displayReport.telemetry.ref_speed,
+                      userBrake: displayReport.telemetry.user_brake,
+                      userThrottle: displayReport.telemetry.user_throttle,
+                      corners: displayReport.telemetry.corners,
                     }}
                     onActiveCorners={setActiveCornerNums}
                     onHoverIndex={setHoverIdx}
@@ -726,21 +913,42 @@ export default function ReportPage() {
                 )}
 
                 {activeTab === 'lines' && (
-                  <div className="w-full">
-                    <TrackMap
-                      userLat={report.telemetry.user_lat ?? []}
-                      userLon={report.telemetry.user_lon ?? []}
-                      refLat={report.telemetry.ref_lat ?? []}
-                      refLon={report.telemetry.ref_lon ?? []}
-                      userSpeed={report.telemetry.user_speed}
-                      refSpeed={report.telemetry.ref_speed}
-                      corners={report.telemetry.corners}
-                      hoverIndex={hoverIdx}
-                      height={624}
-                      trackLength={trackLength}
-                      highlightRange={activeSectorRange}
-                      highlightCornerNums={activeCornerNums}
-                    />
+                  <div className="w-full space-y-3">
+                    {hasGps && (
+                      <TrackMap
+                        userLat={displayReport.telemetry.user_lat ?? []}
+                        userLon={displayReport.telemetry.user_lon ?? []}
+                        refLat={displayReport.telemetry.ref_lat ?? []}
+                        refLon={displayReport.telemetry.ref_lon ?? []}
+                        userSpeed={displayReport.telemetry.user_speed}
+                        refSpeed={displayReport.telemetry.ref_speed}
+                        corners={displayReport.telemetry.corners}
+                        hoverIndex={hoverIdx}
+                        height={400}
+                        trackLength={trackLength}
+                        highlightRange={activeSectorRange}
+                        highlightCornerNums={activeCornerNums}
+                      />
+                    )}
+                    <div className="card p-0 overflow-hidden">
+                      <div className="px-4 py-3 border-b border-slate-700/50">
+                        <h3 className="text-white font-medium text-sm">Time Delta</h3>
+                        <p className="text-slate-500 text-xs mt-0.5">
+                          Green = you ahead · Red = you behind · Left-drag to zoom · scroll to zoom
+                        </p>
+                      </div>
+                      <SingleChart
+                        title=""
+                        yLabel="s"
+                        distances={displayReport.telemetry.distances}
+                        userValues={displayReport.telemetry.delta_ms}
+                        corners={displayReport.telemetry.corners}
+                        isDelta
+                        height={200}
+                        xRange={activeSectorRange}
+                        onHoverIndex={setHoverIdx}
+                      />
+                    </div>
                   </div>
                 )}
 
@@ -759,16 +967,28 @@ export default function ReportPage() {
                         </span>
                       </div>
                     )}
+
+                    {displayReport.driving_scores && (
+                      <TelemetryInsights
+                        scores={displayReport.driving_scores}
+                        isSolo={isSolo}
+                        selectedSector={selectedSector}
+                        sectorScores={displayReport.sector_scores}
+                      />
+                    )}
+
                     <TelemetryChart
-                      distances={report.telemetry.distances}
-                      userSpeed={report.telemetry.user_speed}
-                      refSpeed={report.telemetry.ref_speed}
-                      userThrottle={report.telemetry.user_throttle}
-                      refThrottle={report.telemetry.ref_throttle}
-                      userBrake={report.telemetry.user_brake}
-                      refBrake={report.telemetry.ref_brake}
-                      deltaMs={report.telemetry.delta_ms}
-                      corners={report.telemetry.corners}
+                      distances={displayReport.telemetry.distances}
+                      userSpeed={displayReport.telemetry.user_speed}
+                      refSpeed={displayReport.telemetry.ref_speed}
+                      userThrottle={displayReport.telemetry.user_throttle}
+                      refThrottle={displayReport.telemetry.ref_throttle}
+                      userBrake={displayReport.telemetry.user_brake}
+                      refBrake={displayReport.telemetry.ref_brake}
+                      userGear={displayReport.telemetry.user_gear}
+                      refGear={displayReport.telemetry.ref_gear}
+                      deltaMs={displayReport.telemetry.delta_ms}
+                      corners={displayReport.telemetry.corners}
                       onHoverIndex={setHoverIdx}
                       xRange={activeSectorRange}
                     />
@@ -779,24 +999,24 @@ export default function ReportPage() {
                   <div className="space-y-4">
                     {isSolo && (
                       <DeltaHeatmap
-                        distances={report.telemetry.distances}
-                        delta_ms={report.telemetry.delta_ms}
-                        corners={report.telemetry.corners}
+                        distances={displayReport.telemetry.distances}
+                        delta_ms={displayReport.telemetry.delta_ms}
+                        corners={displayReport.telemetry.corners}
                         isSolo={isSolo}
                         xRange={activeSectorRange}
                       />
                     )}
                     <HeatMap
-                      lat={report.telemetry.user_lat ?? []}
-                      lon={report.telemetry.user_lon ?? []}
-                      speed={report.telemetry.user_speed}
-                      refSpeed={report.telemetry.ref_speed}
-                      brake={report.telemetry.user_brake}
-                      refBrake={report.telemetry.ref_brake}
-                      throttle={report.telemetry.user_throttle}
-                      refThrottle={report.telemetry.ref_throttle}
+                      lat={displayReport.telemetry.user_lat ?? []}
+                      lon={displayReport.telemetry.user_lon ?? []}
+                      speed={displayReport.telemetry.user_speed}
+                      refSpeed={displayReport.telemetry.ref_speed}
+                      brake={displayReport.telemetry.user_brake}
+                      refBrake={displayReport.telemetry.ref_brake}
+                      throttle={displayReport.telemetry.user_throttle}
+                      refThrottle={displayReport.telemetry.ref_throttle}
                       xRange={activeSectorRange}
-                      distances={report.telemetry.distances}
+                      distances={displayReport.telemetry.distances}
                       isSolo={isSolo}
                     />
                   </div>
@@ -804,7 +1024,7 @@ export default function ReportPage() {
 
                 {activeTab === 'sectors' && (
                   <SectorDelta
-                    sectors={report.telemetry.sectors}
+                    sectors={displayReport.telemetry.sectors}
                     selectedSector={selectedSector}
                     onSectorClick={handleSectorClick}
                   />

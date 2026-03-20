@@ -22,7 +22,31 @@
       "Bash(mv system.txt system.md)",
       "Bash(mv user_prompt.txt user_prompt.md)",
       "Bash(mv solo_prompt.txt solo_prompt.md)",
-      "Bash(docker build:*)"
+      "Bash(docker build:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker restart:*)",
+      "Bash(find d:/Claude/telemetry-analyst/frontend/src -name types*)",
+      "Bash(find d:/Claude/telemetry-analyst/frontend/src -name *.ts)",
+      "Bash(xargs grep:*)",
+      "Bash(npm install:*)",
+      "Bash(cmd.exe /c \"cd d:\\\\Claude\\\\telemetry-analyst\\\\frontend && npm install\")",
+      "Bash(cmd.exe /c \"cd d:\\\\Claude\\\\telemetry-analyst\\\\frontend && npm install 2>&1\")",
+      "Bash(where node:*)",
+      "Bash(ls /usr/bin/node*)",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Users/igorg/AppData/Roaming/**)",
+      "Bash(cmd /c \"where npm 2>&1\")",
+      "Bash(cmd /c \"cd d:\\\\Claude\\\\telemetry-analyst\\\\frontend && npm install 2>&1\")",
+      "Bash(powershell -Command \"Set-Location ''d:\\\\Claude\\\\telemetry-analyst\\\\frontend''; npm install 2>&1 | Select-Object -Last 10\")",
+      "Bash(powershell -Command \"Get-Command node,npm -ErrorAction SilentlyContinue | Select-Object Name,Source\")",
+      "Bash(MSYS_NO_PATHCONV=1 docker run --rm -v \"d:/Claude/telemetry-analyst/frontend:/app\" -w /app node:20-alpine npm install)",
+      "Bash(ls d:/Claude/telemetry-analyst/docker-compose*.yml)",
+      "Bash(ls d:/Claude/telemetry-analyst/*.yml)",
+      "Bash(SHORT=\"rename-vs-reference\")",
+      "Bash(WORKTREE=\"d:/Claude/.tmp/$SHORT\")",
+      "Bash(git -C d:/Claude/telemetry-analyst checkout main)",
+      "Bash(git -C d:/Claude/telemetry-analyst pull)",
+      "Bash(git -C d:/Claude/telemetry-analyst worktree add \"$WORKTREE\" -b \"$SHORT\")"
     ]
   }
 }

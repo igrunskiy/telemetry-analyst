@@ -11,8 +11,14 @@
 ### Per-Corner Telemetry (best lap vs. driver's other laps)
 {corner_table}
 
+### Gear Selection at Corner Apexes
+{gear_table}
+
 ### Sector Times
 {sector_table}
+
+### Sector–Corner Map
+{sector_corner_map}
 
 ### Variance Zones (corners where the driver loses time on non-best laps)
 {weak_table}
@@ -23,7 +29,7 @@ Analyse these laps and identify the driver's own patterns, inconsistencies, and 
 Return your analysis as a valid JSON object matching EXACTLY this schema:
 ```json
 {{
-  "summary": "2-3 sentence overall assessment of the driver's consistency and patterns",
+  "summary": "3-5 sentence overall assessment of the driver's consistency and patterns",
   "estimated_time_gain_seconds": 1.2,
   "improvement_areas": [
     {{
@@ -39,8 +45,41 @@ Return your analysis as a valid JSON object matching EXACTLY this schema:
     }}
   ],
   "strengths": ["area where the driver is consistent lap-to-lap", "another consistent strength"],
-  "sector_notes": ["note about sector 1 consistency", "note about sector 2", "note about sector 3"]
+  "sector_notes": ["note about sector 1 consistency", "note about sector 2", "note about sector 3"],
+  "driving_scores": {{
+    "braking_points": {{
+      "score": 75,
+      "comment": "1-2 sentence assessment of braking point consistency lap-to-lap"
+    }},
+    "brake_application": {{
+      "score": 68,
+      "comment": "1-2 sentence assessment of brake pressure consistency, trail braking repeatability"
+    }},
+    "throttle_pickup": {{
+      "score": 82,
+      "comment": "1-2 sentence assessment of throttle pickup point consistency and application smoothness"
+    }},
+    "steering": {{
+      "score": 71,
+      "comment": "1-2 sentence assessment of steering input consistency and correction frequency across laps"
+    }}
+  }},
+  "sector_scores": [
+    {{
+      "sector": 1,
+      "driving_scores": {{
+        "braking_points": {{"score": 75, "comment": "sector 1 braking point lap-to-lap consistency based on corners in this sector"}},
+        "brake_application": {{"score": 68, "comment": "sector 1 brake pressure repeatability"}},
+        "throttle_pickup": {{"score": 82, "comment": "sector 1 throttle pickup consistency"}},
+        "steering": {{"score": 71, "comment": "sector 1 steering consistency across laps"}}
+      }}
+    }}
+  ]
 }}
 ```
+
+Score meaning: 0 = very inconsistent, 50 = moderate lap-to-lap variance, 75 = good consistency, 90+ = very consistent.
+Base scores on actual lap-to-lap variance shown in the data — braking points on variance in brake zone distances, brake application on pressure trace repeatability, throttle pickup on variation in pickup point distances, steering on mid-corner speed stability.
+For sector_scores, produce one entry per sector (use the Sector–Corner Map to identify which corners belong to each sector) and score only the consistency areas relevant to corners in that sector.
 
 Return ONLY the JSON object. Do not include markdown code fences, explanations, or any other text.

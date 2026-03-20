@@ -3,6 +3,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 COPY . .
+# Run tests — build fails if any test fails
+RUN npm run test
 RUN npm run build
 
 FROM nginx:alpine

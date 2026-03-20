@@ -64,6 +64,18 @@ export interface WeakZone {
   delta: number
 }
 
+export interface DrivingScoreItem {
+  score: number
+  comment: string
+}
+
+export interface DrivingScores {
+  braking_points: DrivingScoreItem
+  brake_application: DrivingScoreItem
+  throttle_pickup: DrivingScoreItem
+  steering: DrivingScoreItem
+}
+
 export interface ImprovementArea {
   rank: number
   title: string
@@ -99,12 +111,18 @@ export interface AnalysisReport {
   track_name: string
   analysis_mode?: 'vs_reference' | 'solo'
   created_at: string
+  status?: 'enqueued' | 'processing' | 'completed' | 'failed'
+  error_message?: string
   summary: string
   estimated_time_gain_seconds: number
   improvement_areas: ImprovementArea[]
   strengths: string[]
   sector_notes: string[]
+  driving_scores?: DrivingScores
+  sector_scores?: { sector: number; driving_scores: DrivingScores }[]
+  generation_time_s?: number
   laps_metadata?: LapMeta[]
+  share_token?: string | null
   telemetry: {
     distances: number[]
     user_speed: number[]
@@ -113,6 +131,8 @@ export interface AnalysisReport {
     ref_throttle: number[]
     user_brake: number[]
     ref_brake: number[]
+    user_gear?: number[]
+    ref_gear?: number[]
     delta_ms: number[]
     user_lat?: number[]
     user_lon?: number[]
@@ -132,4 +152,5 @@ export interface AnalysisHistoryItem {
   created_at: string
   estimated_time_gain_seconds: number | null
   analysis_mode?: 'vs_reference' | 'solo'
+  status?: string
 }
