@@ -439,7 +439,7 @@ export default function LapSelectorPage() {
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  vs Reference
+                  Reference
                 </button>
                 <button
                   onClick={() => handleModeChange('sessions')}
@@ -453,6 +453,12 @@ export default function LapSelectorPage() {
                 </button>
               </div>
             </div>
+
+            {analysisMode === 'vs_reference' && (
+              <p className="text-slate-500 text-xs -mt-2">
+                Pick any two laps to compare — your lap is measured against a reference lap of your choice.
+              </p>
+            )}
 
             {analysisMode === 'sessions' && (
               <p className="text-slate-500 text-xs -mt-2">
