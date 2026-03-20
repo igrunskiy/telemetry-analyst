@@ -46,14 +46,7 @@
       "Bash(WORKTREE=\"d:/Claude/.tmp/$SHORT\")",
       "Bash(git -C d:/Claude/telemetry-analyst checkout main)",
       "Bash(git -C d:/Claude/telemetry-analyst pull)",
-      "Bash(git -C d:/Claude/telemetry-analyst worktree add \"$WORKTREE\" -b \"$SHORT\")",
-      "Bash(docker network:*)",
-      "Bash(docker inspect:*)",
-      "Bash(netstat -ano)",
-      "Bash(findstr \":5432\")",
-      "Bash(tasklist /FI \"PID eq 20808\" /FO LIST)",
-      "Bash(powershell -Command \"Get-Process -Id 20808 | Select-Object Name, Id\")",
-      "Bash(docker stop:*)"
+      "Bash(git -C d:/Claude/telemetry-analyst worktree add \"$WORKTREE\" -b \"$SHORT\")"
     ]
   }
 }
