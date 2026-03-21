@@ -12,6 +12,12 @@ from app.auth.crypto import decrypt, encrypt
 from app.config import settings
 from app.auth.jwt import create_access_token, get_current_user
 from app.auth.oauth import exchange_code, get_authorization_url, get_user_info
+from app.auth.discord import (
+    exchange_discord_code,
+    get_discord_authorization_url,
+    get_discord_user_info,
+    get_discord_avatar_url,
+)
 from app.database import get_db
 from app.models.user import User
 
@@ -212,6 +218,101 @@ async def logout():
     """Log the user out (client should discard the access token)."""
     # With Bearer token auth, logout is client-side (discard the token)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/discord/login")
+async def discord_login():
+    """Initiate Discord OAuth2 flow."""
+    state = secrets.token_urlsafe(32)
+    auth_url = get_discord_authorization_url(state)
+    redirect = RedirectResponse(url=auth_url, status_code=status.HTTP_302_FOUND)
+    redirect.set_cookie(
+        key="discord_oauth_state",
+        value=state,
+        httponly=True,
+        samesite="lax",
+        max_age=600,
+        secure=False,
+    )
+    return redirect
+
+
+@router.get("/discord/callback")
+async def discord_callback(
+    request: Request,
+    code: str,
+    state: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Handle Discord OAuth2 callback: verify state, exchange code, upsert user, issue JWT."""
+    stored_state = request.cookies.get("discord_oauth_state")
+    if not stored_state or stored_state != state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid OAuth state parameter",
+        )
+
+    try:
+        token_data = await exchange_discord_code(code)
+    except Exception as e:
+        logger.error(f"Discord token exchange failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to exchange Discord code: {str(e)}",
+        )
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to obtain access token from Discord",
+        )
+
+    try:
+        discord_user = await get_discord_user_info(access_token)
+    except Exception as e:
+        logger.error(f"Failed to fetch Discord user info: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch Discord user info: {str(e)}",
+        )
+
+    discord_user_id = str(discord_user["id"])
+    display_name = discord_user.get("global_name") or discord_user.get("username", "Unknown")
+    avatar_url = get_discord_avatar_url(discord_user_id, discord_user.get("avatar"))
+
+    result = await db.execute(select(User).where(User.discord_user_id == discord_user_id))
+    user = result.scalar_one_or_none()
+
+    now = datetime.now(timezone.utc)
+    if user is None:
+        logger.info(f"Creating new Discord user: {discord_user_id}")
+        user = User(
+            discord_user_id=discord_user_id,
+            display_name=display_name,
+            avatar_url=avatar_url,
+            created_at=now,
+            last_login_at=now,
+        )
+        db.add(user)
+    else:
+        logger.info(f"Updating existing Discord user: {discord_user_id}")
+        user.display_name = display_name
+        user.avatar_url = avatar_url
+        user.last_login_at = now
+
+    await db.flush()
+    await db.refresh(user)
+    await db.commit()
+
+    jwt_token = create_access_token(user.id)
+
+    redirect = RedirectResponse(
+        url=f"/callback?access_token={jwt_token}",
+        status_code=status.HTTP_302_FOUND,
+    )
+    redirect.delete_cookie("discord_oauth_state")
+    return redirect
 
 
 @router.get("/me", response_model=UserMeResponse)
