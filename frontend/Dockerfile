@@ -1,11 +1,12 @@
 FROM node:20-alpine AS build
+ARG APP_VERSION=dev
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 COPY . .
 # Run tests — build fails if any test fails
 RUN npm run test
-RUN npm run build
+RUN VITE_APP_VERSION=$APP_VERSION npm run build
 
 FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
