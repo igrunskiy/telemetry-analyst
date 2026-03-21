@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 from app.analysis.llm import analyze_with_claude
+from app.analysis.gemini import analyze_with_gemini
 from app.analysis.processor import TelemetryProcessor
 from app.analysis.zones import detect_weak_zones
 from app.auth.crypto import decrypt
@@ -28,11 +29,12 @@ async def execute_analysis(
     track_name: str,
     analysis_mode: str,
     laps_metadata: list[dict] | None,
+    llm_provider: str = "claude",
     user: User,
     db,
 ) -> dict[str, Any]:
     """
-    Run the full telemetry → weak-zone → Claude pipeline and return the result dict.
+    Run the full telemetry → weak-zone → LLM pipeline and return the result dict.
     Raises ValueError or Exception on failure (caller decides how to surface errors).
     """
     # Build Garage61 client for this user
@@ -78,16 +80,27 @@ async def execute_analysis(
     # Weak zone detection
     weak_zones = detect_weak_zones(processed)
 
-    # Claude analysis
-    claude_key = decrypt(user.claude_api_key_enc) if user.claude_api_key_enc else ""
-    llm_result = await analyze_with_claude(
-        processed=processed,
-        weak_zones=weak_zones,
-        car_name=car_name,
-        track_name=track_name,
-        claude_api_key=claude_key,
-        analysis_mode=analysis_mode,
-    )
+    # LLM analysis — route to selected provider
+    if llm_provider == "gemini":
+        gemini_key = decrypt(user.gemini_api_key_enc) if user.gemini_api_key_enc else ""
+        llm_result = await analyze_with_gemini(
+            processed=processed,
+            weak_zones=weak_zones,
+            car_name=car_name,
+            track_name=track_name,
+            gemini_api_key=gemini_key,
+            analysis_mode=analysis_mode,
+        )
+    else:
+        claude_key = decrypt(user.claude_api_key_enc) if user.claude_api_key_enc else ""
+        llm_result = await analyze_with_claude(
+            processed=processed,
+            weak_zones=weak_zones,
+            car_name=car_name,
+            track_name=track_name,
+            claude_api_key=claude_key,
+            analysis_mode=analysis_mode,
+        )
 
     _generation_time_s = round(time.monotonic() - _t_start, 1)
 
@@ -124,6 +137,7 @@ async def execute_analysis(
         "car_name": car_name,
         "track_name": track_name,
         "analysis_mode": analysis_mode,
+        "llm_provider": llm_provider,
         "summary": llm_result.get("summary", ""),
         "estimated_time_gain_seconds": llm_result.get("estimated_time_gain_seconds"),
         "improvement_areas": llm_result.get("improvement_areas", []),

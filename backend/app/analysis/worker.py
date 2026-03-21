@@ -78,6 +78,7 @@ async def _process_job(job_id: uuid.UUID) -> None:
             input_data = job.input_json or {}
             analysis_mode = input_data.get("analysis_mode", "vs_reference")
             laps_metadata = input_data.get("laps_metadata")
+            llm_provider = input_data.get("llm_provider", "claude")
 
             result_json = await execute_analysis(
                 lap_id=job.lap_id,
@@ -86,6 +87,7 @@ async def _process_job(job_id: uuid.UUID) -> None:
                 track_name=job.track_name,
                 analysis_mode=analysis_mode,
                 laps_metadata=laps_metadata,
+                llm_provider=llm_provider,
                 user=user,
                 db=db,
             )

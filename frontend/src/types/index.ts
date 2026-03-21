@@ -3,6 +3,7 @@ export interface User {
   display_name: string
   avatar_url: string | null
   has_custom_claude_key: boolean
+  has_custom_gemini_key: boolean
 }
 
 export interface Car {
@@ -110,6 +111,7 @@ export interface AnalysisReport {
   car_name: string
   track_name: string
   analysis_mode?: 'vs_reference' | 'solo'
+  llm_provider?: 'claude' | 'gemini'
   created_at: string
   status?: 'enqueued' | 'processing' | 'completed' | 'failed'
   error_message?: string
