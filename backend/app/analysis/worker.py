@@ -299,6 +299,7 @@ async def _process_job(job_id: uuid.UUID) -> None:
             analysis_mode = input_data.get("analysis_mode", "vs_reference")
             laps_metadata = input_data.get("laps_metadata")
             llm_provider = input_data.get("llm_provider", "claude")
+            prompt_version = input_data.get("prompt_version")
 
             result_json = await execute_analysis(
                 lap_id=job.lap_id,
@@ -308,6 +309,7 @@ async def _process_job(job_id: uuid.UUID) -> None:
                 analysis_mode=analysis_mode,
                 laps_metadata=laps_metadata,
                 llm_provider=llm_provider,
+                prompt_version=prompt_version,
                 user=user,
                 db=db,
             )

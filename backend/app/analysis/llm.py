@@ -15,6 +15,7 @@ from typing import Any
 import anthropic
 
 from app.config import settings
+from app.analysis.prompts_manager import resolve_prompt
 
 # Model to use for analysis
 CLAUDE_MODEL = "claude-sonnet-4-6"
@@ -25,16 +26,16 @@ CLAUDE_MODEL = "claude-sonnet-4-6"
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
-_SYSTEM_PROMPT_PATH = _PROMPTS_DIR / "system.md"
-# Keep a module-level constant for backward compat (used by tests and gemini.py)
-SYSTEM_PROMPT = _SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
 _USER_PROMPT_TEMPLATE = (_PROMPTS_DIR / "user_prompt.md").read_text(encoding="utf-8")
 _SOLO_PROMPT_TEMPLATE = (_PROMPTS_DIR / "solo_prompt.md").read_text(encoding="utf-8")
 
+# Backward-compat constant (tests / other modules that import SYSTEM_PROMPT directly)
+SYSTEM_PROMPT = resolve_prompt(None, "claude")
 
-def get_system_prompt() -> str:
-    """Read the system prompt from disk each time — picks up admin edits without restart."""
-    return _SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
+
+def get_system_prompt(name: str | None = None) -> str:
+    """Return the system prompt for the given named version (or Claude's default)."""
+    return resolve_prompt(name, "claude")
 
 
 def _build_corner_table(processed: dict, weak_zones: list[dict]) -> str:
@@ -329,6 +330,7 @@ async def analyze_with_claude(
     track_name: str,
     claude_api_key: str,
     analysis_mode: str = "vs_reference",
+    prompt_version: str | None = None,
 ) -> dict:
     """
     Call Claude to produce a structured coaching analysis.
@@ -368,7 +370,7 @@ async def analyze_with_claude(
     message = await client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=settings.CLAUDE_MAX_TOKENS,
-        system=get_system_prompt(),
+        system=get_system_prompt(prompt_version),
         messages=[{"role": "user", "content": user_prompt}],
     )
 

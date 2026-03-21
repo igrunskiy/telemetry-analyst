@@ -1,0 +1,6 @@
+{
+  "defaults": {
+    "claude": "system",
+    "gemini": "system"
+  }
+}

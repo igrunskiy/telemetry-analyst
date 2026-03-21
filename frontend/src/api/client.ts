@@ -12,6 +12,8 @@ import type {
   AnalysisHistoryItem,
   WorkerStatus,
   DbHealth,
+  PromptMeta,
+  PromptsDefaults,
 } from '../types'
 
 const api = axios.create({
@@ -107,6 +109,7 @@ export async function runAnalysis(
   analysisMode: 'vs_reference' | 'solo' = 'vs_reference',
   lapsMetadata?: LapMeta[],
   llmProvider: 'claude' | 'gemini' = 'claude',
+  promptVersion?: string | null,
 ): Promise<AnalysisReport> {
   const { data } = await api.post<AnalysisReport>('/api/analysis/run', {
     lap_id: lapId,
@@ -116,6 +119,7 @@ export async function runAnalysis(
     analysis_mode: analysisMode,
     laps_metadata: lapsMetadata,
     llm_provider: llmProvider,
+    prompt_version: promptVersion ?? null,
   })
   return data
 }
@@ -203,13 +207,35 @@ export async function adminSaveConfig(content: string): Promise<void> {
   await api.put('/admin/config', { content })
 }
 
-export async function adminGetSystemPrompt(): Promise<string> {
-  const { data } = await api.get<{ content: string }>('/admin/system-prompt')
+export async function adminListPrompts(): Promise<PromptMeta[]> {
+  const { data } = await api.get<PromptMeta[]>('/admin/prompts')
+  return data
+}
+
+export async function adminGetPromptDefaults(): Promise<PromptsDefaults> {
+  const { data } = await api.get<PromptsDefaults>('/admin/prompts/defaults')
+  return data
+}
+
+export async function adminSetPromptDefaults(defaults: PromptsDefaults): Promise<void> {
+  await api.put('/admin/prompts/defaults', defaults)
+}
+
+export async function adminGetPrompt(name: string): Promise<string> {
+  const { data } = await api.get<{ name: string; content: string }>(`/admin/prompts/${name}`)
   return data.content
 }
 
-export async function adminSaveSystemPrompt(content: string): Promise<void> {
-  await api.put('/admin/system-prompt', { content })
+export async function adminCreatePrompt(name: string, content: string): Promise<void> {
+  await api.post('/admin/prompts', { name, content })
+}
+
+export async function adminSavePrompt(name: string, content: string): Promise<void> {
+  await api.put(`/admin/prompts/${name}`, { content })
+}
+
+export async function adminDeletePrompt(name: string): Promise<void> {
+  await api.delete(`/admin/prompts/${name}`)
 }
 
 export async function adminListReports(): Promise<AdminReport[]> {

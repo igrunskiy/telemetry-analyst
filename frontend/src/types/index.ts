@@ -199,6 +199,17 @@ export interface WorkerStatus {
   tasks: WorkerTask[]
 }
 
+export interface PromptMeta {
+  name: string
+  content: string
+  default_for: string[]
+}
+
+export interface PromptsDefaults {
+  claude: string
+  gemini: string
+}
+
 export interface AnalysisHistoryItem {
   id: string
   lap_id: string
