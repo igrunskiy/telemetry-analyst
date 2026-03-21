@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react'
+import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { useAuth } from './hooks/useAuth'
 import { OAuthCallback } from './components/OAuthCallback'
 import LoginPage from './pages/Login'
@@ -7,6 +9,21 @@ import LapSelectorPage from './pages/LapSelector'
 import ReportPage from './pages/Report'
 import ProfilePage from './pages/Profile'
 import AdminPage from './pages/Admin'
+
+function LogoutPage() {
+  const queryClient = useQueryClient()
+  useEffect(() => {
+    localStorage.removeItem('access_token')
+    queryClient.clear()
+    fetch('/auth/logout', { method: 'POST' }).catch(() => {})
+    window.location.replace('/login')
+  }, [queryClient])
+  return (
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+      <span className="text-slate-400 text-sm">Signing out…</span>
+    </div>
+  )
+}
 
 function ProtectedRoute({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth()
@@ -61,6 +78,7 @@ export default function App() {
     <>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/logout" element={<LogoutPage />} />
       <Route path="/callback" element={<OAuthCallback />} />
       <Route path="/" element={<Navigate to="/app" replace />} />
       <Route

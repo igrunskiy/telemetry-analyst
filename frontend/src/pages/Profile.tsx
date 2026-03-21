@@ -1,17 +1,26 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { ArrowLeft, Save, Key, User, CheckCircle, AlertCircle } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { ArrowLeft, Save, Key, User, CheckCircle, AlertCircle, Link2, Link2Off } from 'lucide-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../hooks/useAuth'
-import { updateClaudeKey, updateGeminiKey } from '../api/client'
+import { updateClaudeKey, updateGeminiKey, connectGarage61 } from '../api/client'
 
 export default function ProfilePage() {
   const { user } = useAuth()
   const queryClient = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [claudeKey, setClaudeKey] = useState('')
   const [claudeSaveSuccess, setClaudeSaveSuccess] = useState(false)
   const [geminiKey, setGeminiKey] = useState('')
   const [geminiSaveSuccess, setGeminiSaveSuccess] = useState(false)
+  const garage61JustConnected = searchParams.get('garage61') === 'connected'
+
+  useEffect(() => {
+    if (garage61JustConnected) {
+      queryClient.invalidateQueries({ queryKey: ['auth', 'me'] })
+      setSearchParams({}, { replace: true })
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const claudeMutation = useMutation({
     mutationFn: () => updateClaudeKey(claudeKey),
@@ -68,9 +77,6 @@ export default function ProfilePage() {
               <p className="text-white font-semibold text-lg">
                 {user?.display_name ?? '—'}
               </p>
-              <p className="text-slate-500 text-sm">
-                Connected via Garage61
-              </p>
               <div className="flex flex-wrap gap-1 mt-1">
                 {user?.has_custom_claude_key && (
                   <span className="inline-flex items-center gap-1 text-xs text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-full">
@@ -87,6 +93,44 @@ export default function ProfilePage() {
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Garage61 connection card */}
+        <div className="card">
+          <div className="flex items-center gap-2 mb-1">
+            {user?.has_garage61 ? (
+              <Link2 className="w-4 h-4 text-emerald-400" />
+            ) : (
+              <Link2Off className="w-4 h-4 text-slate-500" />
+            )}
+            <h2 className="text-white font-medium">Garage61 Connection</h2>
+          </div>
+
+          {garage61JustConnected && (
+            <div className="flex items-center gap-2 text-emerald-400 text-sm bg-emerald-400/10 border border-emerald-400/20 rounded-lg p-3 mb-3">
+              <CheckCircle className="w-4 h-4 flex-shrink-0" />
+              <span>Garage61 account connected successfully.</span>
+            </div>
+          )}
+
+          {user?.has_garage61 ? (
+            <p className="text-slate-400 text-sm">
+              Your Garage61 account is connected. You can browse and analyse your laps.
+            </p>
+          ) : (
+            <>
+              <p className="text-slate-500 text-sm mb-4">
+                Connect your Garage61 account to browse laps and run telemetry analysis.
+              </p>
+              <button
+                onClick={connectGarage61}
+                className="btn-primary flex items-center gap-2"
+              >
+                <Link2 className="w-4 h-4" />
+                Connect Garage61
+              </button>
+            </>
+          )}
         </div>
 
         {/* Claude API Key card */}

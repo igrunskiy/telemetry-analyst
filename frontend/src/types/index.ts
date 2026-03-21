@@ -4,6 +4,7 @@ export interface User {
   avatar_url: string | null
   has_custom_claude_key: boolean
   has_custom_gemini_key: boolean
+  has_garage61: boolean
   role: 'admin' | 'user'
 }
 

@@ -308,6 +308,11 @@ async def get_garage61_client(
     db: AsyncSession = Depends(get_db),
 ) -> Garage61Client:
     """Dependency that decrypts the user's Garage61 tokens and returns a client."""
+    if not current_user.access_token_enc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Garage61 not connected",
+        )
     access_token = decrypt(current_user.access_token_enc)
     refresh_token = (
         decrypt(current_user.refresh_token_enc)
