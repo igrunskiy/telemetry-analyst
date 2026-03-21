@@ -2,7 +2,7 @@ name: CI/CD
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
     tags: ["v*"]
   pull_request:
 
@@ -16,6 +16,25 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  open-pr:
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Open PR if none exists
+        run: |
+          EXISTING=$(gh pr list --head "${{ github.ref_name }}" --base main --repo "${{ github.repository }}" --json number --jq length)
+          if [ "$EXISTING" -eq 0 ]; then
+            gh pr create --head "${{ github.ref_name }}" --base main \
+              --title "${{ github.ref_name }}" \
+              --body "Automated PR for branch \`${{ github.ref_name }}\`" \
+              --repo "${{ github.repository }}"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   test-backend:
     runs-on: ubuntu-latest
     steps:
