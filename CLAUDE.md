@@ -2,7 +2,7 @@
 
 ## Session Workflow (MANDATORY)
 
-At the start of **every conversation that will make code changes**, follow these steps before touching any files:
+At the start of **every new session (new chat window)**, follow these steps before touching any files:
 
 ### 1. Derive a short session name
 

@@ -46,7 +46,10 @@
       "Bash(WORKTREE=\"d:/Claude/.tmp/$SHORT\")",
       "Bash(git -C d:/Claude/telemetry-analyst checkout main)",
       "Bash(git -C d:/Claude/telemetry-analyst pull)",
-      "Bash(git -C d:/Claude/telemetry-analyst worktree add \"$WORKTREE\" -b \"$SHORT\")"
+      "Bash(git -C d:/Claude/telemetry-analyst worktree add \"$WORKTREE\" -b \"$SHORT\")",
+      "Bash(ls d:/Claude/.tmp/telemetry-analyst_discord-auth/.env*)",
+      "Bash(docker stop:*)",
+      "Bash(docker rm:*)"
     ]
   }
 }
