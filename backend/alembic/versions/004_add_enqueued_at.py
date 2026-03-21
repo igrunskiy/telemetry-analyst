@@ -1,15 +1,15 @@
 """Add enqueued_at to analysis_results
 
-Revision ID: 003
-Revises: 001
+Revision ID: 004
+Revises: 003
 Create Date: 2026-03-21
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "003"
-down_revision = "001"
+revision = "004"
+down_revision = "003"
 branch_labels = None
 depends_on = None
 
