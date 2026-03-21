@@ -180,8 +180,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   deploy:
-    needs: [auto-merge]
-    if: github.event_name == 'pull_request'
+    needs: [build-backend, build-frontend, build-proxy]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
