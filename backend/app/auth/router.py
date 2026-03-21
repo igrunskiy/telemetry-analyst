@@ -2,6 +2,7 @@ import secrets
 import logging
 from datetime import datetime, timezone
 
+import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -32,6 +33,12 @@ class UserMeResponse(BaseModel):
     avatar_url: str | None
     has_custom_claude_key: bool
     has_custom_gemini_key: bool
+    role: str
+
+
+class LocalLoginRequest(BaseModel):
+    username: str
+    password: str
 
 
 async def _upsert_user_from_token(
@@ -214,6 +221,39 @@ async def callback(
     return redirect
 
 
+@router.post("/local/login")
+async def local_login(
+    body: LocalLoginRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Authenticate with username and password, returns a JWT."""
+    result = await db.execute(select(User).where(User.username == body.username))
+    user = result.scalar_one_or_none()
+
+    invalid = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid username or password",
+    )
+
+    if user is None or not user.password_hash:
+        raise invalid
+
+    if not bcrypt.checkpw(body.password.encode(), user.password_hash.encode()):
+        raise invalid
+
+    if user.is_suspended:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account suspended",
+        )
+
+    user.last_login_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    jwt_token = create_access_token(user.id)
+    return {"access_token": jwt_token, "token_type": "bearer"}
+
+
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout():
     """Log the user out (client should discard the access token)."""
@@ -325,4 +365,5 @@ async def me(current_user: User = Depends(get_current_user)) -> UserMeResponse:
         avatar_url=current_user.avatar_url,
         has_custom_claude_key=bool(current_user.claude_api_key_enc),
         has_custom_gemini_key=bool(current_user.gemini_api_key_enc),
+        role=current_user.role,
     )

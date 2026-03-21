@@ -45,3 +45,7 @@ class AnalysisResult(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Stores processing inputs needed by the worker: analysis_mode, laps_metadata
     input_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Timestamp of last enqueue (set on initial enqueue and on re-run)
+    enqueued_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

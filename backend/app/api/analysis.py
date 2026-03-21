@@ -55,6 +55,8 @@ class AnalysisHistoryItemResponse(BaseModel):
     estimated_time_gain_seconds: float | None
     analysis_mode: str = "vs_reference"
     status: str = "completed"
+    llm_provider: str | None = None
+    model_name: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -146,11 +148,11 @@ async def run_analysis(
 
     # ----- Queue size check -----
     active_count = await get_active_job_count(db)
-    if active_count >= settings.ANALYSIS_QUEUE_SIZE:
+    if active_count >= settings.ANALYSIS_WORKER_POOL_SIZE:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=(
-                f"Analysis queue is full ({active_count}/{settings.ANALYSIS_QUEUE_SIZE} active jobs). "
+                f"Analysis queue is full ({active_count}/{settings.ANALYSIS_WORKER_POOL_SIZE} active jobs). "
                 "Please wait for a slot to open up."
             ),
         )
@@ -159,6 +161,7 @@ async def run_analysis(
     laps_metadata = (
         [m.model_dump() for m in body.laps_metadata] if body.laps_metadata else None
     )
+    now = datetime.now(timezone.utc)
     record = AnalysisResult(
         user_id=current_user.id,
         lap_id=body.lap_id,
@@ -172,7 +175,8 @@ async def run_analysis(
             "laps_metadata": laps_metadata,
             "llm_provider": body.llm_provider,
         },
-        created_at=datetime.now(timezone.utc),
+        created_at=now,
+        enqueued_at=now,
     )
     db.add(record)
     await db.flush()
@@ -196,12 +200,11 @@ async def regenerate_analysis(
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID format")
 
-    result = await db.execute(
-        select(AnalysisResult).where(
-            AnalysisResult.id == uid,
-            AnalysisResult.user_id == current_user.id,
-        )
-    )
+    query = select(AnalysisResult).where(AnalysisResult.id == uid)
+    if current_user.role != "admin":
+        query = query.where(AnalysisResult.user_id == current_user.id)
+
+    result = await db.execute(query)
     record = result.scalar_one_or_none()
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not found")
@@ -213,10 +216,10 @@ async def regenerate_analysis(
         )
 
     active_count = await get_active_job_count(db)
-    if active_count >= settings.ANALYSIS_QUEUE_SIZE:
+    if active_count >= settings.ANALYSIS_WORKER_POOL_SIZE:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Analysis queue is full ({active_count}/{settings.ANALYSIS_QUEUE_SIZE} active jobs).",
+            detail=f"Analysis queue is full ({active_count}/{settings.ANALYSIS_WORKER_POOL_SIZE} active jobs).",
         )
 
     # Preserve input_json (analysis_mode + laps_metadata); backfill from result_json for old records
@@ -230,6 +233,7 @@ async def regenerate_analysis(
     record.status = "enqueued"
     record.result_json = {}
     record.error_message = None
+    record.enqueued_at = datetime.now(timezone.utc)
     await db.flush()
 
     return _enqueued_response(record)
@@ -266,6 +270,8 @@ async def get_history(
                 estimated_time_gain_seconds=rj.get("estimated_time_gain_seconds"),
                 analysis_mode=analysis_mode,
                 status=r.status,
+                llm_provider=input_data.get("llm_provider") or rj.get("llm_provider"),
+                model_name=rj.get("model_name"),
             )
         )
 
@@ -319,12 +325,12 @@ async def get_analysis(
             detail="Invalid analysis ID format",
         )
 
-    result = await db.execute(
-        select(AnalysisResult).where(
-            AnalysisResult.id == uid,
-            AnalysisResult.user_id == current_user.id,
-        )
-    )
+    query = select(AnalysisResult).where(AnalysisResult.id == uid)
+    # Admins can read any report; regular users only their own
+    if current_user.role != "admin":
+        query = query.where(AnalysisResult.user_id == current_user.id)
+
+    result = await db.execute(query)
     record = result.scalar_one_or_none()
 
     if record is None:

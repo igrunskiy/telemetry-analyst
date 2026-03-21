@@ -35,6 +35,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/app:/app/app
+      - ./.env:/app/.env
     ports:
       - "8000:8000"
       - "5678:5678"

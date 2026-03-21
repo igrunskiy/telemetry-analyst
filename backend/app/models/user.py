@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, DateTime
+from sqlalchemy import String, DateTime, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -18,6 +18,14 @@ class User(Base):
     )
     garage61_user_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True, index=True)
     discord_user_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True, index=True)
+    # Local auth fields
+    username: Mapped[str | None] = mapped_column(String, unique=True, nullable=True, index=True)
+    password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    email: Mapped[str | None] = mapped_column(String, unique=True, nullable=True, index=True)
+    # Role and access control
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="user")
+    is_suspended: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     display_name: Mapped[str] = mapped_column(String, nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(String, nullable=True)
     access_token_enc: Mapped[str | None] = mapped_column(String, nullable=True)

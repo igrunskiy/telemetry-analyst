@@ -15,7 +15,7 @@ from google.genai import types
 
 from app.config import settings
 from app.analysis.llm import (
-    SYSTEM_PROMPT,
+    get_system_prompt,
     _build_user_prompt,
     _build_solo_prompt,
 )
@@ -55,8 +55,8 @@ async def analyze_with_gemini(
         model=GEMINI_MODEL,
         contents=user_prompt,
         config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            max_output_tokens=8192,
+            system_instruction=get_system_prompt(),
+            max_output_tokens=settings.GEMINI_MAX_TOKENS,
         ),
     )
 

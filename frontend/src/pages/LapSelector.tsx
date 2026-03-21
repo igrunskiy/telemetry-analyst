@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { LogOut, User, ChevronRight, Clock, Calendar, Loader2, Car, MapPin, BarChart2, Trash2, Zap, ExternalLink, PlusCircle, Activity, History } from 'lucide-react'
+import { LogOut, User, ChevronRight, Clock, Calendar, Loader2, Car, MapPin, BarChart2, Trash2, Zap, ExternalLink, PlusCircle, Activity, History, Shield } from 'lucide-react'
 import { ThemeToggle } from '../components/ThemeToggle'
 import { useAuth } from '../hooks/useAuth'
 import {
@@ -129,6 +129,7 @@ export default function LapSelectorPage() {
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null)
   const [selectedLapId, setSelectedLapId] = useState<string | null>(null)
   const [selectedRefIds, setSelectedRefIds] = useState<Set<string>>(new Set())
+  const [refLapLimit, setRefLapLimit] = useState(5)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null)
   const [myLapsLimit, setMyLapsLimit] = useState(10)
@@ -166,10 +167,9 @@ export default function LapSelectorPage() {
   })
 
   const { data: refLaps = [], isLoading: refLapsLoading } = useQuery({
-    queryKey: ['refLaps', selectedCarId, selectedTrackId],
-    queryFn: () => getReferenceLaps(selectedCarId!, selectedTrackId!),
+    queryKey: ['refLaps', selectedCarId, selectedTrackId, refLapLimit],
+    queryFn: () => getReferenceLaps(selectedCarId!, selectedTrackId!, refLapLimit),
     enabled: selectedCarId !== null && selectedTrackId !== null,
-    select: (laps) => laps.slice(0, 5),
   })
 
   const { data: history = [], isLoading: historyLoading } = useQuery({
@@ -216,7 +216,7 @@ export default function LapSelectorPage() {
   const historyTotalPages = Math.ceil(filteredHistory.length / HISTORY_PAGE_SIZE)
   const pagedHistory = filteredHistory.slice(historyPage * HISTORY_PAGE_SIZE, (historyPage + 1) * HISTORY_PAGE_SIZE)
 
-  // Auto-select top 5 reference laps when they load
+  // Auto-select all fetched reference laps when they load
   useEffect(() => {
     if (refLaps.length > 0) {
       setSelectedRefIds(new Set(refLaps.map((l) => l.id)))
@@ -373,6 +373,16 @@ export default function LapSelectorPage() {
             <span className="font-semibold text-white text-sm">Telemetry Analyst</span>
           </div>
           <div className="flex items-center gap-2">
+            {user?.role === 'admin' && (
+              <Link
+                to="/admin"
+                title="Admin Panel"
+                className="flex items-center gap-1.5 text-amber-400 hover:text-amber-300 transition-colors text-sm px-2 py-1 rounded-lg hover:bg-slate-700"
+              >
+                <Shield className="w-4 h-4" />
+                <span className="hidden sm:inline text-xs font-medium">Admin</span>
+              </Link>
+            )}
             {user && (
               <Link
                 to="/profile"
@@ -772,8 +782,42 @@ export default function LapSelectorPage() {
                     4
                   </div>
                   <span className="text-white font-medium text-sm">Reference Laps</span>
-                  <span className="text-slate-500 text-xs">(Top 5 fastest)</span>
+                  <span className="text-slate-500 text-xs">(Top {refLapLimit} fastest)</span>
+                  <div className="ml-auto flex items-center gap-1">
+                    {[5, 10, 15, 20].map((n) => (
+                      <button
+                        key={n}
+                        onClick={() => setRefLapLimit(n)}
+                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          refLapLimit === n
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                            : 'text-slate-500 hover:text-slate-300 border border-transparent'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+
+                {!refLapsLoading && refLaps.length > 0 && (
+                  <div className="flex items-center gap-2 mb-2">
+                    <button
+                      onClick={() => setSelectedRefIds(new Set(refLaps.map((l: Lap) => l.id)))}
+                      className="text-xs text-slate-400 hover:text-white transition-colors"
+                    >
+                      Select all
+                    </button>
+                    <span className="text-slate-700">·</span>
+                    <button
+                      onClick={() => setSelectedRefIds(new Set())}
+                      className="text-xs text-slate-400 hover:text-white transition-colors"
+                    >
+                      Unselect all
+                    </button>
+                    <span className="text-slate-600 text-xs ml-auto">{selectedRefIds.size} selected</span>
+                  </div>
+                )}
 
                 {refLapsLoading ? (
                   <div className="space-y-2">
@@ -1099,6 +1143,14 @@ export default function LapSelectorPage() {
                               )}
                               <span className="text-slate-600">·</span>
                               <span className="text-slate-600">{formatDateTime(item.created_at)}</span>
+                              {(item.model_name || item.llm_provider) && (
+                                <>
+                                  <span className="text-slate-600">·</span>
+                                  <span className="font-mono text-amber-400/70 bg-amber-400/10 px-1.5 py-0.5 rounded text-xs">
+                                    {item.model_name ?? item.llm_provider}
+                                  </span>
+                                </>
+                              )}
                             </div>
                           </div>
                           <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-amber-500 flex-shrink-0 transition-colors" />

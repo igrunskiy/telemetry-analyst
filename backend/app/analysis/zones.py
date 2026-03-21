@@ -7,9 +7,12 @@ where the user is losing time relative to the best reference lap.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +81,10 @@ def detect_weak_zones(processed: dict) -> list[dict]:
     ref_laps: list[dict] = processed.get("reference_laps", [])
 
     if not ref_laps:
+        logger.debug("No reference laps available, skipping weak zone detection")
         return []
+
+    logger.info("detect_weak_zones: analysing %d corners", len(corners))
 
     best_ref = ref_laps[0]
     dist_grid: list[float] = delta.get("dist") or user_lap.get("dist") or []
@@ -115,12 +121,14 @@ def detect_weak_zones(processed: dict) -> list[dict]:
             apex_delta = r_apex - u_apex  # positive = user slower
 
             if apex_delta >= abs(CORNER_SPEED_WEAK_THRESHOLD):
+                sev = _severity(apex_delta, 2.0, 6.0)
+                logger.debug("T%d corner_speed [%s]: user=%.1f ref=%.1f delta=%.1f km/h", c_num, sev, u_apex, r_apex, apex_delta)
                 zones.append(
                     {
                         "zone_type": "corner_speed",
                         "corner_num": c_num,
                         "dist": d_apex,
-                        "severity": _severity(apex_delta, 2.0, 6.0),
+                        "severity": sev,
                         "metric": "Min corner speed",
                         "user_value": round(u_apex, 1),
                         "ref_value": round(r_apex, 1),
@@ -142,12 +150,14 @@ def detect_weak_zones(processed: dict) -> list[dict]:
                 # Negative = user brakes earlier (smaller dist = earlier braking)
                 brake_gap = r_brake_onset - u_brake_onset  # negative = user brakes earlier
                 if brake_gap < -BRAKE_GAP_THRESHOLD_M:
+                    sev = _severity(abs(brake_gap), BRAKE_GAP_THRESHOLD_M, BRAKE_GAP_THRESHOLD_M * 3)
+                    logger.debug("T%d braking_point [%s]: user=%.0fm ref=%.0fm gap=%.0fm (braking early)", c_num, sev, u_brake_onset, r_brake_onset, abs(brake_gap))
                     zones.append(
                         {
                             "zone_type": "braking_point",
                             "corner_num": c_num,
                             "dist": u_brake_onset,
-                            "severity": _severity(abs(brake_gap), BRAKE_GAP_THRESHOLD_M, BRAKE_GAP_THRESHOLD_M * 3),
+                            "severity": sev,
                             "metric": "Braking point (m)",
                             "user_value": round(u_brake_onset, 1),
                             "ref_value": round(r_brake_onset, 1),
@@ -167,12 +177,14 @@ def detect_weak_zones(processed: dict) -> list[dict]:
         if u_throttle_onset is not None and r_throttle_onset is not None:
             throttle_gap = u_throttle_onset - r_throttle_onset  # positive = user later
             if throttle_gap > THROTTLE_GAP_THRESHOLD_M:
+                sev = _severity(throttle_gap, THROTTLE_GAP_THRESHOLD_M, THROTTLE_GAP_THRESHOLD_M * 3)
+                logger.debug("T%d throttle_pickup [%s]: user=%.0fm ref=%.0fm gap=%.0fm (late throttle)", c_num, sev, u_throttle_onset, r_throttle_onset, throttle_gap)
                 zones.append(
                     {
                         "zone_type": "throttle_pickup",
                         "corner_num": c_num,
                         "dist": r_throttle_onset,
-                        "severity": _severity(throttle_gap, THROTTLE_GAP_THRESHOLD_M, THROTTLE_GAP_THRESHOLD_M * 3),
+                        "severity": sev,
                         "metric": "Throttle pickup point (m)",
                         "user_value": round(u_throttle_onset, 1),
                         "ref_value": round(r_throttle_onset, 1),
@@ -190,12 +202,14 @@ def detect_weak_zones(processed: dict) -> list[dict]:
             exit_delta = r_exit - u_exit  # positive = user slower
 
             if exit_delta >= 3.0:
+                sev = _severity(exit_delta, 3.0, 8.0)
+                logger.debug("T%d exit_speed [%s]: user=%.1f ref=%.1f delta=%.1f km/h", c_num, sev, u_exit, r_exit, exit_delta)
                 zones.append(
                     {
                         "zone_type": "exit_speed",
                         "corner_num": c_num,
                         "dist": d_end,
-                        "severity": _severity(exit_delta, 3.0, 8.0),
+                        "severity": sev,
                         "metric": "Corner exit speed",
                         "user_value": round(u_exit, 1),
                         "ref_value": round(r_exit, 1),
@@ -220,12 +234,14 @@ def detect_weak_zones(processed: dict) -> list[dict]:
                 s_delta = r_max - u_max  # positive = user slower on straight
 
                 if s_delta >= abs(STRAIGHT_SPEED_THRESHOLD):
+                    sev = _severity(s_delta, 3.0, 10.0)
+                    logger.debug("straight_speed [%s] at %.0f-%.0fm: user=%.1f ref=%.1f delta=%.1f km/h", sev, s_start, s_end, u_max, r_max, s_delta)
                     zones.append(
                         {
                             "zone_type": "straight_speed",
                             "corner_num": None,
                             "dist": (s_start + s_end) / 2,
-                            "severity": _severity(s_delta, 3.0, 10.0),
+                            "severity": sev,
                             "metric": "Straight top speed",
                             "user_value": round(u_max, 1),
                             "ref_value": round(r_max, 1),
@@ -241,6 +257,11 @@ def detect_weak_zones(processed: dict) -> list[dict]:
         key=lambda z: (severity_rank.get(z["severity"], 0), abs(z["delta"])),
         reverse=True,
     )
+
+    by_type: dict[str, int] = {}
+    for z in zones:
+        by_type[z["zone_type"]] = by_type.get(z["zone_type"], 0) + 1
+    logger.info("detect_weak_zones done: %d zones total — %s", len(zones), by_type)
 
     return zones
 
