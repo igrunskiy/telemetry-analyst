@@ -816,7 +816,7 @@ function ReportRow({ r }: { r: AdminReport }) {
                     Failed
                   </span>
                 )}
-                <span className="text-white font-medium text-sm truncate">{r.car_name}</span>
+                <span className="text-amber-400 font-semibold text-sm truncate">{r.car_name}</span>
                 <span className="text-slate-500 text-xs">@</span>
                 <span className="text-slate-300 text-sm truncate">{r.track_name}</span>
               </div>
