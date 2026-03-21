@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     GARAGE61_API_BASE: str = "https://garage61.net/api/v1"
     GARAGE61_PERSONAL_TOKEN: str = ""
     CLAUDE_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""
     ENCRYPTION_KEY: str
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_HOURS: int = 168  # 1 week

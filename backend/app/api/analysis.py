@@ -42,6 +42,7 @@ class RunAnalysisRequest(BaseModel):
     track_name: str
     analysis_mode: str = "vs_reference"  # "vs_reference" or "solo"
     laps_metadata: list[LapMetaInput] | None = None
+    llm_provider: str = "claude"  # "claude" or "gemini"
 
 
 class AnalysisHistoryItemResponse(BaseModel):
@@ -169,6 +170,7 @@ async def run_analysis(
         input_json={
             "analysis_mode": body.analysis_mode,
             "laps_metadata": laps_metadata,
+            "llm_provider": body.llm_provider,
         },
         created_at=datetime.now(timezone.utc),
     )

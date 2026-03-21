@@ -25,6 +25,7 @@ class UserMeResponse(BaseModel):
     display_name: str
     avatar_url: str | None
     has_custom_claude_key: bool
+    has_custom_gemini_key: bool
 
 
 async def _upsert_user_from_token(
@@ -222,4 +223,5 @@ async def me(current_user: User = Depends(get_current_user)) -> UserMeResponse:
         display_name=current_user.display_name,
         avatar_url=current_user.avatar_url,
         has_custom_claude_key=bool(current_user.claude_api_key_enc),
+        has_custom_gemini_key=bool(current_user.gemini_api_key_enc),
     )
