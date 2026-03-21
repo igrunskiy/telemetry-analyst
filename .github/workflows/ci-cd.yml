@@ -175,7 +175,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Merge PR into main
-        run: gh pr merge "${{ github.event.pull_request.number }}" --squash --delete-branch --repo "${{ github.repository }}"
+        run: gh pr merge "${{ github.event.pull_request.number }}" --squash --repo "${{ github.repository }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

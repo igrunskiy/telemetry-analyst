@@ -40,26 +40,39 @@ if settings.ENABLE_REMOTE_DEBUG:
 
 
 async def _seed_default_admin(conn) -> None:
-    """Create the default admin account if it doesn't exist yet."""
+    """Create the default admin and user accounts if they don't exist yet."""
     import bcrypt
     from sqlalchemy import text as t
+
+    now = datetime.now(timezone.utc)
 
     result = await conn.execute(
         t("SELECT id FROM users WHERE username = 'admin' LIMIT 1")
     )
-    if result.fetchone() is not None:
-        return  # Already exists
+    if result.fetchone() is None:
+        password_hash = bcrypt.hashpw(b"admin-s3cr3t", bcrypt.gensalt()).decode()
+        await conn.execute(
+            t(
+                "INSERT INTO users (id, username, password_hash, display_name, role, is_suspended, created_at, last_login_at) "
+                "VALUES (gen_random_uuid(), 'admin', :pw, 'Administrator', 'admin', false, :now, :now)"
+            ),
+            {"pw": password_hash, "now": now},
+        )
+        logging.getLogger(__name__).info("Default admin account created (username: admin)")
 
-    password_hash = bcrypt.hashpw(b"admin-s3cr3t", bcrypt.gensalt()).decode()
-    now = datetime.now(timezone.utc)
-    await conn.execute(
-        t(
-            "INSERT INTO users (id, username, password_hash, display_name, role, is_suspended, created_at, last_login_at) "
-            "VALUES (gen_random_uuid(), 'admin', :pw, 'Administrator', 'admin', false, :now, :now)"
-        ),
-        {"pw": password_hash, "now": now},
+    result = await conn.execute(
+        t("SELECT id FROM users WHERE username = 'user' LIMIT 1")
     )
-    logging.getLogger(__name__).info("Default admin account created (username: admin)")
+    if result.fetchone() is None:
+        password_hash = bcrypt.hashpw(b"user", bcrypt.gensalt()).decode()
+        await conn.execute(
+            t(
+                "INSERT INTO users (id, username, password_hash, display_name, role, is_suspended, created_at, last_login_at) "
+                "VALUES (gen_random_uuid(), 'user', :pw, 'User', 'user', false, :now, :now)"
+            ),
+            {"pw": password_hash, "now": now},
+        )
+        logging.getLogger(__name__).info("Default user account created (username: user)")
 
 
 @asynccontextmanager
