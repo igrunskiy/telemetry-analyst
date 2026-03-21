@@ -192,6 +192,7 @@ jobs:
           key: ${{ secrets.GCP_SSH_KEY }}
           script: |
             set -e
+            export DOCKER_CONFIG=$(mktemp -d)
             echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
             cd /opt/telemetry-analyst
             git pull origin main
