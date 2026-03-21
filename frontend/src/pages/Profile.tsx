@@ -114,9 +114,18 @@ export default function ProfilePage() {
           )}
 
           {user?.has_garage61 ? (
-            <p className="text-slate-400 text-sm">
-              Your Garage61 account is connected. You can browse and analyse your laps.
-            </p>
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-slate-400 text-sm">
+                Your Garage61 account is connected. You can browse and analyse your laps.
+              </p>
+              <button
+                onClick={connectGarage61}
+                className="btn-secondary flex-shrink-0 flex items-center gap-2"
+              >
+                <Link2 className="w-4 h-4" />
+                Reconnect
+              </button>
+            </div>
           ) : (
             <>
               <p className="text-slate-500 text-sm mb-4">
