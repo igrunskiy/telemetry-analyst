@@ -124,6 +124,7 @@ export default function LapSelectorPage() {
   const { user } = useAuth()
 
   const [analysisMode, setAnalysisMode] = useState<'vs_reference' | 'sessions'>('vs_reference')
+  const [llmModel, setLlmModel] = useState<'claude' | 'gemini'>('claude')
   const [selectedCarId, setSelectedCarId] = useState<number | null>(null)
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null)
   const [selectedLapId, setSelectedLapId] = useState<string | null>(null)
@@ -305,7 +306,7 @@ export default function LapSelectorPage() {
           { id: primary.id, role: 'user' as const, driver_name: primary.driver_name, lap_time: parseLapTime(primary.lap_time) },
           ...rest.map((l) => ({ id: l.id, role: 'reference' as const, driver_name: l.driver_name, lap_time: parseLapTime(l.lap_time) })),
         ]
-        return runAnalysis(primary.id, rest.map((l) => l.id), primary.car_name, primary.track_name, 'solo', lapsMetadata)
+        return runAnalysis(primary.id, rest.map((l) => l.id), primary.car_name, primary.track_name, 'solo', lapsMetadata, llmModel)
       } else {
         const lap = myLaps.find((l) => l.id === selectedLapId)!
         const lapsMetadata = [
@@ -322,6 +323,7 @@ export default function LapSelectorPage() {
           lap.track_name,
           'vs_reference',
           lapsMetadata,
+          llmModel,
         )
       }
     },
@@ -823,6 +825,42 @@ export default function LapSelectorPage() {
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Model Selector */}
+            {selectedCarId && selectedTrackId && (
+              <div className="flex rounded-xl overflow-hidden border border-slate-600">
+                <button
+                  onClick={() => setLlmModel('claude')}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium transition-colors ${
+                    llmModel === 'claude'
+                      ? 'bg-amber-500 text-slate-900'
+                      : 'bg-slate-700 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {/* Anthropic diamond icon */}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M13.827 3.52h3.603L12 20.48 6.57 3.52h3.602l1.828 6.318z"/>
+                    <path d="M6.396 3.52H2.793L8.222 20.48h3.603z" opacity=".6"/>
+                  </svg>
+                  Claude
+                </button>
+                <button
+                  onClick={() => setLlmModel('gemini')}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium transition-colors ${
+                    llmModel === 'gemini'
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-slate-700 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {/* Gemini star icon */}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
+                    <path d="M12 2a10 10 0 0 0 0 20A10 10 0 0 0 12 2zm0 2c.89 0 1.73.16 2.5.45L12 12 9.5 4.45C10.27 4.16 11.11 4 12 4zm-4.24 1.28L12 12 4.45 9.5A7.95 7.95 0 0 1 7.76 5.28zm-3.31 4.22L12 12 4 12a8 8 0 0 1 .45-2.5zM4 12h8l-7.55 2.5A7.95 7.95 0 0 1 4 12zm3.76 6.72L12 12l-4.24 6.72A7.95 7.95 0 0 1 7.76 18.72zM12 20c-.89 0-1.73-.16-2.5-.45L12 12l2.5 7.55C13.73 19.84 12.89 20 12 20zm4.24-1.28L12 12l7.55 2.5a7.95 7.95 0 0 1-3.31 4.22zm3.31-4.22L12 12h8c0 .89-.16 1.73-.45 2.5zM20 12h-8l7.55-2.5c.29.77.45 1.61.45 2.5zm-3.76-6.72L12 12l4.24-6.72a7.95 7.95 0 0 1 3.31 4.22z" opacity=".4"/>
+                  </svg>
+                  Gemini
+                </button>
               </div>
             )}
 

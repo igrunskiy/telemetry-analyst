@@ -102,6 +102,7 @@ export async function runAnalysis(
   trackName: string,
   analysisMode: 'vs_reference' | 'solo' = 'vs_reference',
   lapsMetadata?: LapMeta[],
+  llmProvider: 'claude' | 'gemini' = 'claude',
 ): Promise<AnalysisReport> {
   const { data } = await api.post<AnalysisReport>('/api/analysis/run', {
     lap_id: lapId,
@@ -110,6 +111,7 @@ export async function runAnalysis(
     track_name: trackName,
     analysis_mode: analysisMode,
     laps_metadata: lapsMetadata,
+    llm_provider: llmProvider,
   })
   return data
 }
@@ -148,6 +150,10 @@ export async function getSharedAnalysis(shareToken: string): Promise<AnalysisRep
 
 export async function updateClaudeKey(apiKey: string): Promise<void> {
   await api.put('/api/profile/claude-key', { api_key: apiKey })
+}
+
+export async function updateGeminiKey(apiKey: string): Promise<void> {
+  await api.put('/api/profile/gemini-key', { api_key: apiKey })
 }
 
 export async function logout(): Promise<void> {
