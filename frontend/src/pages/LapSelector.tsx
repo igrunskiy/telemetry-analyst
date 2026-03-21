@@ -979,7 +979,7 @@ export default function LapSelectorPage() {
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 text-sm">
                               <Car className="w-4 h-4 text-slate-500" />
-                              <span className="text-white truncate">{lap.car_name}</span>
+                              <span className="text-amber-400 font-semibold truncate">{lap.car_name}</span>
                             </div>
                             <div className="flex items-center gap-2 text-sm mt-1">
                               <MapPin className="w-4 h-4 text-slate-500" />
@@ -1097,7 +1097,7 @@ export default function LapSelectorPage() {
                                   Failed
                                 </span>
                               )}
-                              <span className="text-white font-medium text-sm truncate">
+                              <span className="text-amber-400 font-semibold text-sm truncate">
                                 {item.car_name}
                               </span>
                               <span className="text-slate-500 text-xs">@</span>

@@ -438,7 +438,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
               </div>
               {report ? (
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-white font-medium text-sm truncate">
+                  <span className="text-amber-400 font-semibold text-sm truncate">
                     {report.car_name}
                   </span>
                   <span className="text-slate-500 text-xs hidden sm:inline">@</span>

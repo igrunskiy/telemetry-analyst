@@ -52,7 +52,7 @@ function cornerAnnotations(corners: Corner[], y: number, yref: 'y' | 'y2' | 'y3'
     x: c.dist_apex,
     y,
     yref,
-    text: `C${c.corner_num}`,
+    text: `T${c.corner_num}`,
     showarrow: false,
     font: { size: 9, color: '#fbbf24' },
     bgcolor: 'rgba(15,23,42,0.7)',

@@ -54,8 +54,11 @@ function AdminRoute({ children }: { children: ReactNode }) {
   return <>{children}</>
 }
 
+const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? 'dev'
+
 export default function App() {
   return (
+    <>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/callback" element={<OAuthCallback />} />
@@ -96,5 +99,9 @@ export default function App() {
       {/* Catch-all: redirect to app */}
       <Route path="*" element={<Navigate to="/app" replace />} />
     </Routes>
+    <div className="fixed bottom-2 right-3 text-slate-600 text-xs pointer-events-none select-none">
+      v{APP_VERSION}
+    </div>
+    </>
   )
 }
