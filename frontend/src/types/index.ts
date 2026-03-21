@@ -4,6 +4,20 @@ export interface User {
   avatar_url: string | null
   has_custom_claude_key: boolean
   has_custom_gemini_key: boolean
+  role: 'admin' | 'user'
+}
+
+export interface AdminUser {
+  id: string
+  display_name: string
+  username: string | null
+  email: string | null
+  role: 'admin' | 'user'
+  is_suspended: boolean
+  garage61_user_id: string | null
+  discord_user_id: string | null
+  created_at: string
+  last_login_at: string
 }
 
 export interface Car {
@@ -112,6 +126,7 @@ export interface AnalysisReport {
   track_name: string
   analysis_mode?: 'vs_reference' | 'solo'
   llm_provider?: 'claude' | 'gemini'
+  model_name?: string
   created_at: string
   status?: 'enqueued' | 'processing' | 'completed' | 'failed'
   error_message?: string
@@ -145,6 +160,45 @@ export interface AnalysisReport {
   }
 }
 
+export interface AdminReport {
+  id: string
+  user_id: string
+  username: string | null
+  display_name: string
+  car_name: string
+  track_name: string
+  analysis_mode: string
+  status: string
+  llm_provider?: string
+  model_name?: string
+  created_at: string
+  enqueued_at?: string | null
+  error_message?: string | null
+}
+
+export interface DbHealth {
+  ok: boolean
+  latency_ms: number
+  error?: string | null
+  total_users?: number
+  total_analyses?: number
+  analyses_by_status?: Record<string, number>
+}
+
+export interface WorkerTask {
+  job_id: string
+  started_at: string
+  elapsed_seconds: number
+  timeout_seconds: number
+}
+
+export interface WorkerStatus {
+  pool_size: number
+  active_workers: number
+  queue_depth: number
+  tasks: WorkerTask[]
+}
+
 export interface AnalysisHistoryItem {
   id: string
   lap_id: string
@@ -155,4 +209,6 @@ export interface AnalysisHistoryItem {
   estimated_time_gain_seconds: number | null
   analysis_mode?: 'vs_reference' | 'solo'
   status?: string
+  llm_provider?: 'claude' | 'gemini'
+  model_name?: string
 }

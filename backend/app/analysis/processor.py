@@ -11,10 +11,13 @@ Handles:
 from __future__ import annotations
 
 import io
+import logging
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Column name normalisation
@@ -77,6 +80,7 @@ class TelemetryProcessor:
         except Exception as exc:
             raise ValueError(f"Failed to parse telemetry CSV: {exc}") from exc
 
+        logger.debug("Raw CSV parsed: %d rows, %d columns: %s", len(df), len(df.columns), list(df.columns))
         df = _rename_columns(df)
 
         if df.empty:
@@ -96,9 +100,12 @@ class TelemetryProcessor:
         # iRacing exports Speed in m/s. Convert to km/h if max < 130
         # (no race car exceeds 130 m/s = 468 km/h, but all exceed 130 km/h).
         if "Speed" in df.columns and df["Speed"].max() < 130:
+            logger.debug("Speed appears to be in m/s (max=%.1f), converting to km/h", df["Speed"].max())
             df["Speed"] = df["Speed"] * 3.6
 
         df = df.dropna(subset=["LapDistPct"])
+        available = [c for c in ["Speed", "Throttle", "Brake", "Gear", "RPM", "Lat", "Lon"] if c in df.columns]
+        logger.debug("CSV parsed OK: %d samples, columns resolved: %s", len(df), available)
         return df
 
     # ------------------------------------------------------------------
@@ -116,7 +123,9 @@ class TelemetryProcessor:
         """
         raw_max = float(df["LapDistPct"].max())
         if raw_max > 500:
+            logger.debug("Track length detected from LapDist column: %.0fm", raw_max)
             return raw_max
+        logger.debug("LapDistPct is 0-1 scale (max=%.3f), using default track length %.0fm", raw_max, DEFAULT_TRACK_LENGTH_M)
         return DEFAULT_TRACK_LENGTH_M
 
     # ------------------------------------------------------------------
@@ -220,6 +229,7 @@ class TelemetryProcessor:
         # Find local minima with a minimum prominence
         minima_indices = _find_local_minima(smoothed, min_gap=len(speed) // 40)
 
+        logger.debug("Corner detection: smoothing window=%d, found %d speed minima", window, len(minima_indices))
         corners = []
         for i, apex_idx in enumerate(minima_indices):
             apex_dist = float(dist[apex_idx])
@@ -241,6 +251,7 @@ class TelemetryProcessor:
                 }
             )
 
+        logger.debug("Identified %d corners", len(corners))
         return corners
 
     # ------------------------------------------------------------------
@@ -277,6 +288,8 @@ class TelemetryProcessor:
         ref_dt = dDist * lap_distance_m / ref_speed_ms
 
         delta_ms = np.cumsum(user_dt - ref_dt) * 1000.0
+        final_delta = float(delta_ms[-1]) if len(delta_ms) > 0 else 0.0
+        logger.debug("Time delta computed: final delta=%.0fms (%s)", abs(final_delta), "behind" if final_delta > 0 else "ahead")
         return delta_ms.tolist()
 
     def compute_sectors(
@@ -374,34 +387,48 @@ class TelemetryProcessor:
             track_coordinates: [ {lat, lon} ] or [],
           }
         """
+        logger.info("process_laps: mode=%s, %d reference CSVs", analysis_mode, len(reference_csvs))
+
         # Parse
         user_df_raw = self.parse_csv(user_csv)
         track_length_m = self.detect_track_length(user_df_raw)
         user_df = self.normalize_by_distance(user_df_raw)
 
         ref_dfs: list[pd.DataFrame] = []
-        for csv_text in reference_csvs:
+        for i, csv_text in enumerate(reference_csvs):
             try:
                 raw = self.parse_csv(csv_text)
                 ref_dfs.append(self.normalize_by_distance(raw))
-            except ValueError:
-                continue  # skip unparseable references
+            except ValueError as exc:
+                logger.warning("Skipping reference CSV %d — parse error: %s", i, exc)
+                continue
 
         if not ref_dfs:
-            # No valid references; return user lap only with empty delta/corners
+            logger.warning("No valid reference laps after parsing; returning user lap only")
             return self._build_result(user_df, [], None, None, [], track_length_m=track_length_m)
+
+        logger.debug("%d/%d reference laps parsed successfully", len(ref_dfs), len(reference_csvs))
 
         # Fastest reference (first, assumed sorted by lap time) — used for corner detection
         best_ref = ref_dfs[0]
 
         # Comparison reference: median of all session laps in solo mode, fastest otherwise
-        delta_ref = self.median_laps(ref_dfs) if analysis_mode == "solo" else best_ref
+        if analysis_mode == "solo":
+            logger.debug("Solo mode: using point-wise median of %d reference laps", len(ref_dfs))
+            delta_ref = self.median_laps(ref_dfs)
+        else:
+            logger.debug("vs_reference mode: using fastest reference lap")
+            delta_ref = best_ref
 
         delta_df = self.compute_delta(user_df, delta_ref)
         corners = self.identify_corners(best_ref, track_length_m)
         time_delta_ms = self.compute_time_delta(user_df, delta_ref, track_length_m)
         sectors = self.compute_sectors(user_df, delta_ref, lap_distance_m=track_length_m)
 
+        logger.info(
+            "process_laps done: track=%.0fm, %d corners, %d sectors",
+            track_length_m, len(corners), len(sectors),
+        )
         return self._build_result(user_df, ref_dfs, delta_df, corners, time_delta_ms, sectors, track_length_m=track_length_m)
 
     # ------------------------------------------------------------------

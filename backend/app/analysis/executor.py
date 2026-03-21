@@ -10,8 +10,8 @@ import logging
 import time
 from typing import Any
 
-from app.analysis.llm import analyze_with_claude
-from app.analysis.gemini import analyze_with_gemini
+from app.analysis.llm import analyze_with_claude, CLAUDE_MODEL
+from app.analysis.gemini import analyze_with_gemini, GEMINI_MODEL
 from app.analysis.processor import TelemetryProcessor
 from app.analysis.zones import detect_weak_zones
 from app.auth.crypto import decrypt
@@ -37,6 +37,14 @@ async def execute_analysis(
     Run the full telemetry → weak-zone → LLM pipeline and return the result dict.
     Raises ValueError or Exception on failure (caller decides how to surface errors).
     """
+    model_name = GEMINI_MODEL if llm_provider == "gemini" else CLAUDE_MODEL
+    all_lap_ids = [lap_id] + list(reference_lap_ids)
+
+    logger.info(
+        "Starting analysis: lap=%s refs=%s car=%r track=%r mode=%s provider=%s model=%s",
+        lap_id, reference_lap_ids, car_name, track_name, analysis_mode, llm_provider, model_name,
+    )
+
     # Build Garage61 client for this user
     access_token = decrypt(user.access_token_enc)
     refresh_token = decrypt(user.refresh_token_enc) if user.refresh_token_enc else None
@@ -48,11 +56,17 @@ async def execute_analysis(
     )
 
     # Fetch all CSVs concurrently
-    all_lap_ids = [lap_id] + list(reference_lap_ids)
+    logger.debug("Fetching %d lap CSVs from Garage61", len(all_lap_ids))
+    t0 = time.monotonic()
     csv_results = await asyncio.gather(
         *[client.get_lap_csv(lid) for lid in all_lap_ids],
         return_exceptions=True,
     )
+    logger.info("CSV fetch complete in %.2fs", time.monotonic() - t0)
+
+    failed_csvs = [lid for lid, r in zip(all_lap_ids, csv_results) if isinstance(r, Exception)]
+    if failed_csvs:
+        logger.warning("Failed to fetch CSVs for laps: %s", failed_csvs)
 
     # Build laps_metadata if not supplied
     if not laps_metadata:
@@ -71,16 +85,42 @@ async def execute_analysis(
         raise ValueError(f"Failed to fetch user lap CSV: {user_csv}")
 
     reference_csvs = [r for r in csv_results[1:] if not isinstance(r, Exception) and r]
+    logger.info(
+        "CSV summary: user lap OK, %d/%d reference laps OK",
+        len(reference_csvs), len(reference_lap_ids),
+    )
 
     # Telemetry processing
     _t_start = time.monotonic()
+    logger.debug("Starting telemetry processing (mode=%s)", analysis_mode)
     processor = TelemetryProcessor()
     processed = processor.process_laps(user_csv, reference_csvs, analysis_mode=analysis_mode)
+    t_process = time.monotonic() - _t_start
+    logger.info(
+        "Telemetry processing complete in %.2fs: %d corners, %d sectors, track=%.0fm",
+        t_process,
+        len(processed.get("corners", [])),
+        len(processed.get("sectors", [])),
+        processed.get("track_length_m", 0),
+    )
 
     # Weak zone detection
+    logger.debug("Running weak zone detection")
+    t0 = time.monotonic()
     weak_zones = detect_weak_zones(processed)
+    logger.info(
+        "Weak zone detection complete in %.2fs: %d zones found",
+        time.monotonic() - t0, len(weak_zones),
+    )
+    if weak_zones:
+        severity_counts = {"high": 0, "medium": 0, "low": 0}
+        for z in weak_zones:
+            severity_counts[z["severity"]] = severity_counts.get(z["severity"], 0) + 1
+        logger.debug("Zone severity breakdown: %s", severity_counts)
 
     # LLM analysis — route to selected provider
+    logger.info("Sending telemetry to LLM: provider=%s model=%s", llm_provider, model_name)
+    t0 = time.monotonic()
     if llm_provider == "gemini":
         gemini_key = decrypt(user.gemini_api_key_enc) if user.gemini_api_key_enc else ""
         llm_result = await analyze_with_gemini(
@@ -101,8 +141,16 @@ async def execute_analysis(
             claude_api_key=claude_key,
             analysis_mode=analysis_mode,
         )
+    t_llm = time.monotonic() - t0
+    logger.info(
+        "LLM analysis complete in %.2fs: %d improvement areas, est. gain=%.2fs",
+        t_llm,
+        len(llm_result.get("improvement_areas", [])),
+        llm_result.get("estimated_time_gain_seconds") or 0.0,
+    )
 
     _generation_time_s = round(time.monotonic() - _t_start, 1)
+    logger.info("Total analysis pipeline complete in %.1fs", _generation_time_s)
 
     # Build telemetry object for frontend
     user_lap = processed.get("user_lap", {})
@@ -138,6 +186,7 @@ async def execute_analysis(
         "track_name": track_name,
         "analysis_mode": analysis_mode,
         "llm_provider": llm_provider,
+        "model_name": model_name,
         "summary": llm_result.get("summary", ""),
         "estimated_time_gain_seconds": llm_result.get("estimated_time_gain_seconds"),
         "improvement_areas": llm_result.get("improvement_areas", []),

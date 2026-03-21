@@ -1,6 +1,8 @@
 import axios from 'axios'
 import type {
   User,
+  AdminUser,
+  AdminReport,
   Car,
   Track,
   Lap,
@@ -8,6 +10,8 @@ import type {
   LapMeta,
   AnalysisReport,
   AnalysisHistoryItem,
+  WorkerStatus,
+  DbHealth,
 } from '../types'
 
 const api = axios.create({
@@ -88,9 +92,9 @@ export async function getRecentLaps(limit = 5): Promise<Lap[]> {
   return data
 }
 
-export async function getReferenceLaps(carId: number, trackId: number): Promise<Lap[]> {
+export async function getReferenceLaps(carId: number, trackId: number, limit = 5): Promise<Lap[]> {
   const { data } = await api.get<Lap[]>('/api/laps/reference-laps', {
-    params: { car_id: carId, track_id: trackId },
+    params: { car_id: carId, track_id: trackId, limit },
   })
   return data
 }
@@ -158,6 +162,77 @@ export async function updateGeminiKey(apiKey: string): Promise<void> {
 
 export async function logout(): Promise<void> {
   await api.post('/auth/logout')
+}
+
+export async function localLogin(username: string, password: string): Promise<string> {
+  const { data } = await api.post<{ access_token: string }>('/auth/local/login', { username, password })
+  return data.access_token
+}
+
+// Admin endpoints
+export async function adminListUsers(): Promise<AdminUser[]> {
+  const { data } = await api.get<AdminUser[]>('/admin/users')
+  return data
+}
+
+export async function adminSetSuspended(userId: string, suspended: boolean): Promise<void> {
+  await api.patch(`/admin/users/${userId}/suspend`, { suspended })
+}
+
+export async function adminSetRole(userId: string, role: 'admin' | 'user'): Promise<void> {
+  await api.patch(`/admin/users/${userId}/role`, { role })
+}
+
+export async function adminCreateUser(payload: {
+  username: string
+  password: string
+  display_name: string
+  email?: string
+  role?: string
+}): Promise<AdminUser> {
+  const { data } = await api.post<AdminUser>('/admin/users', payload)
+  return data
+}
+
+export async function adminGetConfig(): Promise<string> {
+  const { data } = await api.get<{ content: string }>('/admin/config')
+  return data.content
+}
+
+export async function adminSaveConfig(content: string): Promise<void> {
+  await api.put('/admin/config', { content })
+}
+
+export async function adminGetSystemPrompt(): Promise<string> {
+  const { data } = await api.get<{ content: string }>('/admin/system-prompt')
+  return data.content
+}
+
+export async function adminSaveSystemPrompt(content: string): Promise<void> {
+  await api.put('/admin/system-prompt', { content })
+}
+
+export async function adminListReports(): Promise<AdminReport[]> {
+  const { data } = await api.get<AdminReport[]>('/admin/reports')
+  return data
+}
+
+export async function adminFailReport(id: string): Promise<void> {
+  await api.post(`/admin/reports/${id}/fail`)
+}
+
+export async function adminGetDbHealth(): Promise<DbHealth> {
+  const { data } = await api.get<DbHealth>('/admin/db/health')
+  return data
+}
+
+export async function adminGetWorkerStatus(): Promise<WorkerStatus> {
+  const { data } = await api.get<WorkerStatus>('/admin/worker/status')
+  return data
+}
+
+export async function adminSetWorkerPoolSize(poolSize: number): Promise<void> {
+  await api.patch('/admin/worker/pool-size', { pool_size: poolSize })
 }
 
 export default api

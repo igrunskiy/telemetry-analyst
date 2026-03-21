@@ -26,7 +26,10 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_HOURS: int = 168  # 1 week
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
-    ANALYSIS_QUEUE_SIZE: int = 5
+    ANALYSIS_WORKER_POOL_SIZE: int = 5
+    ANALYSIS_WORKER_TIMEOUT: int = 120  # seconds before watchdog kills a job
+    CLAUDE_MAX_TOKENS: int = 20000
+    GEMINI_MAX_TOKENS: int = 20000
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

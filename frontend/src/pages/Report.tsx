@@ -493,10 +493,22 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
         {!isLoading && report?.status === 'failed' && (
           <div className="card text-center py-12">
             <p className="text-red-400 font-medium mb-2">Analysis failed</p>
-            <p className="text-slate-500 text-sm mb-4">{report.error_message || 'An unexpected error occurred.'}</p>
-            <Link to="/" className="text-amber-500 hover:text-amber-400 text-sm">
-              &larr; Back to lap selector
-            </Link>
+            <p className="text-slate-500 text-sm mb-4">{report.error_message?.split('\n')[0] || 'An unexpected error occurred.'}</p>
+            <div className="flex items-center justify-center gap-3">
+              {!readOnly && (
+                <button
+                  onClick={() => handleRegenerate()}
+                  disabled={regenerateMutation.isPending}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-900 font-medium text-sm transition-colors"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${regenerateMutation.isPending ? 'animate-spin' : ''}`} />
+                  {regenerateMutation.isPending ? 'Re-running…' : 'Re-run analysis'}
+                </button>
+              )}
+              <Link to="/" className="text-amber-500 hover:text-amber-400 text-sm">
+                &larr; Back to lap selector
+              </Link>
+            </div>
           </div>
         )}
 
@@ -556,12 +568,17 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                     <Layers className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                     <span className="text-slate-500">{soloTotalLaps} {soloTotalLaps === 1 ? 'lap' : 'laps'} analyzed</span>
                   </span>
-                  {/* Generation time */}
-                  {displayReport.generation_time_s != null && (
+                  {/* Generation time + model */}
+                  {(displayReport.generation_time_s != null || displayReport.model_name || displayReport.llm_provider) && (
                     <span className="flex items-center gap-1.5">
                       <RefreshCw className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                      <span className="text-slate-500">Generated in</span>
-                      <span className="text-slate-300">{displayReport.generation_time_s}s</span>
+                      <span className="text-slate-500">Generated{displayReport.generation_time_s != null ? ` in ${displayReport.generation_time_s}s` : ''}</span>
+                      {(displayReport.model_name || displayReport.llm_provider) && (
+                        <>
+                          <span className="text-slate-600">by</span>
+                          <span className="font-mono text-xs text-amber-400/80 bg-amber-400/10 px-1.5 py-0.5 rounded">{displayReport.model_name ?? displayReport.llm_provider}</span>
+                        </>
+                      )}
                     </span>
                   )}
                   {/* Link to best lap on Garage61 */}
@@ -661,11 +678,16 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       </span>
                     </span>
                   )}
-                  {displayReport.generation_time_s != null && (
+                  {(displayReport.generation_time_s != null || displayReport.model_name || displayReport.llm_provider) && (
                     <span className="flex items-center gap-1.5">
                       <RefreshCw className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                      <span className="text-slate-500">Generated in</span>
-                      <span className="text-slate-300">{displayReport.generation_time_s}s</span>
+                      <span className="text-slate-500">Generated{displayReport.generation_time_s != null ? ` in ${displayReport.generation_time_s}s` : ''}</span>
+                      {(displayReport.model_name || displayReport.llm_provider) && (
+                        <>
+                          <span className="text-slate-600">by</span>
+                          <span className="font-mono text-xs text-amber-400/80 bg-amber-400/10 px-1.5 py-0.5 rounded">{displayReport.model_name ?? displayReport.llm_provider}</span>
+                        </>
+                      )}
                     </span>
                   )}
                   <div className="ml-auto flex items-center gap-1 flex-shrink-0">

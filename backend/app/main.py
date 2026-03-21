@@ -6,6 +6,7 @@ Registers middleware, routers, and lifespan events.
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,7 +19,7 @@ from app.database import Base, engine
 # Configure logging with timestamps
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(name)s.%(funcName)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
@@ -36,6 +37,29 @@ if settings.ENABLE_REMOTE_DEBUG:
             debugpy.wait_for_client()
     except Exception:
         logging.getLogger(__name__).exception("Failed to start remote debugpy")
+
+
+async def _seed_default_admin(conn) -> None:
+    """Create the default admin account if it doesn't exist yet."""
+    import bcrypt
+    from sqlalchemy import text as t
+
+    result = await conn.execute(
+        t("SELECT id FROM users WHERE username = 'admin' LIMIT 1")
+    )
+    if result.fetchone() is not None:
+        return  # Already exists
+
+    password_hash = bcrypt.hashpw(b"admin-s3cr3t", bcrypt.gensalt()).decode()
+    now = datetime.now(timezone.utc)
+    await conn.execute(
+        t(
+            "INSERT INTO users (id, username, password_hash, display_name, role, is_suspended, created_at, last_login_at) "
+            "VALUES (gen_random_uuid(), 'admin', :pw, 'Administrator', 'admin', false, :now, :now)"
+        ),
+        {"pw": password_hash, "now": now},
+    )
+    logging.getLogger(__name__).info("Default admin account created (username: admin)")
 
 
 @asynccontextmanager
@@ -70,21 +94,41 @@ async def lifespan(app: FastAPI):
                 "CREATE INDEX IF NOT EXISTS ix_analysis_results_status "
                 "ON analysis_results (status)"
             ))
+            # New user auth columns
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR UNIQUE"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR UNIQUE"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user'"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN NOT NULL DEFAULT false"
+            ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_users_username ON users (username) WHERE username IS NOT NULL"
+            ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_users_email ON users (email) WHERE email IS NOT NULL"
+            ))
+            # Seed default admin
+            await _seed_default_admin(conn)
         finally:
             await conn.execute(text("SELECT pg_advisory_unlock(987654321)"))
 
-    # Start the background analysis queue worker
-    from app.analysis.worker import start_worker
-    worker_task = start_worker()
+    # Start the background analysis worker pool
+    from app.analysis.worker import start_pool
+    pool = start_pool(settings.ANALYSIS_WORKER_POOL_SIZE)
 
     yield
 
-    # Cancel the worker and dispose the engine connection pool on shutdown
-    worker_task.cancel()
-    try:
-        await worker_task
-    except Exception:
-        pass
+    # Stop the pool and dispose the engine connection pool on shutdown
+    await pool.stop()
     await engine.dispose()
 
 
@@ -113,11 +157,13 @@ from app.auth.router import router as auth_router
 from app.api.laps import router as laps_router
 from app.api.analysis import router as analysis_router
 from app.api.profile import router as profile_router
+from app.api.admin import router as admin_router
 
 app.include_router(auth_router)
 app.include_router(laps_router)
 app.include_router(analysis_router)
 app.include_router(profile_router)
+app.include_router(admin_router)
 
 
 # ---------------------------------------------------------------------------

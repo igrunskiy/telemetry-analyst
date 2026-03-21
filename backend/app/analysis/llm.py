@@ -25,9 +25,16 @@ CLAUDE_MODEL = "claude-sonnet-4-6"
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
-SYSTEM_PROMPT = (_PROMPTS_DIR / "system.md").read_text(encoding="utf-8").strip()
+_SYSTEM_PROMPT_PATH = _PROMPTS_DIR / "system.md"
+# Keep a module-level constant for backward compat (used by tests and gemini.py)
+SYSTEM_PROMPT = _SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
 _USER_PROMPT_TEMPLATE = (_PROMPTS_DIR / "user_prompt.md").read_text(encoding="utf-8")
 _SOLO_PROMPT_TEMPLATE = (_PROMPTS_DIR / "solo_prompt.md").read_text(encoding="utf-8")
+
+
+def get_system_prompt() -> str:
+    """Read the system prompt from disk each time — picks up admin edits without restart."""
+    return _SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 def _build_corner_table(processed: dict, weak_zones: list[dict]) -> str:
@@ -360,8 +367,8 @@ async def analyze_with_claude(
 
     message = await client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=6000,
-        system=SYSTEM_PROMPT,
+        max_tokens=settings.CLAUDE_MAX_TOKENS,
+        system=get_system_prompt(),
         messages=[{"role": "user", "content": user_prompt}],
     )
 
