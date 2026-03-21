@@ -49,7 +49,15 @@
       "Bash(git -C d:/Claude/telemetry-analyst worktree add \"$WORKTREE\" -b \"$SHORT\")",
       "Bash(ls d:/Claude/.tmp/telemetry-analyst_discord-auth/.env*)",
       "Bash(docker stop:*)",
-      "Bash(docker rm:*)"
+      "Bash(docker rm:*)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :5678)",
+      "Bash(tasklist /FI \"PID eq 39552\")",
+      "Bash(tasklist /FI \"PID eq 42628\")",
+      "Bash(powershell -Command \"Get-Process -Id 39552, 42628 | Select-Object Id, ProcessName, MainWindowTitle\")"
+    ],
+    "additionalDirectories": [
+      "d:\\Claude\\.tmp\\telemetry-analyst_auth-admin-ui\\backend"
     ]
   }
 }
