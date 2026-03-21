@@ -94,9 +94,20 @@ function ImprovementCard({ area, telemetry, onActiveCorners, onHoverIndex }: Imp
             </div>
             <div className="flex items-center gap-3 mt-1 flex-wrap">
               {area.corner_refs.length > 0 && (
-                <span className="text-xs text-slate-500">
-                  {area.corner_refs.map((c) => `T${c}`).join(', ')}
-                </span>
+                <div className="flex items-center gap-1 flex-wrap">
+                  {area.corner_refs.map((c) => (
+                    <button
+                      key={c}
+                      className="text-xs text-slate-400 hover:text-amber-400 hover:bg-amber-500/15 px-1.5 py-0.5 rounded transition-colors cursor-pointer font-mono"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onActiveCorners?.([c])
+                      }}
+                    >
+                      T{c}
+                    </button>
+                  ))}
+                </div>
               )}
               <span className="flex items-center gap-1 text-xs text-red-400">
                 <TrendingDown className="w-3 h-3" />
