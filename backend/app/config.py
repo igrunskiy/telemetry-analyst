@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     SECRET_KEY: str
     GARAGE61_CLIENT_ID: str
-    GARAGE61_CLIENT_SECRET: str
+    GARAGE61_CLIENT_SECRET: str = ""
     GARAGE61_REDIRECT_URI: str = "http://localhost:8000/auth/callback"
     GARAGE61_AUTH_URL: str = "https://garage61.net/app/account/oauth"
     GARAGE61_TOKEN_URL: str = "https://garage61.net/api/oauth/token"

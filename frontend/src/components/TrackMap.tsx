@@ -50,6 +50,19 @@ function FitBounds({ lat, lon }: { lat: number[]; lon: number[] }) {
   return null
 }
 
+function PanToCorner({ cornerData, highlightCornerNums }: {
+  cornerData: { lat: number; lon: number; num: number }[]
+  highlightCornerNums: number[]
+}) {
+  const map = useMap()
+  useEffect(() => {
+    if (highlightCornerNums.length !== 1) return
+    const corner = cornerData.find((c) => c.num === highlightCornerNums[0])
+    if (corner) map.panTo([corner.lat, corner.lon], { animate: true, duration: 0.4 })
+  }, [map, cornerData, highlightCornerNums])
+  return null
+}
+
 function RightClickPan() {
   const map = useMap()
 
@@ -288,6 +301,7 @@ export default function TrackMap({
         <TilePaneFader mapStyle={mapStyle} />
         <FitBounds lat={userLat} lon={userLon} />
         <RightClickPan />
+        <PanToCorner cornerData={cornerData} highlightCornerNums={highlightCornerNums} />
         {mapStyle !== 'none' && (
           mapStyle === 'satellite'
             ? <TileLayer url={ESRI_SAT_URL} attribution="Tiles &copy; Esri" maxNativeZoom={18} maxZoom={22} />

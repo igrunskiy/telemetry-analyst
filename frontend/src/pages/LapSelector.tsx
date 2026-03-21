@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { LogOut, User, ChevronRight, Clock, Calendar, Loader2, Car, MapPin, BarChart2, Trash2, Zap, ExternalLink } from 'lucide-react'
+import { LogOut, User, ChevronRight, Clock, Calendar, Loader2, Car, MapPin, BarChart2, Trash2, Zap, ExternalLink, PlusCircle, Activity, History } from 'lucide-react'
 import { ThemeToggle } from '../components/ThemeToggle'
 import { useAuth } from '../hooks/useAuth'
 import {
@@ -409,7 +409,7 @@ export default function LapSelectorPage() {
           {/* Left column: Steps 1-4 */}
           <div className="flex flex-col gap-5">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-white">New Analysis</h2>
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2"><PlusCircle className="w-5 h-5 text-amber-500" />New Analysis</h2>
               {/* Mode toggle */}
               <div className="flex items-center bg-slate-800 border border-slate-700 rounded-lg p-0.5 text-xs font-medium">
                 <button
@@ -857,7 +857,7 @@ export default function LapSelectorPage() {
           {/* Right column: Recent Activity + Analysis History */}
           <div className="flex flex-col gap-4" data-testid="analysis-history">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-white">Recent Activity</h2>
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2"><Activity className="w-5 h-5 text-amber-500" />Recent Activity</h2>
             </div>
 
             {recentLoading ? (
@@ -950,7 +950,7 @@ export default function LapSelectorPage() {
             )}
 
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-white">Analysis History</h2>
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2"><History className="w-5 h-5 text-amber-500" />Analysis History</h2>
               {filteredHistory.length > 0 && (
                 <span className="text-xs text-slate-500">{filteredHistory.length} total</span>
               )}
