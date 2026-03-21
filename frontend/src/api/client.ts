@@ -168,6 +168,10 @@ export async function logout(): Promise<void> {
   await api.post('/auth/logout')
 }
 
+export function connectGarage61(): void {
+  window.location.href = '/auth/garage61/connect'
+}
+
 export async function localLogin(username: string, password: string): Promise<string> {
   const { data } = await api.post<{ access_token: string }>('/auth/local/login', { username, password })
   return data.access_token

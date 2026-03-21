@@ -429,6 +429,22 @@ export default function LapSelectorPage() {
         </div>
       </header>
 
+      {user && !user.has_garage61 && (
+        <div className="bg-amber-500/10 border-b border-amber-500/30">
+          <div className="max-w-[80%] mx-auto px-4 py-3 flex items-center justify-between gap-4">
+            <p className="text-amber-400 text-sm">
+              Garage61 account not connected — lap browsing is unavailable.
+            </p>
+            <Link
+              to="/profile"
+              className="flex-shrink-0 text-xs font-medium text-amber-400 hover:text-amber-300 underline underline-offset-2"
+            >
+              Connect in Profile
+            </Link>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-[80%] mx-auto px-4 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left column: Steps 1-4 */}

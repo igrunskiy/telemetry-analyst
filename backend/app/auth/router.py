@@ -33,6 +33,7 @@ class UserMeResponse(BaseModel):
     avatar_url: str | None
     has_custom_claude_key: bool
     has_custom_gemini_key: bool
+    has_garage61: bool
     role: str
 
 
@@ -159,15 +160,18 @@ async def callback(
     state: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Handle OAuth2 callback: verify state, exchange code, upsert user, set session."""
+    """Handle OAuth2 callback: verify state, exchange code, upsert user, set session.
+    When connect_user_id cookie is present, links the Garage61 account to that user instead."""
     logger.info(f"OAuth callback received with code: {code[:20]}... and state: {state[:20]}...")
-    
+
     stored_state = request.cookies.get("oauth_state")
     code_verifier = request.cookies.get("oauth_verifier")
+    connect_user_id = request.cookies.get("connect_user_id")
     logger.info(f"Stored state: {stored_state[:20] if stored_state else 'NONE'}...")
     logger.info(f"Received state: {state[:20]}...")
     logger.info(f"PKCE verifier present: {bool(code_verifier)}")
-    
+    logger.info(f"Connect flow: {bool(connect_user_id)}")
+
     if not stored_state or stored_state != state:
         logger.error("State validation failed")
         raise HTTPException(
@@ -176,7 +180,7 @@ async def callback(
         )
 
     logger.info("State validation passed, exchanging code for tokens")
-    
+
     # Exchange code for tokens
     try:
         token_data = await exchange_code(code, code_verifier)
@@ -187,7 +191,7 @@ async def callback(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to exchange code: {str(e)}",
         )
-    
+
     access_token = token_data.get("access_token")
     refresh_token = token_data.get("refresh_token")
 
@@ -198,26 +202,141 @@ async def callback(
             detail="Failed to obtain access token from Garage61",
         )
 
+    if connect_user_id:
+        # Link flow: attach Garage61 tokens to the existing user
+        try:
+            redirect = await _link_garage61_to_user(
+                db, connect_user_id, access_token, refresh_token
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to link Garage61 account: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to link Garage61 account: {str(e)}",
+            )
+        redirect.delete_cookie("oauth_state")
+        redirect.delete_cookie("oauth_verifier")
+        redirect.delete_cookie("connect_user_id")
+        return redirect
+    else:
+        # Normal login flow: upsert user
+        try:
+            user = await _upsert_user_from_token(db, access_token, refresh_token)
+        except Exception as e:
+            logger.error(f"Failed to fetch user info: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to fetch user info: {str(e)}",
+            )
+
+        logger.info(f"User {user.garage61_user_id} saved/updated, issuing JWT")
+
+        await db.commit()
+        jwt_token = create_access_token(user.id)
+
+        redirect = RedirectResponse(
+            url=f"/callback?access_token={jwt_token}",
+            status_code=status.HTTP_302_FOUND,
+        )
+        redirect.delete_cookie("oauth_state")
+        redirect.delete_cookie("oauth_verifier")
+        return redirect
+
+
+async def _link_garage61_to_user(
+    db: AsyncSession,
+    user_id: str,
+    access_token: str,
+    refresh_token: str | None,
+) -> RedirectResponse:
+    """Link a Garage61 account to an existing user by updating their tokens."""
+    import uuid as _uuid
     try:
-        user = await _upsert_user_from_token(db, access_token, refresh_token)
-    except Exception as e:
-        logger.error(f"Failed to fetch user info: {e}", exc_info=True)
+        uid = _uuid.UUID(user_id)
+    except ValueError:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch user info: {str(e)}",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid connect_user_id",
         )
 
-    logger.info(f"User {user.garage61_user_id} saved/updated, issuing JWT")
+    result = await db.execute(select(User).where(User.id == uid))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
 
-    await db.commit()
-    jwt_token = create_access_token(user.id)
-
-    redirect = RedirectResponse(
-        url=f"/callback?access_token={jwt_token}",
-        status_code=status.HTTP_302_FOUND,
+    # Fetch Garage61 profile to get the garage61_user_id
+    user_info = await get_user_info(access_token)
+    garage61_user_id = str(
+        user_info.get("id") or user_info.get("user_id") or user_info.get("sub", "")
     )
-    redirect.delete_cookie("oauth_state")
-    redirect.delete_cookie("oauth_verifier")
+    if not garage61_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not determine user ID from Garage61",
+        )
+
+    # Ensure this garage61_user_id isn't already claimed by another user
+    existing = await db.execute(
+        select(User).where(
+            User.garage61_user_id == garage61_user_id,
+            User.id != uid,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This Garage61 account is already linked to another user",
+        )
+
+    user.garage61_user_id = garage61_user_id
+    user.access_token_enc = encrypt(access_token)
+    if refresh_token:
+        user.refresh_token_enc = encrypt(refresh_token)
+    await db.flush()
+    await db.commit()
+
+    logger.info(f"Linked Garage61 account {garage61_user_id} to user {user_id}")
+    return RedirectResponse(url="/profile?garage61=connected", status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/garage61/connect")
+async def garage61_connect(
+    current_user: User = Depends(get_current_user),
+):
+    """Initiate Garage61 OAuth2 flow to link an account to the current user."""
+    state = secrets.token_urlsafe(32)
+    auth_url, code_verifier = get_authorization_url(state)
+
+    redirect = RedirectResponse(url=auth_url, status_code=status.HTTP_302_FOUND)
+    redirect.set_cookie(
+        key="oauth_state",
+        value=state,
+        httponly=True,
+        samesite="lax",
+        max_age=600,
+        secure=False,
+    )
+    redirect.set_cookie(
+        key="oauth_verifier",
+        value=code_verifier,
+        httponly=True,
+        samesite="lax",
+        max_age=600,
+        secure=False,
+    )
+    redirect.set_cookie(
+        key="connect_user_id",
+        value=str(current_user.id),
+        httponly=True,
+        samesite="lax",
+        max_age=600,
+        secure=False,
+    )
     return redirect
 
 
@@ -365,5 +484,6 @@ async def me(current_user: User = Depends(get_current_user)) -> UserMeResponse:
         avatar_url=current_user.avatar_url,
         has_custom_claude_key=bool(current_user.claude_api_key_enc),
         has_custom_gemini_key=bool(current_user.gemini_api_key_enc),
+        has_garage61=bool(current_user.access_token_enc),
         role=current_user.role,
     )
