@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Shield, Users, Settings, ChevronLeft, Check, X, RefreshCw, Plus, Save, AlertTriangle, Activity, BarChart2, ChevronRight, Loader2, FileText } from 'lucide-react'
+import { Shield, Users, Settings, ChevronLeft, Check, X, RefreshCw, Plus, Save, AlertTriangle, Activity, BarChart2, ChevronRight, Loader2, FileText, Trash2, Star } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   adminListUsers,
@@ -9,8 +9,12 @@ import {
   adminCreateUser,
   adminGetConfig,
   adminSaveConfig,
-  adminGetSystemPrompt,
-  adminSaveSystemPrompt,
+  adminListPrompts,
+  adminGetPromptDefaults,
+  adminSetPromptDefaults,
+  adminCreatePrompt,
+  adminSavePrompt,
+  adminDeletePrompt,
   adminGetWorkerStatus,
   adminSetWorkerPoolSize,
   adminListReports,
@@ -18,7 +22,7 @@ import {
   adminGetDbHealth,
   regenerateAnalysis,
 } from '../api/client'
-import type { AdminUser, AdminReport } from '../types'
+import type { AdminUser, AdminReport, PromptMeta, PromptsDefaults } from '../types'
 
 type Section = 'users' | 'config' | 'prompt' | 'workers' | 'reports'
 
@@ -100,7 +104,7 @@ export default function AdminPage() {
         <main className="flex-1 overflow-auto p-6">
           {section === 'users' && <UserManagement />}
           {section === 'config' && <ConfigEditor />}
-          {section === 'prompt' && <SystemPromptEditor />}
+          {section === 'prompt' && <PromptsManager />}
           {section === 'workers' && <WorkerMonitor />}
           {section === 'reports' && <ReportsView />}
         </main>
@@ -662,62 +666,57 @@ function ConfigEditor() {
 }
 
 // ---------------------------------------------------------------------------
-// System Prompt editor
+// Prompts manager
 // ---------------------------------------------------------------------------
 
-function SystemPromptEditor() {
+function PromptEditor({ name, onClose }: { name: string; onClose: () => void }) {
+  const queryClient = useQueryClient()
   const [content, setContent] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-  const { isLoading, data: promptData } = useQuery({
-    queryKey: ['admin', 'system-prompt'],
-    queryFn: adminGetSystemPrompt,
+  const { isLoading, data } = useQuery({
+    queryKey: ['admin', 'prompt', name],
+    queryFn: () => {
+      const { adminGetPrompt } = require('../api/client') as typeof import('../api/client')
+      return adminGetPrompt(name)
+    },
   })
 
   useEffect(() => {
-    if (promptData !== undefined && content === null) {
-      setContent(promptData)
-    }
-  }, [promptData])
+    if (data !== undefined && content === null) setContent(data)
+  }, [data])
 
   const saveMutation = useMutation({
-    mutationFn: () => adminSaveSystemPrompt(content ?? ''),
+    mutationFn: () => adminSavePrompt(name, content ?? ''),
     onSuccess: () => {
       setSaved(true)
-      setSaveError(null)
+      setError(null)
+      queryClient.invalidateQueries({ queryKey: ['admin', 'prompts'] })
       setTimeout(() => setSaved(false), 3000)
     },
     onError: (err: any) => {
-      const detail = err?.response?.data?.detail
-      setSaveError(typeof detail === 'string' ? detail : 'Save failed')
+      setError(err?.response?.data?.detail ?? 'Save failed')
     },
   })
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-48">
-        <RefreshCw className="w-6 h-6 animate-spin text-slate-500" />
-      </div>
-    )
-  }
 
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold">System Prompt</h2>
-          <p className="text-slate-400 text-sm mt-1">Editing <code className="text-amber-400">app/analysis/prompts/system.md</code> — changes take effect on the next analysis run.</p>
+          <div className="flex items-center gap-2">
+            <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <h2 className="text-xl font-semibold">Editing: <span className="text-amber-400">{name}</span></h2>
+          </div>
+          <p className="text-slate-400 text-sm mt-1 ml-7">Changes take effect on the next analysis run.</p>
         </div>
         <div className="flex items-center gap-3">
-          {saved && (
-            <span className="flex items-center gap-1.5 text-emerald-400 text-sm">
-              <Check className="w-4 h-4" /> Saved
-            </span>
-          )}
+          {saved && <span className="flex items-center gap-1.5 text-emerald-400 text-sm"><Check className="w-4 h-4" /> Saved</span>}
           <button
             onClick={() => saveMutation.mutate()}
-            disabled={saveMutation.isPending || content === null}
+            disabled={saveMutation.isPending || content === null || isLoading}
             className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-900 font-medium rounded-xl text-sm transition-colors"
           >
             <Save className="w-4 h-4" />
@@ -725,20 +724,198 @@ function SystemPromptEditor() {
           </button>
         </div>
       </div>
+      {error && <p className="mb-3 text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">{error}</p>}
+      {isLoading ? (
+        <div className="flex items-center justify-center h-48"><RefreshCw className="w-6 h-6 animate-spin text-slate-500" /></div>
+      ) : (
+        <textarea
+          value={content ?? ''}
+          onChange={e => setContent(e.target.value)}
+          spellCheck={false}
+          className="flex-1 w-full font-mono text-sm bg-slate-950 border border-slate-700 rounded-xl p-4 text-slate-300 focus:outline-none focus:border-amber-500 resize-none leading-relaxed"
+        />
+      )}
+    </div>
+  )
+}
 
-      {saveError && (
-        <p className="mb-3 text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">
-          {saveError}
-        </p>
+function PromptsManager() {
+  const queryClient = useQueryClient()
+  const [editingName, setEditingName] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newContent, setNewContent] = useState('')
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [defaultsSaved, setDefaultsSaved] = useState(false)
+  const [defaultsError, setDefaultsError] = useState<string | null>(null)
+
+  const { data: prompts = [], isLoading } = useQuery<PromptMeta[]>({
+    queryKey: ['admin', 'prompts'],
+    queryFn: adminListPrompts,
+  })
+
+  const { data: defaults } = useQuery<PromptsDefaults>({
+    queryKey: ['admin', 'prompts-defaults'],
+    queryFn: adminGetPromptDefaults,
+  })
+
+  const [localDefaults, setLocalDefaults] = useState<PromptsDefaults | null>(null)
+  useEffect(() => {
+    if (defaults && !localDefaults) setLocalDefaults(defaults)
+  }, [defaults])
+
+  const setDefaultsMutation = useMutation({
+    mutationFn: () => adminSetPromptDefaults(localDefaults!),
+    onSuccess: () => {
+      setDefaultsSaved(true)
+      setDefaultsError(null)
+      queryClient.invalidateQueries({ queryKey: ['admin', 'prompts'] })
+      queryClient.invalidateQueries({ queryKey: ['admin', 'prompts-defaults'] })
+      setTimeout(() => setDefaultsSaved(false), 3000)
+    },
+    onError: (err: any) => setDefaultsError(err?.response?.data?.detail ?? 'Save failed'),
+  })
+
+  const createMutation = useMutation({
+    mutationFn: () => adminCreatePrompt(newName, newContent),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'prompts'] })
+      setCreating(false)
+      setNewName('')
+      setNewContent('')
+      setCreateError(null)
+    },
+    onError: (err: any) => setCreateError(err?.response?.data?.detail ?? 'Create failed'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (name: string) => adminDeletePrompt(name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'prompts'] })
+      queryClient.invalidateQueries({ queryKey: ['admin', 'prompts-defaults'] })
+      setDeleteError(null)
+    },
+    onError: (err: any) => setDeleteError(err?.response?.data?.detail ?? 'Delete failed'),
+  })
+
+  if (editingName) {
+    return <PromptEditor name={editingName} onClose={() => setEditingName(null)} />
+  }
+
+  const promptNames = prompts.map(p => p.name)
+
+  return (
+    <div className="h-full flex flex-col gap-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold">System Prompts</h2>
+          <p className="text-slate-400 text-sm mt-1">Manage named prompt versions. Set the default per model below.</p>
+        </div>
+        <button
+          onClick={() => setCreating(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 font-medium rounded-xl text-sm transition-colors"
+        >
+          <Plus className="w-4 h-4" /> New Prompt
+        </button>
+      </div>
+
+      {/* Defaults */}
+      {localDefaults && (
+        <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 space-y-3">
+          <h3 className="text-sm font-medium text-slate-300">Default per model</h3>
+          <div className="flex flex-wrap gap-4">
+            {(['claude', 'gemini'] as const).map(model => (
+              <label key={model} className="flex items-center gap-2 text-sm">
+                <span className="text-slate-400 w-16">{model}</span>
+                <select
+                  value={localDefaults[model]}
+                  onChange={e => setLocalDefaults({ ...localDefaults, [model]: e.target.value })}
+                  className="bg-slate-900 border border-slate-600 rounded-lg px-2 py-1 text-slate-200 text-sm focus:outline-none focus:border-amber-500"
+                >
+                  {promptNames.map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+            ))}
+            <button
+              onClick={() => setDefaultsMutation.mutate()}
+              disabled={setDefaultsMutation.isPending}
+              className="flex items-center gap-1.5 px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-sm transition-colors"
+            >
+              <Save className="w-3.5 h-3.5" />
+              {defaultsSaved ? 'Saved!' : 'Save defaults'}
+            </button>
+          </div>
+          {defaultsError && <p className="text-red-400 text-xs">{defaultsError}</p>}
+        </div>
       )}
 
-      <textarea
-        value={content ?? ''}
-        onChange={e => setContent(e.target.value)}
-        spellCheck={false}
-        className="flex-1 w-full font-mono text-sm bg-slate-950 border border-slate-700 rounded-xl p-4 text-slate-300 focus:outline-none focus:border-amber-500 resize-none leading-relaxed"
-        placeholder="Loading..."
-      />
+      {deleteError && <p className="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">{deleteError}</p>}
+
+      {/* Prompt list */}
+      {isLoading ? (
+        <div className="flex items-center justify-center h-24"><RefreshCw className="w-5 h-5 animate-spin text-slate-500" /></div>
+      ) : (
+        <div className="space-y-2">
+          {prompts.map(p => (
+            <div key={p.name} className="flex items-center gap-3 bg-slate-800/50 border border-slate-700 rounded-xl px-4 py-3">
+              <FileText className="w-4 h-4 text-slate-400 shrink-0" />
+              <span className="font-mono text-sm text-amber-400 flex-1">{p.name}</span>
+              {p.default_for.length > 0 && (
+                <div className="flex gap-1">
+                  {p.default_for.map(m => (
+                    <span key={m} className="flex items-center gap-1 text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-full px-2 py-0.5">
+                      <Star className="w-2.5 h-2.5" />{m}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="text-slate-500 text-xs max-w-xs truncate hidden md:block">{p.content.slice(0, 80)}</p>
+              <button
+                onClick={() => setEditingName(p.name)}
+                className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors shrink-0"
+              >Edit</button>
+              <button
+                onClick={() => deleteMutation.mutate(p.name)}
+                disabled={deleteMutation.isPending}
+                className="text-xs px-2 py-1 text-red-400 hover:bg-red-400/10 rounded-lg transition-colors shrink-0"
+              ><Trash2 className="w-3.5 h-3.5" /></button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Create new prompt */}
+      {creating && (
+        <div className="bg-slate-800/50 border border-amber-500/30 rounded-xl p-4 space-y-3">
+          <h3 className="text-sm font-medium text-amber-300">New prompt version</h3>
+          <input
+            value={newName}
+            onChange={e => setNewName(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+            placeholder="name (lowercase, dashes ok)"
+            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-amber-500"
+          />
+          <textarea
+            value={newContent}
+            onChange={e => setNewContent(e.target.value)}
+            placeholder="Prompt content…"
+            rows={10}
+            spellCheck={false}
+            className="w-full font-mono text-sm bg-slate-950 border border-slate-700 rounded-xl p-3 text-slate-300 focus:outline-none focus:border-amber-500 resize-none"
+          />
+          {createError && <p className="text-red-400 text-xs">{createError}</p>}
+          <div className="flex gap-2">
+            <button
+              onClick={() => createMutation.mutate()}
+              disabled={createMutation.isPending || !newName || !newContent}
+              className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-900 font-medium rounded-xl text-sm transition-colors"
+            >
+              <Save className="w-4 h-4" />{createMutation.isPending ? 'Creating...' : 'Create'}
+            </button>
+            <button onClick={() => { setCreating(false); setCreateError(null) }} className="px-4 py-2 text-slate-400 hover:text-white text-sm">Cancel</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -20,6 +20,7 @@ from app.auth.jwt import require_admin
 from app.database import get_db, AsyncSessionLocal
 from app.models.user import User
 from app.models.analysis import AnalysisResult
+from app.analysis import prompts_manager
 
 logger = logging.getLogger(__name__)
 
@@ -291,26 +292,85 @@ async def fail_report(
 
 
 # ---------------------------------------------------------------------------
-# System prompt
+# Prompt versions
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT_PATH = Path(__file__).parent.parent / "analysis" / "prompts" / "system.md"
+class PromptCreateRequest(BaseModel):
+    name: str
+    content: str
 
 
-@router.get("/system-prompt")
-async def get_system_prompt_endpoint(_admin=Depends(require_admin)):
-    """Return the current system prompt content."""
-    return {"content": _SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")}
+class PromptDefaultsRequest(BaseModel):
+    claude: str
+    gemini: str
 
 
-@router.put("/system-prompt")
-async def update_system_prompt(
-    body: ConfigUpdateRequest,
-    _admin=Depends(require_admin),
-):
-    """Overwrite the system prompt file."""
-    _SYSTEM_PROMPT_PATH.write_text(body.content, encoding="utf-8")
-    logger.info("Admin updated system prompt")
+@router.get("/prompts")
+async def list_prompts(_admin=Depends(require_admin)):
+    """List all named prompt versions with their content and default-for info."""
+    return prompts_manager.list_prompts()
+
+
+@router.get("/prompts/defaults")
+async def get_prompt_defaults(_admin=Depends(require_admin)):
+    """Return the default prompt name for each model."""
+    return prompts_manager.get_defaults()
+
+
+@router.put("/prompts/defaults")
+async def set_prompt_defaults(body: PromptDefaultsRequest, _admin=Depends(require_admin)):
+    """Set the default prompt for each model."""
+    prompts_manager.set_defaults({"claude": body.claude, "gemini": body.gemini})
+    logger.info("Admin updated prompt defaults: %s", body.model_dump())
+    return {"ok": True}
+
+
+@router.post("/prompts")
+async def create_prompt(body: PromptCreateRequest, _admin=Depends(require_admin)):
+    """Create a new named prompt version."""
+    import re
+    if not re.match(r"^[a-z0-9_-]{1,64}$", body.name):
+        raise HTTPException(status_code=422, detail="Name must be lowercase alphanumeric, dashes, or underscores (max 64 chars)")
+    path = Path(__file__).parent.parent / "analysis" / "prompts" / f"{body.name}.md"
+    if path.exists():
+        raise HTTPException(status_code=409, detail=f"Prompt '{body.name}' already exists")
+    prompts_manager.save_prompt(body.name, body.content)
+    logger.info("Admin created prompt '%s'", body.name)
+    return {"ok": True, "name": body.name}
+
+
+@router.get("/prompts/{name}")
+async def get_prompt(name: str, _admin=Depends(require_admin)):
+    """Return the content of a named prompt."""
+    content = prompts_manager.get_prompt(name)
+    if content is None:
+        raise HTTPException(status_code=404, detail=f"Prompt '{name}' not found")
+    return {"name": name, "content": content}
+
+
+@router.put("/prompts/{name}")
+async def update_prompt(name: str, body: ConfigUpdateRequest, _admin=Depends(require_admin)):
+    """Overwrite a named prompt file."""
+    if prompts_manager.get_prompt(name) is None:
+        raise HTTPException(status_code=404, detail=f"Prompt '{name}' not found")
+    prompts_manager.save_prompt(name, body.content)
+    logger.info("Admin updated prompt '%s'", name)
+    return {"ok": True}
+
+
+@router.delete("/prompts/{name}")
+async def delete_prompt(name: str, _admin=Depends(require_admin)):
+    """Delete a named prompt. Refuses if it is currently a default for any model."""
+    defaults = prompts_manager.get_defaults()
+    in_use_by = [model for model, pname in defaults.items() if pname == name]
+    if in_use_by:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete '{name}': it is the default for {', '.join(in_use_by)}. Change the default first.",
+        )
+    if not prompts_manager.delete_prompt(name):
+        raise HTTPException(status_code=404, detail=f"Prompt '{name}' not found")
+    logger.info("Admin deleted prompt '%s'", name)
     return {"ok": True}
 
 

@@ -43,6 +43,7 @@ class RunAnalysisRequest(BaseModel):
     analysis_mode: str = "vs_reference"  # "vs_reference" or "solo"
     laps_metadata: list[LapMetaInput] | None = None
     llm_provider: str = "claude"  # "claude" or "gemini"
+    prompt_version: str | None = None  # named prompt; None → model default
 
 
 class AnalysisHistoryItemResponse(BaseModel):
@@ -174,6 +175,7 @@ async def run_analysis(
             "analysis_mode": body.analysis_mode,
             "laps_metadata": laps_metadata,
             "llm_provider": body.llm_provider,
+            "prompt_version": body.prompt_version,
         },
         created_at=now,
         enqueued_at=now,

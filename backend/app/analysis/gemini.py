@@ -14,11 +14,8 @@ from google import genai
 from google.genai import types
 
 from app.config import settings
-from app.analysis.llm import (
-    get_system_prompt,
-    _build_user_prompt,
-    _build_solo_prompt,
-)
+from app.analysis.llm import _build_user_prompt, _build_solo_prompt
+from app.analysis.prompts_manager import resolve_prompt
 
 GEMINI_MODEL = "gemini-2.5-pro"
 
@@ -30,6 +27,7 @@ async def analyze_with_gemini(
     track_name: str,
     gemini_api_key: str,
     analysis_mode: str = "vs_reference",
+    prompt_version: str | None = None,
 ) -> dict:
     """
     Call Gemini to produce a structured coaching analysis.
@@ -55,7 +53,7 @@ async def analyze_with_gemini(
         model=GEMINI_MODEL,
         contents=user_prompt,
         config=types.GenerateContentConfig(
-            system_instruction=get_system_prompt(),
+            system_instruction=resolve_prompt(prompt_version, "gemini"),
             max_output_tokens=settings.GEMINI_MAX_TOKENS,
         ),
     )

@@ -4,6 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { LogOut, User, ChevronRight, Clock, Calendar, Loader2, Car, MapPin, BarChart2, Trash2, Zap, ExternalLink, PlusCircle, Activity, History, Shield } from 'lucide-react'
 import { ThemeToggle } from '../components/ThemeToggle'
 import { useAuth } from '../hooks/useAuth'
+import { adminListPrompts } from '../api/client'
+import type { PromptMeta } from '../types'
 import {
   getCars,
   getTracks,
@@ -125,6 +127,7 @@ export default function LapSelectorPage() {
 
   const [analysisMode, setAnalysisMode] = useState<'vs_reference' | 'sessions'>('vs_reference')
   const [llmModel, setLlmModel] = useState<'claude' | 'gemini'>('claude')
+  const [promptVersion, setPromptVersion] = useState<string>('default')
   const [selectedCarId, setSelectedCarId] = useState<number | null>(null)
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null)
   const [selectedLapId, setSelectedLapId] = useState<string | null>(null)
@@ -175,6 +178,13 @@ export default function LapSelectorPage() {
   const { data: history = [], isLoading: historyLoading } = useQuery({
     queryKey: ['analysisHistory'],
     queryFn: getAnalysisHistory,
+  })
+
+  const isAdmin = user?.role === 'admin'
+  const { data: availablePrompts = [] } = useQuery<PromptMeta[]>({
+    queryKey: ['admin', 'prompts'],
+    queryFn: adminListPrompts,
+    enabled: isAdmin,
   })
 
   const { data: recentLaps = [], isLoading: recentLoading } = useQuery({
@@ -306,7 +316,8 @@ export default function LapSelectorPage() {
           { id: primary.id, role: 'user' as const, driver_name: primary.driver_name, lap_time: parseLapTime(primary.lap_time) },
           ...rest.map((l) => ({ id: l.id, role: 'reference' as const, driver_name: l.driver_name, lap_time: parseLapTime(l.lap_time) })),
         ]
-        return runAnalysis(primary.id, rest.map((l) => l.id), primary.car_name, primary.track_name, 'solo', lapsMetadata, llmModel)
+        const pv = isAdmin && promptVersion !== 'default' ? promptVersion : null
+        return runAnalysis(primary.id, rest.map((l) => l.id), primary.car_name, primary.track_name, 'solo', lapsMetadata, llmModel, pv)
       } else {
         const lap = myLaps.find((l) => l.id === selectedLapId)!
         const lapsMetadata = [
@@ -316,6 +327,7 @@ export default function LapSelectorPage() {
             return { id, role: 'reference' as const, driver_name: ref?.driver_name ?? '', lap_time: parseLapTime(ref?.lap_time ?? 0), irating: ref?.irating }
           }),
         ]
+        const pv = isAdmin && promptVersion !== 'default' ? promptVersion : null
         return runAnalysis(
           selectedLapId!,
           Array.from(selectedRefIds),
@@ -324,6 +336,7 @@ export default function LapSelectorPage() {
           'vs_reference',
           lapsMetadata,
           llmModel,
+          pv,
         )
       }
     },
@@ -905,6 +918,23 @@ export default function LapSelectorPage() {
                   </svg>
                   Gemini
                 </button>
+              </div>
+            )}
+
+            {/* Admin: prompt version selector */}
+            {isAdmin && availablePrompts.length > 1 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500">Prompt</span>
+                <select
+                  value={promptVersion}
+                  onChange={e => setPromptVersion(e.target.value)}
+                  className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-slate-200 text-xs focus:outline-none focus:border-amber-500"
+                >
+                  <option value="default">default</option>
+                  {availablePrompts.map(p => (
+                    <option key={p.name} value={p.name}>{p.name}</option>
+                  ))}
+                </select>
               </div>
             )}
 

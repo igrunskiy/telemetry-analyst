@@ -30,6 +30,7 @@ async def execute_analysis(
     analysis_mode: str,
     laps_metadata: list[dict] | None,
     llm_provider: str = "claude",
+    prompt_version: str | None = None,
     user: User,
     db,
 ) -> dict[str, Any]:
@@ -130,6 +131,7 @@ async def execute_analysis(
             track_name=track_name,
             gemini_api_key=gemini_key,
             analysis_mode=analysis_mode,
+            prompt_version=prompt_version,
         )
     else:
         claude_key = decrypt(user.claude_api_key_enc) if user.claude_api_key_enc else ""
@@ -140,6 +142,7 @@ async def execute_analysis(
             track_name=track_name,
             claude_api_key=claude_key,
             analysis_mode=analysis_mode,
+            prompt_version=prompt_version,
         )
     t_llm = time.monotonic() - t0
     logger.info(
