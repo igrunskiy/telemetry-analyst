@@ -52,23 +52,17 @@ async def exchange_code(code: str, code_verifier: str | None) -> dict:
             payload["code_verifier"] = code_verifier
         logger.info(f"Request payload keys: {list(payload.keys())}")
         
+        payload["client_id"] = settings.GARAGE61_CLIENT_ID
         auth = None
         if settings.GARAGE61_CLIENT_SECRET:
             auth = (settings.GARAGE61_CLIENT_ID, settings.GARAGE61_CLIENT_SECRET)
-            logger.info("Using HTTP Basic Auth (with secret)")
-            payload["client_id"] = settings.GARAGE61_CLIENT_ID
             payload["client_secret"] = settings.GARAGE61_CLIENT_SECRET
+            logger.info("Using HTTP Basic Auth (with secret)")
         else:
-            payload["client_id"] = settings.GARAGE61_CLIENT_ID
-            payload["client_secret"] = ""
-            logger.info("Public client: no Authorization header")
-        
+            logger.info("Public client: omitting client_secret")
+
         try:
             headers = {"Accept": "application/json"}
-            
-            logger.info(f"Request headers keys: {list(headers.keys())}")
-            logger.info(f"Request payload keys: {list(payload.keys())}")
-            
             response = await client.post(
                 settings.GARAGE61_TOKEN_URL,
                 data=payload,
@@ -76,21 +70,7 @@ async def exchange_code(code: str, code_verifier: str | None) -> dict:
                 auth=auth,
                 timeout=30,
             )
-            if (
-                response.status_code == 401
-                and not settings.GARAGE61_CLIENT_SECRET
-                and "invalid_client" in response.text
-            ):
-                logger.info("Retrying token exchange with empty Basic Auth")
-                response = await client.post(
-                    settings.GARAGE61_TOKEN_URL,
-                    data=payload,
-                    headers=headers,
-                    auth=(settings.GARAGE61_CLIENT_ID, ""),
-                    timeout=30,
-                )
             logger.info(f"Response status: {response.status_code}")
-            logger.info(f"Response headers: {dict(response.headers)}")
             logger.info(f"Response body: {response.text}")
             
             response.raise_for_status()
@@ -117,13 +97,11 @@ async def refresh_access_token(refresh_token: str) -> dict:
         try:
             headers = {"Accept": "application/json"}
             auth = None
+            payload["client_id"] = settings.GARAGE61_CLIENT_ID
+            auth = None
             if settings.GARAGE61_CLIENT_SECRET:
                 auth = (settings.GARAGE61_CLIENT_ID, settings.GARAGE61_CLIENT_SECRET)
-                payload["client_id"] = settings.GARAGE61_CLIENT_ID
                 payload["client_secret"] = settings.GARAGE61_CLIENT_SECRET
-            else:
-                payload["client_id"] = settings.GARAGE61_CLIENT_ID
-                payload["client_secret"] = ""
 
             response = await client.post(
                 settings.GARAGE61_TOKEN_URL,
@@ -132,19 +110,6 @@ async def refresh_access_token(refresh_token: str) -> dict:
                 auth=auth,
                 timeout=30,
             )
-            if (
-                response.status_code == 401
-                and not settings.GARAGE61_CLIENT_SECRET
-                and "invalid_client" in response.text
-            ):
-                logger.info("Retrying refresh with empty Basic Auth")
-                response = await client.post(
-                    settings.GARAGE61_TOKEN_URL,
-                    data=payload,
-                    headers=headers,
-                    auth=(settings.GARAGE61_CLIENT_ID, ""),
-                    timeout=30,
-                )
             logger.info(f"Refresh response status: {response.status_code}")
             logger.info(f"Refresh response body: {response.text}")
             response.raise_for_status()

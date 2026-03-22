@@ -169,7 +169,9 @@ export async function logout(): Promise<void> {
 }
 
 export function connectGarage61(): void {
-  window.location.href = '/auth/garage61/connect'
+  const token = localStorage.getItem('access_token')
+  const qs = token ? `?token=${encodeURIComponent(token)}` : ''
+  window.location.href = `/auth/garage61/connect${qs}`
 }
 
 export async function localLogin(username: string, password: string): Promise<string> {

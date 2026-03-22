@@ -27,6 +27,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+async def _resolve_user(request: Request, token: str | None, db):
+    """Resolve the current user from either the Authorization header or a ?token= query param.
+    The query param path exists for browser-redirect endpoints where headers can't be set."""
+    import uuid as _uuid
+    from jose import JWTError, jwt as _jwt
+    from app.config import settings
+    from app.models.user import User as _User
+    from sqlalchemy import select as _select
+
+    if token:
+        try:
+            payload = _jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+            user_id = _uuid.UUID(payload["sub"])
+        except (JWTError, ValueError):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        result = await db.execute(_select(_User).where(_User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        return user
+
+    return await get_current_user(request, db)
+
+
 class UserMeResponse(BaseModel):
     id: str
     display_name: str
@@ -306,8 +330,14 @@ async def _link_garage61_to_user(
 
 @router.get("/garage61/connect")
 async def garage61_connect(
-    current_user: User = Depends(get_current_user),
+    request: Request,
+    token: str | None = None,
+    db: AsyncSession = Depends(get_db),
 ):
+    """Initiate Garage61 OAuth2 flow to link an account to the current user.
+    Accepts the JWT via ?token= query param because this endpoint is reached
+    via browser redirect, not an XHR call that can set Authorization headers."""
+    current_user = await _resolve_user(request, token, db)
     """Initiate Garage61 OAuth2 flow to link an account to the current user."""
     state = secrets.token_urlsafe(32)
     auth_url, code_verifier = get_authorization_url(state)
