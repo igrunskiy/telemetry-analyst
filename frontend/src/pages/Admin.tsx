@@ -10,6 +10,7 @@ import {
   adminGetConfig,
   adminSaveConfig,
   adminListPrompts,
+  adminGetPrompt,
   adminGetPromptDefaults,
   adminSetPromptDefaults,
   adminCreatePrompt,
@@ -677,10 +678,7 @@ function PromptEditor({ name, onClose }: { name: string; onClose: () => void }) 
 
   const { isLoading, data } = useQuery({
     queryKey: ['admin', 'prompt', name],
-    queryFn: () => {
-      const { adminGetPrompt } = require('../api/client') as typeof import('../api/client')
-      return adminGetPrompt(name)
-    },
+    queryFn: () => adminGetPrompt(name),
   })
 
   useEffect(() => {
