@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Flag } from 'lucide-react'
 import { localLogin } from '../api/client'
 import { useQueryClient } from '@tanstack/react-query'
@@ -12,6 +12,7 @@ export default function LoginPage() {
   const [loggingIn, setLoggingIn] = useState(false)
   const queryClient = useQueryClient()
 
+  // F12 on desktop to toggle local login
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'F12') {
@@ -22,6 +23,16 @@ export default function LoginPage() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  // Double-tap on logo to toggle local login (mobile-friendly)
+  const lastTapRef = useRef(0)
+  function handleLogoTap() {
+    const now = Date.now()
+    if (now - lastTapRef.current < 400) {
+      setShowLocal(v => !v)
+    }
+    lastTapRef.current = now
+  }
 
   function handleGarage61Login() {
     setRedirecting('garage61')
@@ -61,7 +72,10 @@ export default function LoginPage() {
       <div className="relative w-full max-w-md">
         {/* Logo / Icon area */}
         <div className="flex flex-col items-center mb-8">
-          <div className="w-16 h-16 bg-amber-500 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-amber-500/25">
+          <div
+            className="w-16 h-16 bg-amber-500 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-amber-500/25 cursor-pointer select-none"
+            onClick={handleLogoTap}
+          >
             <Flag className="w-8 h-8 text-slate-900" strokeWidth={2.5} />
           </div>
 
