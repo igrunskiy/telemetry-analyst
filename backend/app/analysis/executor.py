@@ -47,12 +47,12 @@ async def execute_analysis(
     )
 
     # Build Garage61 client for this user
-    access_token = decrypt(user.access_token_enc)
+    access_token = decrypt(user.access_token_enc) if user.access_token_enc else ""
     refresh_token = decrypt(user.refresh_token_enc) if user.refresh_token_enc else None
     client = Garage61Client(
         access_token=access_token,
         refresh_token=refresh_token,
-        user_id=str(user.garage61_user_id),
+        user_id=str(user.garage61_user_id) if user.garage61_user_id else "",
         db=db,
     )
 
