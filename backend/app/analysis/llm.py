@@ -82,31 +82,6 @@ def _build_corner_table(processed: dict, weak_zones: list[dict]) -> str:
     )
     return header + "\n".join(rows)
 
-
-def _build_sector_corner_map(processed: dict) -> str:
-    """Build a mapping of which corners belong to each sector."""
-    sectors = processed.get("sectors", [])
-    corners = processed.get("corners", [])
-    track_length = processed.get("track_length_m", 3000.0)
-    if not sectors or not corners:
-        return ""
-
-    n = len(sectors)
-    sector_size = track_length / n
-    rows = []
-    for s in sectors:
-        s_num = s["sector"]
-        s_start = (s_num - 1) * sector_size
-        s_end = s_num * sector_size
-        sector_corners = [
-            f"T{c['corner_num']} ({c['dist_apex']:.0f}m)"
-            for c in corners
-            if s_start <= c["dist_apex"] < s_end
-        ]
-        rows.append(f"Sector {s_num} ({s_start:.0f}–{s_end:.0f}m): {', '.join(sector_corners) or 'no corners'}")
-    return "\n".join(rows)
-
-
 def _build_gear_table(processed: dict) -> str:
     """Build a per-corner gear table for the LLM prompt."""
     corners = processed.get("corners", [])
