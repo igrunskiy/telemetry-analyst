@@ -13,11 +13,14 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+      start_period: 10s
 
   backend:
     image: ghcr.io/${IMAGE_OWNER:-igrunskiy}/${IMAGE_REPO:-telemetry-analyst}-backend:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env
+    volumes:
+      - ./.env:/app/.env
     depends_on:
       db:
         condition: service_healthy
