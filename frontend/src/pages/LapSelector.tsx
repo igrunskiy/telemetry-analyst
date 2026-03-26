@@ -144,35 +144,39 @@ export default function LapSelectorPage() {
   const [historyPage, setHistoryPage] = useState(0)
   const HISTORY_PAGE_SIZE = 5
 
-  // Data fetching
+  const hasGarage61 = user?.has_garage61 ?? false
+
+  // Data fetching — only when Garage61 is connected
   const { data: cars = [], isLoading: carsLoading } = useQuery({
     queryKey: ['cars'],
     queryFn: getCars,
+    enabled: hasGarage61,
   })
 
   const { data: tracks = [], isLoading: tracksLoading } = useQuery({
     queryKey: ['tracks'],
     queryFn: getTracks,
+    enabled: hasGarage61,
   })
 
   const { data: myLaps = [], isLoading: myLapsLoading } = useQuery({
     queryKey: ['myLaps', selectedCarId, selectedTrackId, myLapsLimit, myLapsPage],
     queryFn: () =>
       getMyLaps(selectedCarId!, selectedTrackId!, myLapsLimit, myLapsPage * myLapsLimit),
-    enabled: selectedCarId !== null && selectedTrackId !== null && analysisMode === 'vs_reference',
+    enabled: hasGarage61 && selectedCarId !== null && selectedTrackId !== null && analysisMode === 'vs_reference',
   })
 
   const { data: mySessions = [], isLoading: mySessionsLoading } = useQuery({
     queryKey: ['mySessions', selectedCarId, selectedTrackId, mySessionsLimit, mySessionsPage],
     queryFn: () =>
       getMySessions(selectedCarId!, selectedTrackId!, mySessionsLimit, mySessionsPage * mySessionsLimit),
-    enabled: selectedCarId !== null && selectedTrackId !== null && analysisMode === 'sessions',
+    enabled: hasGarage61 && selectedCarId !== null && selectedTrackId !== null && analysisMode === 'sessions',
   })
 
   const { data: refLaps = [], isLoading: refLapsLoading } = useQuery({
     queryKey: ['refLaps', selectedCarId, selectedTrackId, refLapLimit],
     queryFn: () => getReferenceLaps(selectedCarId!, selectedTrackId!, refLapLimit),
-    enabled: selectedCarId !== null && selectedTrackId !== null,
+    enabled: hasGarage61 && selectedCarId !== null && selectedTrackId !== null,
   })
 
   const { data: history = [], isLoading: historyLoading } = useQuery({
@@ -190,6 +194,7 @@ export default function LapSelectorPage() {
   const { data: recentLaps = [], isLoading: recentLoading } = useQuery({
     queryKey: ['recentLaps'],
     queryFn: () => getRecentLaps(25),
+    enabled: hasGarage61,
   })
   const filteredRecentLaps = recentLaps.filter((lap) => {
     if (selectedCarId && lap.car_id !== selectedCarId) return false
