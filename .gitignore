@@ -10,3 +10,5 @@ dist/
 .claude/settings.local.json
 sa-key.json
 db_snapshot_*.sql.gz
+.env.bk
+run_local.sh.bak
