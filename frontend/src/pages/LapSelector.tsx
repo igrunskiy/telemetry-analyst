@@ -218,15 +218,19 @@ export default function LapSelectorPage() {
   const [historyPage, setHistoryPage] = useState(0)
   const HISTORY_PAGE_SIZE = 5
 
+  const hasGarage61 = user?.has_garage61 ?? false
+
   // Data fetching — only when Garage61 is connected
   const { data: cars = [], isLoading: carsLoading } = useQuery({
     queryKey: ['cars'],
     queryFn: getCars,
+    enabled: hasGarage61,
   })
 
   const { data: tracks = [], isLoading: tracksLoading } = useQuery({
     queryKey: ['tracks'],
     queryFn: getTracks,
+    enabled: hasGarage61,
   })
 
   const { data: myLaps = [], isLoading: myLapsLoading } = useQuery({
@@ -730,6 +734,7 @@ export default function LapSelectorPage() {
       )}
 
       <main className="max-w-[80%] mx-auto px-4 py-6">
+        {hasGarage61 ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left column: Steps 1-4 */}
           <div className="flex flex-col gap-5">
@@ -1978,6 +1983,18 @@ export default function LapSelectorPage() {
             )}
           </div>
         </div>
+        ) : (
+          <div className="card text-center col-span-full">
+            <h3 className="text-lg font-semibold text-white">Welcome, {user?.display_name}!</h3>
+            <p className="text-slate-400 mt-2">To begin analysing your driving, please connect your Garage61 account.</p>
+            <Link
+              to="/profile"
+              className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 font-medium rounded-xl text-sm transition-colors"
+            >
+              Go to Profile <ChevronRight className="w-4 h-4" />
+            </Link>
+          </div>
+        )}
       </main>
       <datalist id="garage61-car-options">
         {carSuggestions.map((name) => (

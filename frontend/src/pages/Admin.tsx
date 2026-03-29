@@ -207,13 +207,13 @@ function UserRow({
     }`}>
       {/* Avatar placeholder */}
       <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center flex-shrink-0 text-sm font-semibold text-slate-300">
-        {user.display_name.charAt(0).toUpperCase()}
+        {user.display_name?.charAt(0).toUpperCase() ?? '?'}
       </div>
 
       {/* Info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-sm">{user.display_name}</span>
+          <span className="font-medium text-sm">{user.display_name ?? 'No name'}</span>
           {user.username && (
             <span className="text-slate-500 text-xs">@{user.username}</span>
           )}
@@ -226,7 +226,7 @@ function UserRow({
           <span className="text-slate-600 text-xs">{authMethods.join(', ')}</span>
           <span className="text-slate-600 text-xs">·</span>
           <span className="text-slate-600 text-xs">
-            last seen {new Date(user.last_login_at).toLocaleDateString()}
+            last seen {user.last_login_at ? new Date(user.last_login_at).toLocaleDateString() : 'never'}
           </span>
         </div>
       </div>
