@@ -761,5 +761,5 @@ async def load_csv_for_lap_id(
 
     garage61 = await get_optional_garage61_client(user, db)
     if not garage61:
-        raise ValueError("Garage61 not connected")
+        raise ValueError(f"Garage61 not connected — cannot fetch lap {lap_id}. Upload CSV telemetry instead.")
     return await garage61.get_lap_csv(raw_id)

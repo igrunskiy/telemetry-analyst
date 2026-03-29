@@ -118,6 +118,10 @@ jobs:
             type=sha,format=short
             type=ref,event=tag
 
+      - name: Set app version
+        id: version
+        run: echo "value=$(echo ${GITHUB_SHA::7}).$(date -u +'%m%d.%H%M')" >> "$GITHUB_OUTPUT"
+
       - name: Build and push frontend
         uses: docker/build-push-action@v6
         with:
@@ -127,7 +131,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: APP_VERSION=${{ github.run_number }}
+          build-args: APP_VERSION=${{ steps.version.outputs.value }}
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
 

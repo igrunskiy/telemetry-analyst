@@ -218,19 +218,17 @@ export default function LapSelectorPage() {
   const [historyPage, setHistoryPage] = useState(0)
   const HISTORY_PAGE_SIZE = 5
 
-  const hasGarage61 = user?.has_garage61 ?? false
-
-  // Data fetching — only when Garage61 is connected
+  // Data fetching
   const { data: cars = [], isLoading: carsLoading } = useQuery({
     queryKey: ['cars'],
     queryFn: getCars,
-    enabled: hasGarage61,
+    enabled: true,
   })
 
   const { data: tracks = [], isLoading: tracksLoading } = useQuery({
     queryKey: ['tracks'],
     queryFn: getTracks,
-    enabled: hasGarage61,
+    enabled: true,
   })
 
   const { data: myLaps = [], isLoading: myLapsLoading } = useQuery({
@@ -718,23 +716,22 @@ export default function LapSelectorPage() {
       </header>
 
       {user && !user.has_garage61 && (
-        <div className="bg-amber-500/10 border-b border-amber-500/30">
-          <div className="max-w-[80%] mx-auto px-4 py-3 flex items-center justify-between gap-4">
-            <p className="text-amber-400 text-sm">
-              Garage61 account not connected — lap browsing is unavailable.
+        <div className="bg-slate-800/60 border-b border-slate-700">
+          <div className="max-w-[80%] mx-auto px-4 py-2 flex items-center justify-between gap-4">
+            <p className="text-slate-400 text-xs">
+              Garage61 not connected — you can still upload and analyse CSV telemetry files.
             </p>
             <Link
               to="/profile"
-              className="flex-shrink-0 text-xs font-medium text-amber-400 hover:text-amber-300 underline underline-offset-2"
+              className="flex-shrink-0 text-xs font-medium text-slate-400 hover:text-slate-300 underline underline-offset-2"
             >
-              Connect in Profile
+              Connect Garage61
             </Link>
           </div>
         </div>
       )}
 
       <main className="max-w-[80%] mx-auto px-4 py-6">
-        {hasGarage61 ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left column: Steps 1-4 */}
           <div className="flex flex-col gap-5">
@@ -1983,18 +1980,6 @@ export default function LapSelectorPage() {
             )}
           </div>
         </div>
-        ) : (
-          <div className="card text-center col-span-full">
-            <h3 className="text-lg font-semibold text-white">Welcome, {user?.display_name}!</h3>
-            <p className="text-slate-400 mt-2">To begin analysing your driving, please connect your Garage61 account.</p>
-            <Link
-              to="/profile"
-              className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 font-medium rounded-xl text-sm transition-colors"
-            >
-              Go to Profile <ChevronRight className="w-4 h-4" />
-            </Link>
-          </div>
-        )}
       </main>
       <datalist id="garage61-car-options">
         {carSuggestions.map((name) => (
