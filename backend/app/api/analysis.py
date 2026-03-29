@@ -4,21 +4,24 @@ Analysis execution, caching, and history endpoints.
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.worker import get_active_job_count
+from app.analysis.upload_inspector import inspect_upload
 from app.auth.jwt import get_current_user
 from app.config import settings
 from app.database import get_db
 from app.models.analysis import AnalysisResult
 from app.models.user import User
+from app.telemetry.catalog import resolve_or_create_car, resolve_or_create_track
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
@@ -31,8 +34,29 @@ class LapMetaInput(BaseModel):
     id: str
     role: str = "reference"
     driver_name: str = ""
+    source_driver_name: str | None = None
+    driver_key: str | None = None
     lap_time: float = 0.0
     irating: int | None = None
+    file_name: str | None = None
+    recorded_at: str | None = None
+    source: str | None = None
+
+
+class UploadedTelemetryInput(BaseModel):
+    id: str
+    file_name: str
+    csv_data: str
+    role: str = "reference"
+    driver_name: str = ""
+    source_driver_name: str | None = None
+    driver_key: str | None = None
+    lap_time: float = 0.0
+    irating: int | None = None
+    recorded_at: str | None = None
+    car_name: str | None = None
+    track_name: str | None = None
+    source: str = "custom"
 
 
 class RunAnalysisRequest(BaseModel):
@@ -44,6 +68,7 @@ class RunAnalysisRequest(BaseModel):
     laps_metadata: list[LapMetaInput] | None = None
     llm_provider: str = "claude"  # "claude" or "gemini"
     prompt_version: str | None = None  # named prompt; None → model default
+    uploaded_telemetry: list[UploadedTelemetryInput] | None = None
 
 
 class AnalysisHistoryItemResponse(BaseModel):
@@ -83,6 +108,7 @@ def _completed_response(record: AnalysisResult) -> dict[str, Any]:
     enriched["id"] = str(record.id)
     enriched["status"] = record.status
     enriched["created_at"] = record.created_at.isoformat()
+    enriched["share_token"] = record.share_token
     return enriched
 
 
@@ -105,6 +131,51 @@ def _record_response(record: AnalysisResult) -> dict[str, Any]:
     if record.status == "failed":
         return _failed_response(record)
     return _enqueued_response(record)
+
+
+def _canonical_driver_name(value: str | None) -> str:
+    if not value:
+        return ""
+    return " ".join(value.split()).strip()
+
+
+def _driver_key(value: str | None) -> str:
+    name = _canonical_driver_name(value).lower()
+    return "".join(ch for ch in name if ch.isalnum())
+
+
+def _normalize_lap_meta_dict(item: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(item)
+    display_name = _canonical_driver_name(str(item.get("driver_name") or item.get("source_driver_name") or ""))
+    source_name = _canonical_driver_name(str(item.get("source_driver_name") or item.get("driver_name") or ""))
+    normalized["driver_name"] = display_name
+    normalized["source_driver_name"] = source_name or None
+    normalized["driver_key"] = str(item.get("driver_key") or _driver_key(display_name) or _driver_key(source_name) or "") or None
+    return normalized
+
+
+def _resolve_uploaded_context(body: RunAnalysisRequest) -> tuple[str, str, list[dict[str, Any]] | None]:
+    uploaded = [_normalize_lap_meta_dict(item.model_dump()) for item in (body.uploaded_telemetry or [])]
+    if not uploaded:
+        return body.car_name, body.track_name, None
+
+    upload_map = {item["id"]: item for item in uploaded}
+
+    car_name = body.car_name.strip() if body.car_name.strip() else ""
+    track_name = body.track_name.strip() if body.track_name.strip() else ""
+    primary_upload = upload_map.get(body.lap_id)
+    if not car_name and primary_upload:
+        car_name = str(primary_upload.get("car_name") or "").strip()
+    if not track_name and primary_upload:
+        track_name = str(primary_upload.get("track_name") or "").strip()
+
+    if not car_name or not track_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Car and track are required for uploaded telemetry analyses",
+        )
+
+    return car_name, track_name, uploaded
 
 
 # ---------------------------------------------------------------------------
@@ -131,21 +202,24 @@ async def run_analysis(
             detail="At least one additional lap ID is required",
         )
 
+    car_name, track_name, uploaded_telemetry = _resolve_uploaded_context(body)
+
     # ----- Cache lookup (only match completed records) -----
-    cache_hit = await db.execute(
-        select(AnalysisResult).where(
-            AnalysisResult.user_id == current_user.id,
-            AnalysisResult.lap_id == body.lap_id,
-            AnalysisResult.status == "completed",
+    if not uploaded_telemetry:
+        cache_hit = await db.execute(
+            select(AnalysisResult).where(
+                AnalysisResult.user_id == current_user.id,
+                AnalysisResult.lap_id == body.lap_id,
+                AnalysisResult.status == "completed",
+            )
         )
-    )
-    for record in cache_hit.scalars().all():
-        if set(record.reference_lap_ids) == set(body.reference_lap_ids):
-            response.status_code = status.HTTP_200_OK
-            enriched = _completed_response(record)
-            if body.laps_metadata:
-                enriched["laps_metadata"] = [m.model_dump() for m in body.laps_metadata]
-            return enriched
+        for record in cache_hit.scalars().all():
+            if set(record.reference_lap_ids) == set(body.reference_lap_ids):
+                response.status_code = status.HTTP_200_OK
+                enriched = _completed_response(record)
+                if body.laps_metadata:
+                    enriched["laps_metadata"] = [m.model_dump() for m in body.laps_metadata]
+                return enriched
 
     # ----- Queue size check -----
     active_count = await get_active_job_count(db)
@@ -160,15 +234,19 @@ async def run_analysis(
 
     # ----- Create enqueued record -----
     laps_metadata = (
-        [m.model_dump() for m in body.laps_metadata] if body.laps_metadata else None
+        [_normalize_lap_meta_dict(m.model_dump()) for m in body.laps_metadata] if body.laps_metadata else None
     )
     now = datetime.now(timezone.utc)
+    car = await resolve_or_create_car(db, car_name)
+    track = await resolve_or_create_track(db, track_name)
     record = AnalysisResult(
         user_id=current_user.id,
         lap_id=body.lap_id,
         reference_lap_ids=body.reference_lap_ids,
-        car_name=body.car_name,
-        track_name=body.track_name,
+        car_id=car.id,
+        track_id=track.id,
+        car_name=car_name,
+        track_name=track_name,
         result_json={},
         status="enqueued",
         input_json={
@@ -176,6 +254,7 @@ async def run_analysis(
             "laps_metadata": laps_metadata,
             "llm_provider": body.llm_provider,
             "prompt_version": body.prompt_version,
+            "uploaded_telemetry": uploaded_telemetry,
         },
         created_at=now,
         enqueued_at=now,
@@ -185,6 +264,19 @@ async def run_analysis(
     await db.refresh(record)
 
     return _enqueued_response(record)
+
+
+@router.post("/inspect-upload")
+async def inspect_uploaded_telemetry(
+    files: list[UploadFile] = File(...),
+    _current_user: User = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for file in files:
+        contents = await file.read()
+        text = contents.decode("utf-8", errors="replace")
+        results.append(inspect_upload(file.filename or "upload.csv", text))
+    return results
 
 
 @router.post("/{analysis_id}/regenerate", status_code=status.HTTP_202_ACCEPTED)
@@ -280,6 +372,25 @@ async def get_history(
     return history
 
 
+@router.get("/shared/{share_token}")
+async def get_shared_analysis(
+    share_token: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Public endpoint — returns a read-only analysis result by share token. No auth required."""
+    result = await db.execute(
+        select(AnalysisResult).where(AnalysisResult.share_token == share_token)
+    )
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared analysis not found")
+
+    if record.status != "completed":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not yet available")
+
+    return _completed_response(record)
+
+
 @router.delete("/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_analysis(
     analysis_id: str,
@@ -342,3 +453,34 @@ async def get_analysis(
         )
 
     return _record_response(record)
+
+
+@router.post("/{analysis_id}/share")
+async def share_analysis(
+    analysis_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Generate a share token for an analysis, allowing public read-only access."""
+    try:
+        uid = uuid.UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID format")
+
+    result = await db.execute(
+        select(AnalysisResult).where(
+            AnalysisResult.id == uid,
+            AnalysisResult.user_id == current_user.id,
+        )
+    )
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not found")
+
+    if not record.share_token:
+        record.share_token = secrets.token_urlsafe(32)
+        await db.flush()
+
+    return {"share_token": record.share_token}
+
+

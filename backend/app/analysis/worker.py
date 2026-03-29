@@ -300,6 +300,7 @@ async def _process_job(job_id: uuid.UUID) -> None:
             laps_metadata = input_data.get("laps_metadata")
             llm_provider = input_data.get("llm_provider", "claude")
             prompt_version = input_data.get("prompt_version")
+            uploaded_telemetry = input_data.get("uploaded_telemetry")
 
             result_json = await execute_analysis(
                 lap_id=job.lap_id,
@@ -310,6 +311,7 @@ async def _process_job(job_id: uuid.UUID) -> None:
                 laps_metadata=laps_metadata,
                 llm_provider=llm_provider,
                 prompt_version=prompt_version,
+                uploaded_telemetry=uploaded_telemetry,
                 user=user,
                 db=db,
             )

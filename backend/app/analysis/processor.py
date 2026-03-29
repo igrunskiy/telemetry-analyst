@@ -37,6 +37,30 @@ _COLUMN_ALIASES: dict[str, list[str]] = {
 }
 
 
+def _looks_like_csv_header(line: str) -> bool:
+    parts = [part.strip().lower().replace(" ", "") for part in line.split(",")]
+    if len(parts) < 2:
+        return False
+
+    known = {
+        canonical.lower().replace(" ", "")
+        for canonical in _COLUMN_ALIASES
+    }
+    for aliases in _COLUMN_ALIASES.values():
+        known.update(alias.lower().replace(" ", "") for alias in aliases)
+
+    return any(part in known for part in parts)
+
+
+def _strip_metadata_preamble(csv_text: str) -> str:
+    lines = csv_text.splitlines()
+    for index, line in enumerate(lines):
+        cleaned = line.strip().strip("\ufeff")
+        if cleaned and "," in cleaned and _looks_like_csv_header(cleaned):
+            return "\n".join(lines[index:])
+    return csv_text
+
+
 def _rename_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Rename columns to canonical names based on _COLUMN_ALIASES."""
     lower_to_actual = {c.lower().replace(" ", ""): c for c in df.columns}
@@ -76,7 +100,8 @@ class TelemetryProcessor:
         LapDistPct cannot be resolved.
         """
         try:
-            df = pd.read_csv(io.StringIO(csv_text), low_memory=False)
+            cleaned_csv = _strip_metadata_preamble(csv_text)
+            df = pd.read_csv(io.StringIO(cleaned_csv), low_memory=False)
         except Exception as exc:
             raise ValueError(f"Failed to parse telemetry CSV: {exc}") from exc
 

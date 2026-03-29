@@ -248,27 +248,6 @@ class Garage61Client:
             logger.info("Garage61 /sessions endpoint not available, will fall back to laps grouping")
             return []
 
-    async def get_recent_laps(self, limit: int = 5) -> list[dict]:
-        """GET /laps — return the most recent laps for the current user."""
-        attempt_params = [
-            {"limit": limit, "drivers": "me", "group": "none", "clean": 1},
-        ]
-        data = None
-        for params in attempt_params:
-            try:
-                data = await self._request("GET", "/laps", params=params)
-                break
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code != 400:
-                    raise
-                continue
-        if data is None:
-            return []
-
-        if isinstance(data, list):
-            return data
-        return data.get("items") or data.get("data") or data.get("results") or []
-
     async def get_me_statistics(self) -> dict:
         """GET /me/statistics — return aggregate stats for the current user."""
         data = await self._request("GET", "/me/statistics")

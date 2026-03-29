@@ -11,6 +11,11 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _is_public_local_client() -> bool:
+    redirect_uri = (settings.GARAGE61_REDIRECT_URI or "").strip().lower()
+    return redirect_uri.startswith("http://localhost") or redirect_uri.startswith("http://127.0.0.1")
+
+
 def get_authorization_url(state: str) -> tuple[str, str]:
     """Build the Garage61 OAuth2 authorization URL."""
     code_verifier = secrets.token_urlsafe(64)
@@ -41,25 +46,27 @@ async def exchange_code(code: str, code_verifier: str | None) -> dict:
     logger.info(f"Client ID: {settings.GARAGE61_CLIENT_ID}")
     logger.info(f"Client Secret present: {bool(settings.GARAGE61_CLIENT_SECRET)}")
     logger.info(f"Redirect URI: {settings.GARAGE61_REDIRECT_URI}")
-    
+
     async with httpx.AsyncClient() as client:
         payload = {
             "grant_type": "authorization_code",
             "code": code,
             "redirect_uri": settings.GARAGE61_REDIRECT_URI,
+            "client_id": settings.GARAGE61_CLIENT_ID,
         }
         if code_verifier:
             payload["code_verifier"] = code_verifier
-        logger.info(f"Request payload keys: {list(payload.keys())}")
-        
-        payload["client_id"] = settings.GARAGE61_CLIENT_ID
-        auth = None
         if settings.GARAGE61_CLIENT_SECRET:
-            auth = (settings.GARAGE61_CLIENT_ID, settings.GARAGE61_CLIENT_SECRET)
             payload["client_secret"] = settings.GARAGE61_CLIENT_SECRET
-            logger.info("Using HTTP Basic Auth (with secret)")
+            logger.info("Confidential client: sending client_secret")
+        elif _is_public_local_client():
+            payload["client_secret"] = ""
+            logger.info("Public localhost client: sending empty client_secret")
         else:
-            logger.info("Public client: omitting client_secret")
+            raise RuntimeError(
+                "GARAGE61_CLIENT_SECRET is required for non-localhost Garage61 OAuth token exchange"
+            )
+        logger.info(f"Request payload keys: {list(payload.keys())}")
 
         try:
             headers = {"Accept": "application/json"}
@@ -67,7 +74,6 @@ async def exchange_code(code: str, code_verifier: str | None) -> dict:
                 settings.GARAGE61_TOKEN_URL,
                 data=payload,
                 headers=headers,
-                auth=auth,
                 timeout=30,
             )
             logger.info(f"Response status: {response.status_code}")
@@ -86,28 +92,31 @@ async def exchange_code(code: str, code_verifier: str | None) -> dict:
 async def refresh_access_token(refresh_token: str) -> dict:
     """Use a refresh token to obtain a new access token."""
     logger.info(f"Refreshing token with refresh_token: {refresh_token[:20]}...")
+
     async with httpx.AsyncClient() as client:
         payload = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
+            "client_id": settings.GARAGE61_CLIENT_ID,
         }
+        if settings.GARAGE61_CLIENT_SECRET:
+            payload["client_secret"] = settings.GARAGE61_CLIENT_SECRET
+            logger.info("Confidential client: sending client_secret for refresh")
+        elif _is_public_local_client():
+            payload["client_secret"] = ""
+            logger.info("Public localhost client: sending empty client_secret for refresh")
+        else:
+            raise RuntimeError(
+                "GARAGE61_CLIENT_SECRET is required for non-localhost Garage61 OAuth token refresh"
+            )
         logger.info(f"Refresh request payload keys: {list(payload.keys())}")
-        logger.info(f"Using HTTP Basic auth: {bool(settings.GARAGE61_CLIENT_SECRET)}")
-        
+
         try:
             headers = {"Accept": "application/json"}
-            auth = None
-            payload["client_id"] = settings.GARAGE61_CLIENT_ID
-            auth = None
-            if settings.GARAGE61_CLIENT_SECRET:
-                auth = (settings.GARAGE61_CLIENT_ID, settings.GARAGE61_CLIENT_SECRET)
-                payload["client_secret"] = settings.GARAGE61_CLIENT_SECRET
-
             response = await client.post(
                 settings.GARAGE61_TOKEN_URL,
                 data=payload,
                 headers=headers,
-                auth=auth,
                 timeout=30,
             )
             logger.info(f"Refresh response status: {response.status_code}")
@@ -123,12 +132,12 @@ async def refresh_access_token(refresh_token: str) -> dict:
 
 
 async def get_user_info(access_token: str) -> dict:
-    """Fetch the authenticated user's profile from Garage61 /me."""
+    """Fetch the authenticated user's profile from Garage61 OAuth userinfo."""
     logger.info(f"Fetching user info with token: {access_token[:20]}...")
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(
-                f"{settings.GARAGE61_API_BASE}/me",
+                settings.GARAGE61_USERINFO_URL,
                 headers={
                     "Authorization": f"Bearer {access_token}",
                     "Accept": "application/json",

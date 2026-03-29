@@ -22,14 +22,16 @@ export interface AdminUser {
 }
 
 export interface Car {
-  id: number
+  id: string | number
   name: string
+  source?: 'garage61' | 'upload'
   platform_id?: string
 }
 
 export interface Track {
-  id: number
+  id: string | number
   name: string
+  source?: 'garage61' | 'upload'
   config?: string
   variant?: string
   platform_id?: number | string
@@ -40,12 +42,17 @@ export interface Lap {
   lap_time: number // milliseconds
   car_name: string
   track_name: string
-  car_id?: number
-  track_id?: number
+  car_id?: string | number
+  track_id?: string | number
   driver_name: string
+  driver_key?: string
   recorded_at: string
   irating?: number
   season?: string
+  source?: 'garage61' | 'upload'
+  file_name?: string
+  sample_count?: number
+  track_length_m?: number | null
 }
 
 export interface Session {
@@ -53,11 +60,12 @@ export interface Session {
   date: string
   car_name: string
   track_name: string
-  car_id?: number
-  track_id?: number
+  car_id?: string | number
+  track_id?: string | number
   lap_count: number
   best_lap_time: number
   laps: Lap[]
+  source?: 'garage61' | 'upload'
 }
 
 export interface Corner {
@@ -115,8 +123,67 @@ export interface LapMeta {
   id: string
   role: 'user' | 'reference'
   driver_name: string
+  source_driver_name?: string
+  driver_key?: string
   lap_time: number   // milliseconds
   irating?: number
+  file_name?: string
+  recorded_at?: string
+  source?: 'garage61' | 'custom'
+}
+
+export interface UploadedTelemetryInput extends LapMeta {
+  file_name: string
+  csv_data: string
+  car_name?: string
+  track_name?: string
+}
+
+export interface UploadInspection {
+  file_name: string
+  valid: boolean
+  error: string | null
+  metadata: {
+    car_name?: string
+    track_name?: string
+    driver_name?: string
+    recorded_at?: string
+    lap_time?: number | null
+  }
+  sample_count: number
+  columns: string[]
+  track_length_m?: number | null
+}
+
+export interface ImportedTelemetry {
+  id: string
+  file_name: string
+  car_name: string
+  track_name: string
+  driver_name: string
+  driver_key?: string
+  lap_time: number
+  recorded_at?: string | null
+  sample_count: number
+  track_length_m?: number | null
+  created_at: string
+  source: 'upload'
+}
+
+export interface ImportedTelemetryUpdateInput {
+  car_name: string
+  track_name: string
+  driver_name: string
+  lap_time: number
+  recorded_at?: string | null
+}
+
+export interface Garage61DictionaryEntry {
+  id: string
+  entry_type: 'car' | 'track'
+  name: string
+  variant?: string | null
+  display_name: string
 }
 
 export interface AnalysisReport {

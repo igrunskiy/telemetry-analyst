@@ -14,6 +14,11 @@ import type {
   DbHealth,
   PromptMeta,
   PromptsDefaults,
+  UploadedTelemetryInput,
+  UploadInspection,
+  ImportedTelemetry,
+  ImportedTelemetryUpdateInput,
+  Garage61DictionaryEntry,
 } from '../types'
 
 const api = axios.create({
@@ -64,8 +69,8 @@ export async function getTracks(): Promise<Track[]> {
 }
 
 export async function getMyLaps(
-  carId: number,
-  trackId: number,
+  carId: string | number,
+  trackId: string | number,
   limit = 25,
   offset = 0,
 ): Promise<Lap[]> {
@@ -76,8 +81,8 @@ export async function getMyLaps(
 }
 
 export async function getMySessions(
-  carId: number,
-  trackId: number,
+  carId: string | number,
+  trackId: string | number,
   limit = 20,
   offset = 0,
 ): Promise<Session[]> {
@@ -94,7 +99,7 @@ export async function getRecentLaps(limit = 5): Promise<Lap[]> {
   return data
 }
 
-export async function getReferenceLaps(carId: number, trackId: number, limit = 5): Promise<Lap[]> {
+export async function getReferenceLaps(carId: string | number, trackId: string | number, limit = 5): Promise<Lap[]> {
   const { data } = await api.get<Lap[]>('/api/laps/reference-laps', {
     params: { car_id: carId, track_id: trackId, limit },
   })
@@ -110,6 +115,7 @@ export async function runAnalysis(
   lapsMetadata?: LapMeta[],
   llmProvider: 'claude' | 'gemini' = 'claude',
   promptVersion?: string | null,
+  uploadedTelemetry?: UploadedTelemetryInput[],
 ): Promise<AnalysisReport> {
   const { data } = await api.post<AnalysisReport>('/api/analysis/run', {
     lap_id: lapId,
@@ -120,7 +126,57 @@ export async function runAnalysis(
     laps_metadata: lapsMetadata,
     llm_provider: llmProvider,
     prompt_version: promptVersion ?? null,
+    uploaded_telemetry: uploadedTelemetry,
   })
+  return data
+}
+
+export async function inspectTelemetryFiles(files: File[]): Promise<UploadInspection[]> {
+  const formData = new FormData()
+  files.forEach((file) => formData.append('files', file))
+  const { data } = await api.post<UploadInspection[]>('/api/analysis/inspect-upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return data
+}
+
+export async function importTelemetryFiles(
+  files: File[],
+  metadata: Array<Record<string, unknown>>,
+): Promise<ImportedTelemetry[]> {
+  const formData = new FormData()
+  files.forEach((file) => formData.append('files', file))
+  formData.append('metadata_json', JSON.stringify(metadata))
+  const { data } = await api.post<ImportedTelemetry[]>('/api/telemetry/imports', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return data
+}
+
+export async function getImportedTelemetry(): Promise<ImportedTelemetry[]> {
+  const { data } = await api.get<ImportedTelemetry[]>('/api/telemetry/imports')
+  return data
+}
+
+export async function updateImportedTelemetry(
+  importId: string,
+  payload: ImportedTelemetryUpdateInput,
+): Promise<ImportedTelemetry> {
+  const { data } = await api.patch<ImportedTelemetry>(`/api/telemetry/imports/${importId}`, payload)
+  return data
+}
+
+export async function deleteImportedTelemetry(importId: string): Promise<void> {
+  await api.delete(`/api/telemetry/imports/${importId}`)
+}
+
+export async function getGarage61Dictionary(entryType: 'car' | 'track'): Promise<Garage61DictionaryEntry[]> {
+  const { data } = await api.get<Garage61DictionaryEntry[]>(`/api/telemetry/dictionary/${entryType}`)
+  return data
+}
+
+export async function syncGarage61Dictionary(): Promise<{ cars: number; tracks: number }> {
+  const { data } = await api.post<{ cars: number; tracks: number }>('/api/telemetry/dictionary/sync')
   return data
 }
 
