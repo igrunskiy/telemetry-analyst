@@ -237,8 +237,25 @@ export async function localLogin(username: string, password: string): Promise<st
 
 // Admin endpoints
 export async function adminListUsers(): Promise<AdminUser[]> {
-  const { data } = await api.get<AdminUser[]>('/admin/users')
-  return data
+  const { data } = await api.get<AdminUser[] | { users?: AdminUser[]; items?: AdminUser[]; data?: AdminUser[] }>('/admin/users')
+
+  if (Array.isArray(data)) {
+    return data
+  }
+
+  if (Array.isArray(data?.users)) {
+    return data.users
+  }
+
+  if (Array.isArray(data?.items)) {
+    return data.items
+  }
+
+  if (Array.isArray(data?.data)) {
+    return data.data
+  }
+
+  throw new Error('Invalid admin users response')
 }
 
 export async function adminSetSuspended(userId: string, suspended: boolean): Promise<void> {
@@ -270,8 +287,25 @@ export async function adminSaveConfig(content: string): Promise<void> {
 }
 
 export async function adminListPrompts(): Promise<PromptMeta[]> {
-  const { data } = await api.get<PromptMeta[]>('/admin/prompts')
-  return data
+  const { data } = await api.get<PromptMeta[] | { prompts?: PromptMeta[]; items?: PromptMeta[]; data?: PromptMeta[] }>('/admin/prompts')
+
+  if (Array.isArray(data)) {
+    return data
+  }
+
+  if (Array.isArray(data?.prompts)) {
+    return data.prompts
+  }
+
+  if (Array.isArray(data?.items)) {
+    return data.items
+  }
+
+  if (Array.isArray(data?.data)) {
+    return data.data
+  }
+
+  throw new Error('Invalid admin prompts response')
 }
 
 export async function adminGetPromptDefaults(): Promise<PromptsDefaults> {

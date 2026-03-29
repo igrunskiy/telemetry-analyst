@@ -122,10 +122,12 @@ function UserManagement() {
   const [showCreate, setShowCreate] = useState(false)
   const qc = useQueryClient()
 
-  const { data: users, isLoading } = useQuery({
+  const { data: users, isLoading, error, isError } = useQuery({
     queryKey: ['admin', 'users'],
     queryFn: adminListUsers,
   })
+
+  const userList = Array.isArray(users) ? users : []
 
   const suspendMutation = useMutation({
     mutationFn: ({ id, suspended }: { id: string; suspended: boolean }) =>
@@ -152,7 +154,7 @@ function UserManagement() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-xl font-semibold">User Management</h2>
-          <p className="text-slate-400 text-sm mt-1">{users?.length ?? 0} accounts</p>
+          <p className="text-slate-400 text-sm mt-1">{userList.length} accounts</p>
         </div>
         <button
           onClick={() => setShowCreate(true)}
@@ -173,8 +175,19 @@ function UserManagement() {
         />
       )}
 
+      {isError && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+          <div>
+            Failed to load users.
+            {' '}
+            {error instanceof Error ? error.message : 'Unexpected response from the server.'}
+          </div>
+        </div>
+      )}
+
       <div className="space-y-2">
-        {users?.map(user => (
+        {userList.map(user => (
           <UserRow
             key={user.id}
             user={user}
