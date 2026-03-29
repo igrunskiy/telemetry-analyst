@@ -24,6 +24,18 @@ class AnalysisResult(Base):
     )
     lap_id: Mapped[str] = mapped_column(String, nullable=False)
     reference_lap_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    car_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("telemetry_cars.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    track_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("telemetry_tracks.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     car_name: Mapped[str] = mapped_column(String, nullable=False)
     track_name: Mapped[str] = mapped_column(String, nullable=False)
     result_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

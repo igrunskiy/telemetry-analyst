@@ -4,6 +4,7 @@ Analysis execution, caching, and history endpoints.
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -107,6 +108,7 @@ def _completed_response(record: AnalysisResult) -> dict[str, Any]:
     enriched["id"] = str(record.id)
     enriched["status"] = record.status
     enriched["created_at"] = record.created_at.isoformat()
+    enriched["share_token"] = record.share_token
     return enriched
 
 
@@ -370,6 +372,25 @@ async def get_history(
     return history
 
 
+@router.get("/shared/{share_token}")
+async def get_shared_analysis(
+    share_token: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Public endpoint — returns a read-only analysis result by share token. No auth required."""
+    result = await db.execute(
+        select(AnalysisResult).where(AnalysisResult.share_token == share_token)
+    )
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared analysis not found")
+
+    if record.status != "completed":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not yet available")
+
+    return _completed_response(record)
+
+
 @router.delete("/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_analysis(
     analysis_id: str,
@@ -432,3 +453,34 @@ async def get_analysis(
         )
 
     return _record_response(record)
+
+
+@router.post("/{analysis_id}/share")
+async def share_analysis(
+    analysis_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Generate a share token for an analysis, allowing public read-only access."""
+    try:
+        uid = uuid.UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID format")
+
+    result = await db.execute(
+        select(AnalysisResult).where(
+            AnalysisResult.id == uid,
+            AnalysisResult.user_id == current_user.id,
+        )
+    )
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not found")
+
+    if not record.share_token:
+        record.share_token = secrets.token_urlsafe(32)
+        await db.flush()
+
+    return {"share_token": record.share_token}
+
+

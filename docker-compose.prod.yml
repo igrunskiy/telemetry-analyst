@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: ghcr.io/${IMAGE_OWNER:-igrunskiy}/${IMAGE_REPO:-telemetry-analyst}-db:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-telemetry}

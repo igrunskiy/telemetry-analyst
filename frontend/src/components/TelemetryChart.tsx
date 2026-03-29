@@ -254,7 +254,7 @@ export function SingleChart({
         x: distances,
         y: refValues,
         name: 'Reference',
-        line: { color: REF_COLOR, width: 1.5, dash: 'dot', shape: isStep ? 'hv' : 'linear' },
+        line: { color: REF_COLOR, width: 1.5, shape: isStep ? 'hv' : 'linear' },
         hovertemplate: isStep ? `%{y:.0f}<extra>Reference</extra>` : `%{y:.1f}<extra>Reference</extra>`,
       })
     }
@@ -279,11 +279,7 @@ export function SingleChart({
               <span className="flex items-center gap-1">
                 <span
                   className="inline-block w-5 h-0.5 rounded"
-                  style={{
-                    backgroundColor: REF_COLOR,
-                    backgroundImage:
-                      'repeating-linear-gradient(90deg,transparent,transparent 3px,#1e293b 3px,#1e293b 5px)',
-                  }}
+                  style={{ backgroundColor: REF_COLOR }}
                 />
                 <span className="text-slate-500">Reference</span>
               </span>

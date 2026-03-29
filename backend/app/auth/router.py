@@ -27,6 +27,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _has_usable_personal_token(value: str | None) -> bool:
+    token = (value or "").strip()
+    if not token:
+        return False
+    placeholders = {
+        "your_personal_token_here",
+        "changeme",
+        "your_token_here",
+    }
+    return token.lower() not in placeholders
+
+
 async def _resolve_user(request: Request, token: str | None, db):
     """Resolve the current user from either the Authorization header or a ?token= query param.
     The query param path exists for browser-redirect endpoints where headers can't be set."""
@@ -144,15 +156,21 @@ async def _upsert_user_from_token(
 @router.get("/login")
 async def login(response: Response, db: AsyncSession = Depends(get_db)):
     """Initiate Garage61 OAuth2 flow. Stores CSRF state in a cookie and redirects."""
-    if settings.GARAGE61_PERSONAL_TOKEN:
+    if _has_usable_personal_token(settings.GARAGE61_PERSONAL_TOKEN):
         logger.info("Using Garage61 personal access token for login")
-        user = await _upsert_user_from_token(db, settings.GARAGE61_PERSONAL_TOKEN)
-        await db.commit()
-        jwt_token = create_access_token(user.id)
-        return RedirectResponse(
-            url=f"/callback?access_token={jwt_token}",
-            status_code=status.HTTP_302_FOUND,
-        )
+        try:
+            user = await _upsert_user_from_token(db, settings.GARAGE61_PERSONAL_TOKEN)
+            await db.commit()
+            jwt_token = create_access_token(user.id)
+            return RedirectResponse(
+                url=f"/callback?access_token={jwt_token}",
+                status_code=status.HTTP_302_FOUND,
+            )
+        except Exception:
+            logger.warning(
+                "Garage61 personal access token login failed; falling back to OAuth flow",
+                exc_info=True,
+            )
 
     state = secrets.token_urlsafe(32)
     auth_url, code_verifier = get_authorization_url(state)
@@ -213,7 +231,7 @@ async def callback(
         logger.error(f"Token exchange failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to exchange code: {str(e)}",
+            detail=f"Failed to exchange code: {str(e)}. Check GARAGE61_CLIENT_ID, GARAGE61_CLIENT_SECRET, and GARAGE61_REDIRECT_URI.",
         )
 
     access_token = token_data.get("access_token")

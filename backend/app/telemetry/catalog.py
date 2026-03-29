@@ -10,8 +10,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+import logging
+
 from app.auth.crypto import decrypt
 from app.garage61.client import Garage61Client
+
+logger = logging.getLogger(__name__)
 from app.models.telemetry_car import TelemetryCar
 from app.models.telemetry_track import TelemetryTrack
 from app.models.uploaded_telemetry import UploadedTelemetry
@@ -280,7 +284,7 @@ def _normalize_garage61_lap(item: dict[str, Any], fallback_id: str) -> dict[str,
         "driver_key": driver_key(driver_name),
         "recorded_at": item.get("startTime") or item.get("timestamp") or "",
         "irating": item.get("driverRating"),
-        "season": item.get("seasonName") or item.get("season"),
+        "season": item.get("seasonName") or (item["season"]["name"] if isinstance(item.get("season"), dict) else item.get("season")),
         "source": SOURCE_GARAGE61,
     }
 
@@ -454,15 +458,25 @@ async def list_combined_my_laps(
             if isinstance(item, dict)
         )
 
+    # Query uploaded laps by UUID match OR by name match
+    upload_filters = [UploadedTelemetry.user_id == user.id]
     if upload_car_uuid and upload_track_uuid:
+        upload_filters.append(UploadedTelemetry.car_id == upload_car_uuid)
+        upload_filters.append(UploadedTelemetry.track_id == upload_track_uuid)
+    elif car_name and track_name:
+        matching_car = await _find_car_by_name(db, car_name)
+        matching_track = await _find_track_by_name(db, track_name)
+        if matching_car and matching_track:
+            upload_filters.append(UploadedTelemetry.car_id == matching_car.id)
+            upload_filters.append(UploadedTelemetry.track_id == matching_track.id)
+        else:
+            upload_filters = []  # no matching car/track — skip query
+
+    if upload_filters:
         result = await db.execute(
             select(UploadedTelemetry)
             .options(selectinload(UploadedTelemetry.car), selectinload(UploadedTelemetry.track))
-            .where(
-                UploadedTelemetry.user_id == user.id,
-                UploadedTelemetry.car_id == upload_car_uuid,
-                UploadedTelemetry.track_id == upload_track_uuid,
-            )
+            .where(*upload_filters)
             .order_by(UploadedTelemetry.created_at.desc())
         )
         laps.extend(_normalize_uploaded_lap(item) for item in result.scalars().all())
@@ -487,38 +501,74 @@ async def list_combined_my_sessions(
     garage61 = await get_optional_garage61_client(user, db)
     if garage61 and garage61_car_id is not None and garage61_track_id is not None:
         data = await garage61.get_my_sessions(car_id=garage61_car_id, track_id=garage61_track_id, limit=200, offset=0)
-        for idx, item in enumerate(data):
-            if not isinstance(item, dict):
-                continue
-            laps = [_normalize_garage61_lap(l, f"session-{idx}-lap-{i}") for i, l in enumerate(item.get("laps") or []) if isinstance(l, dict)]
-            lap_times = [float(l.get("lap_time") or 0) for l in laps if l.get("lap_time")]
-            sessions.append({
-                "id": make_lap_id(SOURCE_GARAGE61, str(item.get("id") or item.get("sessionId") or f"session-{idx}")),
-                "date": item.get("startTime") or item.get("date") or "",
-                "car_name": item.get("carName") or item.get("car_name") or car_name or "Unknown car",
-                "track_name": item.get("trackName") or item.get("track_name") or track_name or "Unknown track",
-                "car_id": make_car_key(SOURCE_GARAGE61, garage61_car_id),
-                "track_id": make_track_key(SOURCE_GARAGE61, garage61_track_id),
-                "lap_count": len(laps),
-                "best_lap_time": min(lap_times) if lap_times else 0,
-                "laps": laps,
-                "source": SOURCE_GARAGE61,
-            })
+        if data:
+            for idx, item in enumerate(data):
+                if not isinstance(item, dict):
+                    continue
+                laps = [_normalize_garage61_lap(l, f"session-{idx}-lap-{i}") for i, l in enumerate(item.get("laps") or []) if isinstance(l, dict)]
+                lap_times = [float(l.get("lap_time") or 0) for l in laps if l.get("lap_time")]
+                sessions.append({
+                    "id": make_lap_id(SOURCE_GARAGE61, str(item.get("id") or item.get("sessionId") or f"session-{idx}")),
+                    "date": item.get("startTime") or item.get("date") or "",
+                    "car_name": item.get("carName") or item.get("car_name") or car_name or "Unknown car",
+                    "track_name": item.get("trackName") or item.get("track_name") or track_name or "Unknown track",
+                    "car_id": make_car_key(SOURCE_GARAGE61, garage61_car_id),
+                    "track_id": make_track_key(SOURCE_GARAGE61, garage61_track_id),
+                    "lap_count": len(laps),
+                    "best_lap_time": min(lap_times) if lap_times else 0,
+                    "laps": laps,
+                    "source": SOURCE_GARAGE61,
+                })
+        else:
+            # /sessions not available — fall back to /laps grouped by date
+            laps_data = await garage61.get_my_laps(car_id=garage61_car_id, track_id=garage61_track_id, limit=200, offset=0)
+            by_date: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for idx, item in enumerate(laps_data):
+                if not isinstance(item, dict):
+                    continue
+                lap = _normalize_garage61_lap(item, f"lap-{idx}")
+                date_key = (lap.get("recorded_at") or "")[:10]
+                by_date[date_key].append(lap)
+            for date_key, laps in by_date.items():
+                lap_times = [float(l.get("lap_time") or 0) for l in laps if l.get("lap_time")]
+                sessions.append({
+                    "id": make_lap_id(SOURCE_GARAGE61, f"session-{date_key}"),
+                    "date": date_key,
+                    "car_name": car_name or "Unknown car",
+                    "track_name": track_name or "Unknown track",
+                    "car_id": make_car_key(SOURCE_GARAGE61, garage61_car_id),
+                    "track_id": make_track_key(SOURCE_GARAGE61, garage61_track_id),
+                    "lap_count": len(laps),
+                    "best_lap_time": min(lap_times) if lap_times else 0,
+                    "laps": sorted(laps, key=lambda l: float(l.get("lap_time") or 0)),
+                    "source": SOURCE_GARAGE61,
+                })
 
+    upload_filters = [UploadedTelemetry.user_id == user.id]
     if upload_car_uuid and upload_track_uuid:
+        upload_filters.append(UploadedTelemetry.car_id == upload_car_uuid)
+        upload_filters.append(UploadedTelemetry.track_id == upload_track_uuid)
+    elif car_name and track_name:
+        matching_car = await _find_car_by_name(db, car_name)
+        matching_track = await _find_track_by_name(db, track_name)
+        if matching_car and matching_track:
+            upload_filters.append(UploadedTelemetry.car_id == matching_car.id)
+            upload_filters.append(UploadedTelemetry.track_id == matching_track.id)
+        else:
+            upload_filters = []
+
+    if upload_filters:
         result = await db.execute(
             select(UploadedTelemetry)
             .options(selectinload(UploadedTelemetry.car), selectinload(UploadedTelemetry.track))
-            .where(
-                UploadedTelemetry.user_id == user.id,
-                UploadedTelemetry.car_id == upload_car_uuid,
-                UploadedTelemetry.track_id == upload_track_uuid,
-            )
+            .where(*upload_filters)
             .order_by(UploadedTelemetry.created_at.asc())
         )
         grouped: dict[str, list[UploadedTelemetry]] = defaultdict(list)
         for item in result.scalars().all():
-            grouped[str(item.import_batch_id)].append(item)
+            date_part = (item.recorded_at or item.created_at.isoformat())[:10]
+            group_key = f"{date_part}:{item.car_id or item.car_name}:{item.track_id or item.track_name}"
+            grouped[group_key].append(item)
         for batch_id, items in grouped.items():
             laps = [_normalize_uploaded_lap(item) for item in items]
             lap_times = [float(l.get("lap_time") or 0) for l in laps if l.get("lap_time")]
@@ -528,8 +578,8 @@ async def list_combined_my_sessions(
                 "date": date,
                 "car_name": items[0].car.name if items[0].car else car_name or items[0].car_name,
                 "track_name": items[0].track.display_name if items[0].track else track_name or items[0].track_name,
-                "car_id": make_car_key(SOURCE_UPLOAD, items[0].car_id or upload_car_uuid),
-                "track_id": make_track_key(SOURCE_UPLOAD, items[0].track_id or upload_track_uuid),
+                "car_id": make_car_key(SOURCE_UPLOAD, items[0].car_id or (upload_car_uuid or items[0].car_name)),
+                "track_id": make_track_key(SOURCE_UPLOAD, items[0].track_id or (upload_track_uuid or items[0].track_name)),
                 "lap_count": len(laps),
                 "best_lap_time": min(lap_times) if lap_times else 0,
                 "laps": sorted(laps, key=lambda lap: float(lap.get("lap_time") or 0)),
@@ -561,15 +611,24 @@ async def list_combined_reference_laps(
             if isinstance(item, dict)
         )
 
+    upload_filters = [UploadedTelemetry.user_id == user.id]
     if upload_car_uuid and upload_track_uuid:
+        upload_filters.append(UploadedTelemetry.car_id == upload_car_uuid)
+        upload_filters.append(UploadedTelemetry.track_id == upload_track_uuid)
+    elif car_name and track_name:
+        matching_car = await _find_car_by_name(db, car_name)
+        matching_track = await _find_track_by_name(db, track_name)
+        if matching_car and matching_track:
+            upload_filters.append(UploadedTelemetry.car_id == matching_car.id)
+            upload_filters.append(UploadedTelemetry.track_id == matching_track.id)
+        else:
+            upload_filters = []
+
+    if upload_filters:
         result = await db.execute(
             select(UploadedTelemetry)
             .options(selectinload(UploadedTelemetry.car), selectinload(UploadedTelemetry.track))
-            .where(
-                UploadedTelemetry.user_id == user.id,
-                UploadedTelemetry.car_id == upload_car_uuid,
-                UploadedTelemetry.track_id == upload_track_uuid,
-            )
+            .where(*upload_filters)
             .order_by(UploadedTelemetry.lap_time_ms.asc(), UploadedTelemetry.created_at.desc())
         )
         laps.extend(_normalize_uploaded_lap(item) for item in result.scalars().all())
@@ -579,39 +638,98 @@ async def list_combined_reference_laps(
 
 
 async def list_combined_recent_laps(user: User, db: AsyncSession, limit: int) -> list[dict[str, Any]]:
-    laps: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
+    """Return recent activity as session-level entries (one per car+track+date).
 
+    Garage61 data comes from /me/statistics (single API call).
+    Uploaded files are grouped by (car, track, date).
+    """
+    items: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+
+    # --- Garage61: extract from /me/statistics (single API call) ---
+    # Each drivingStatistics entry looks like:
+    #   {"day": "2024-12-10", "car": 1, "track": 34, "sessionType": 1,
+    #    "events": 1, "timeOnTrack": 440.16, "lapsDriven": 1, "cleanLapsDriven": 1}
     garage61 = await get_optional_garage61_client(user, db)
     if garage61:
-        for idx, item in enumerate(await garage61.get_recent_laps(limit=max(limit, 25))):
-            if not isinstance(item, dict):
-                continue
-            lap = _normalize_garage61_lap(item, f"recent-{idx}")
-            key = (lap["car_name"], lap["track_name"])
-            if key in seen:
-                continue
-            seen.add(key)
-            laps.append(lap)
-            if len(laps) >= limit:
-                return laps
+        # Build car/track name lookup from local dictionary
+        car_lookup: dict[str, str] = {}
+        track_lookup: dict[str, str] = {}
+        for entry in await list_garage61_cars(db):
+            if entry.platform_id:
+                car_lookup[entry.platform_id] = entry.name
+        for entry in await list_garage61_tracks(db):
+            if entry.platform_id:
+                track_lookup[entry.platform_id] = entry.display_name
 
+        try:
+            stats = await garage61.get_me_statistics()
+            driving_stats = stats.get("drivingStatistics") or []
+
+            if isinstance(driving_stats, list):
+                # Sort by day descending so we get the most recent first
+                driving_stats.sort(key=lambda e: e.get("day") or "" if isinstance(e, dict) else "", reverse=True)
+
+                for entry in driving_stats:
+                    if not isinstance(entry, dict):
+                        continue
+                    car_id = entry.get("car")
+                    track_id = entry.get("track")
+                    if car_id is None or track_id is None:
+                        continue
+                    day = entry.get("day") or ""
+                    dedup = f"g61:{car_id}:{track_id}:{day}"
+                    if dedup in seen_keys:
+                        continue
+                    seen_keys.add(dedup)
+
+                    car_name = car_lookup.get(str(car_id), f"Car {car_id}")
+                    track_name = track_lookup.get(str(track_id), f"Track {track_id}")
+                    laps_driven = int(entry.get("lapsDriven") or 0)
+
+                    items.append({
+                        "id": make_lap_id(SOURCE_GARAGE61, f"stats-{car_id}-{track_id}-{day}"),
+                        "lap_time": 0,
+                        "car_name": car_name,
+                        "track_name": track_name,
+                        "car_id": make_car_key(SOURCE_GARAGE61, car_id),
+                        "track_id": make_track_key(SOURCE_GARAGE61, track_id),
+                        "recorded_at": day,
+                        "lap_count": laps_driven,
+                        "source": SOURCE_GARAGE61,
+                    })
+        except Exception:
+            logger.exception("Failed to fetch Garage61 statistics for recent activity")
+
+    # --- Uploaded telemetry: one entry per file ---
     result = await db.execute(
         select(UploadedTelemetry)
         .options(selectinload(UploadedTelemetry.car), selectinload(UploadedTelemetry.track))
         .where(UploadedTelemetry.user_id == user.id)
         .order_by(UploadedTelemetry.created_at.desc())
     )
-    for item in result.scalars().all():
-        lap = _normalize_uploaded_lap(item)
-        key = (lap["car_name"], lap["track_name"])
-        if key in seen:
+    for row in result.scalars().all():
+        car_name = row.car.name if row.car else row.car_name
+        track_name = row.track.display_name if row.track else row.track_name
+        dedup = f"up:{row.id}"
+        if dedup in seen_keys:
             continue
-        seen.add(key)
-        laps.append(lap)
-        if len(laps) >= limit:
-            break
-    return laps
+        seen_keys.add(dedup)
+        items.append({
+            "id": make_lap_id(SOURCE_UPLOAD, str(row.id)),
+            "lap_time": row.lap_time_ms,
+            "car_name": car_name,
+            "track_name": track_name,
+            "car_id": make_car_key(SOURCE_UPLOAD, row.car_id or car_name),
+            "track_id": make_track_key(SOURCE_UPLOAD, row.track_id or track_name),
+            "recorded_at": row.recorded_at or row.created_at.isoformat(),
+            "driver_name": row.driver_name,
+            "file_name": row.file_name,
+            "source": SOURCE_UPLOAD,
+        })
+
+    items.sort(key=lambda x: str(x.get("recorded_at") or ""), reverse=True)
+    return items[:limit]
 
 
 async def load_csv_for_lap_id(

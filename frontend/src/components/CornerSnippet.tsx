@@ -15,7 +15,10 @@ interface CornerSnippetProps {
   userSpeed: number[]
   refSpeed: number[]
   userBrake: number[]
+  refBrake?: number[]
   userThrottle: number[]
+  refThrottle?: number[]
+  issueType?: string
   onHoverIndex?: (globalIdx: number | null) => void
 }
 
@@ -53,6 +56,24 @@ function FitCorner({ lat, lon }: { lat: number[]; lon: number[] }) {
   return null
 }
 
+// Map issue_type to which telemetry channel to show
+function resolveChartChannel(issueType?: string): 'speed' | 'brake' | 'throttle' {
+  switch (issueType) {
+    case 'braking_point': return 'brake'
+    case 'throttle_pickup': return 'throttle'
+    case 'corner_speed':
+    case 'exit_speed':
+    case 'racing_line':
+    default: return 'speed'
+  }
+}
+
+const CHANNEL_LABELS: Record<string, { unit: string; title: string }> = {
+  speed: { unit: 'km/h', title: 'Speed' },
+  brake: { unit: '%', title: 'Brake' },
+  throttle: { unit: '%', title: 'Throttle' },
+}
+
 export default function CornerSnippet({
   corner,
   distances,
@@ -63,9 +84,13 @@ export default function CornerSnippet({
   userSpeed,
   refSpeed,
   userBrake,
+  refBrake,
   userThrottle,
+  refThrottle,
+  issueType,
   onHoverIndex,
 }: CornerSnippetProps) {
+  const chartChannel = resolveChartChannel(issueType)
   // Slice indices for this corner (with padding), distances are in metres
   const { startIdx, endIdx } = useMemo(() => {
     const trackMax = distances.length > 0 ? distances[distances.length - 1] : 1
@@ -162,14 +187,34 @@ export default function CornerSnippet({
     ]
   }, [userLatSlice, userLonSlice])
 
-  // Speed mini-chart data
+  // Chart data — pick channel based on issue type
   const slicedDist = distances.slice(startIdx, endIdx + 1)
-  const slicedUserSpeed = userSpeed.slice(startIdx, endIdx + 1)
-  const slicedRefSpeed = refSpeed.slice(startIdx, endIdx + 1)
 
-  const { speedShapes, yMin, yMax } = useMemo(() => {
-    const lo = Math.min(...slicedUserSpeed, ...slicedRefSpeed) * 0.95
-    const hi = Math.max(...slicedUserSpeed, ...slicedRefSpeed) * 1.05
+  const { slicedUser, slicedRef } = useMemo(() => {
+    if (chartChannel === 'brake') {
+      return {
+        slicedUser: userBrake.slice(startIdx, endIdx + 1).map((v) => v * 100),
+        slicedRef: (refBrake ?? userBrake).slice(startIdx, endIdx + 1).map((v) => v * 100),
+      }
+    }
+    if (chartChannel === 'throttle') {
+      return {
+        slicedUser: userThrottle.slice(startIdx, endIdx + 1).map((v) => v * 100),
+        slicedRef: (refThrottle ?? userThrottle).slice(startIdx, endIdx + 1).map((v) => v * 100),
+      }
+    }
+    return {
+      slicedUser: userSpeed.slice(startIdx, endIdx + 1),
+      slicedRef: refSpeed.slice(startIdx, endIdx + 1),
+    }
+  }, [chartChannel, startIdx, endIdx, userSpeed, refSpeed, userBrake, refBrake, userThrottle, refThrottle])
+
+  const channelLabel = CHANNEL_LABELS[chartChannel]
+
+  const { chartShapes, yMin, yMax } = useMemo(() => {
+    const allVals = [...slicedUser, ...slicedRef]
+    const lo = Math.min(...allVals) * 0.95
+    const hi = Math.max(...allVals) * 1.05
     const shapes: Partial<Plotly.Shape>[] = []
 
     if (brakingIdx !== null) {
@@ -195,8 +240,8 @@ export default function CornerSnippet({
       })
     }
 
-    return { speedShapes: shapes, yMin: lo, yMax: hi }
-  }, [distances, brakingIdx, apexIdx, throttleIdx, slicedUserSpeed, slicedRefSpeed])
+    return { chartShapes: shapes, yMin: lo, yMax: hi }
+  }, [distances, brakingIdx, apexIdx, throttleIdx, slicedUser, slicedRef])
 
   const xRange = [
     Math.max(0, corner.dist_start - PAD_M),
@@ -211,6 +256,9 @@ export default function CornerSnippet({
         {corner.label && (
           <span className="text-slate-400 text-xs">{corner.label}</span>
         )}
+        <span className="text-[10px] uppercase tracking-wide text-slate-600 bg-slate-800 px-1.5 py-0.5 rounded">
+          {channelLabel.title}
+        </span>
         <div className="flex items-center gap-3 ml-auto text-xs">
           <span className="flex items-center gap-1.5">
             <span className="w-5 h-0.5 inline-block" style={{ backgroundColor: USER_COLOR }} />
@@ -220,10 +268,7 @@ export default function CornerSnippet({
             <span className="flex items-center gap-1.5">
               <span
                 className="w-5 h-0.5 inline-block"
-                style={{
-                  backgroundColor: REF_COLOR,
-                  backgroundImage: 'repeating-linear-gradient(90deg,transparent,transparent 3px,#0f172a 3px,#0f172a 5px)',
-                }}
+                style={{ backgroundColor: REF_COLOR }}
               />
               <span className="text-slate-500">Ref</span>
             </span>
@@ -278,7 +323,7 @@ export default function CornerSnippet({
 
             {/* Corner window — highlighted overlay */}
             {refPositions.length > 0 && (
-              <Polyline positions={refPositions} pathOptions={{ color: REF_COLOR, weight: 2.5, opacity: 0.9, dashArray: '5 3' }} />
+              <Polyline positions={refPositions} pathOptions={{ color: REF_COLOR, weight: 2.5, opacity: 0.9 }} />
             )}
             <Polyline positions={userPositions} pathOptions={{ color: USER_COLOR, weight: 3, opacity: 1 }} />
 
@@ -310,26 +355,26 @@ export default function CornerSnippet({
         </div>
       )}
 
-      {/* Speed mini chart */}
+      {/* Telemetry mini chart — channel depends on issue type */}
       <Plot
         data={[
           {
             type: 'scatter',
             mode: 'lines',
             x: slicedDist,
-            y: slicedUserSpeed,
+            y: slicedUser,
             line: { color: USER_COLOR, width: 1 },
             showlegend: false,
-            hovertemplate: '%{y:.0f} km/h<extra>You</extra>',
+            hovertemplate: `%{y:.0f} ${channelLabel.unit}<extra>You</extra>`,
           },
           {
             type: 'scatter',
             mode: 'lines',
             x: slicedDist,
-            y: slicedRefSpeed,
-            line: { color: REF_COLOR, width: 1, dash: 'dot' },
+            y: slicedRef,
+            line: { color: REF_COLOR, width: 1 },
             showlegend: false,
-            hovertemplate: '%{y:.0f} km/h<extra>Ref</extra>',
+            hovertemplate: `%{y:.0f} ${channelLabel.unit}<extra>Ref</extra>`,
           },
         ]}
         layout={{
@@ -347,13 +392,13 @@ export default function CornerSnippet({
             range: xRange,
           },
           yaxis: {
-            title: { text: 'km/h', font: { color: '#475569', size: 9 } },
+            title: { text: channelLabel.unit, font: { color: '#475569', size: 9 } },
             gridcolor: 'rgba(148,163,184,0.08)',
             zeroline: false,
             tickfont: { color: '#475569', size: 9 },
             range: [yMin, yMax],
           },
-          shapes: speedShapes,
+          shapes: chartShapes,
           showlegend: false,
           hovermode: 'x unified',
         }}

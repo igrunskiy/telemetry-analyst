@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     GARAGE61_REDIRECT_URI: str = "http://localhost:8000/auth/callback"
     GARAGE61_AUTH_URL: str = "https://garage61.net/app/account/oauth"
     GARAGE61_TOKEN_URL: str = "https://garage61.net/api/oauth/token"
+    GARAGE61_USERINFO_URL: str = "https://garage61.net/api/oauth/userinfo"
     GARAGE61_API_BASE: str = "https://garage61.net/api/v1"
     GARAGE61_PERSONAL_TOKEN: str = ""
     CLAUDE_API_KEY: str = ""
@@ -26,6 +27,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_HOURS: int = 168  # 1 week
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+    DOMAIN: str = "localhost"
+    CLOUD_SQL_INSTANCE: str = ""
+    GOOGLE_APPLICATION_CREDENTIALS: str = ""
     ANALYSIS_WORKER_POOL_SIZE: int = 5
     ANALYSIS_WORKER_TIMEOUT: int = 120  # seconds before watchdog kills a job
     CLAUDE_MAX_TOKENS: int = 20000

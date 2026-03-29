@@ -926,7 +926,9 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       userSpeed: displayReport.telemetry.user_speed,
                       refSpeed: displayReport.telemetry.ref_speed,
                       userBrake: displayReport.telemetry.user_brake,
+                      refBrake: displayReport.telemetry.ref_brake,
                       userThrottle: displayReport.telemetry.user_throttle,
+                      refThrottle: displayReport.telemetry.ref_throttle,
                       corners: displayReport.telemetry.corners,
                     }}
                     onActiveCorners={setActiveCornerNums}

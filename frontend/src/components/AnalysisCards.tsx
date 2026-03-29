@@ -12,7 +12,9 @@ interface Telemetry {
   userSpeed: number[]
   refSpeed: number[]
   userBrake: number[]
+  refBrake: number[]
   userThrottle: number[]
+  refThrottle: number[]
   corners: Corner[]
 }
 
@@ -142,7 +144,10 @@ function ImprovementCard({ area, telemetry, onActiveCorners, onHoverIndex }: Imp
                   userSpeed={telemetry.userSpeed}
                   refSpeed={telemetry.refSpeed}
                   userBrake={telemetry.userBrake}
+                  refBrake={telemetry.refBrake}
                   userThrottle={telemetry.userThrottle}
+                  refThrottle={telemetry.refThrottle}
+                  issueType={area.issue_type}
                   onHoverIndex={onHoverIndex}
                 />
               ))}

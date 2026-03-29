@@ -1,6 +1,8 @@
 services:
   db:
-    image: postgres:16-alpine
+    build:
+      context: ./db
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-telemetry}
@@ -24,6 +26,28 @@ services:
     env_file: .env
     command: ["python", "-Xfrozen_modules=off", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     environment:
+      GARAGE61_CLIENT_ID:
+      GARAGE61_CLIENT_SECRET:
+      GARAGE61_REDIRECT_URI:
+      GARAGE61_PERSONAL_TOKEN:
+      CLAUDE_API_KEY:
+      GEMINI_API_KEY:
+      SECRET_KEY:
+      ENCRYPTION_KEY:
+      LOG_LEVEL:
+      POSTGRES_USER:
+      POSTGRES_PASSWORD:
+      POSTGRES_DB:
+      DATABASE_URL:
+      CORS_ORIGINS:
+      DOMAIN:
+      DISCORD_CLIENT_ID:
+      DISCORD_CLIENT_SECRET:
+      DISCORD_REDIRECT_URI:
+      ANALYSIS_WORKER_POOL_SIZE:
+      ANALYSIS_WORKER_TIMEOUT:
+      CLAUDE_MAX_TOKENS:
+      GEMINI_MAX_TOKENS:
       ENABLE_REMOTE_DEBUG: ${ENABLE_REMOTE_DEBUG:-false}
       REMOTE_DEBUG_PORT: ${REMOTE_DEBUG_PORT:-5678}
       REMOTE_DEBUG_WAIT: ${REMOTE_DEBUG_WAIT:-false}
