@@ -50,6 +50,17 @@ docker compose -f "$COMPOSE_FILE" exec -T db sh -lc '
   pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ' | gzip > "$BACKUP_PATH"
 
+echo "==> Resetting public schema before import..."
+docker compose -f "$COMPOSE_FILE" exec -T db sh -lc '
+  export PGPASSWORD="$POSTGRES_PASSWORD"
+  psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" <<SQL
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+GRANT ALL ON SCHEMA public TO CURRENT_USER;
+GRANT ALL ON SCHEMA public TO public;
+SQL
+'
+
 echo "==> Importing $SEED_PATH into the running database..."
 gzip -dc "$SEED_PATH" | docker compose -f "$COMPOSE_FILE" exec -T db sh -lc '
   export PGPASSWORD="$POSTGRES_PASSWORD"
