@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Deploy latest code — run on the VM to pull + rebuild
+# Deploy latest code — run on the VM to pull code and pre-built images
 #
 # Usage:
 #   sudo -u telemetry bash /opt/telemetry-analyst/deploy/deploy.sh
@@ -13,8 +13,11 @@ cd "$APP_DIR"
 echo "==> Pulling latest code..."
 git pull origin main
 
-echo "==> Rebuilding containers..."
-docker compose up -d --build --remove-orphans
+echo "==> Pulling latest images..."
+docker compose -f docker-compose.prod.yml pull
+
+echo "==> Restarting services..."
+docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans
 
 echo "==> Cleaning up old images..."
 docker image prune -f

@@ -108,7 +108,7 @@ RemainAfterExit=yes
 User=${APP_USER}
 WorkingDirectory=${APP_DIR}
 ExecStart=/usr/bin/docker compose -f ${APP_DIR}/docker-compose.prod.yml up -d --remove-orphans
-ExecStop=/usr/bin/docker compose down
+ExecStop=/usr/bin/docker compose -f ${APP_DIR}/docker-compose.prod.yml down
 TimeoutStartSec=600
 
 [Install]

@@ -54,7 +54,12 @@
       "Bash(findstr :5678)",
       "Bash(tasklist /FI \"PID eq 39552\")",
       "Bash(tasklist /FI \"PID eq 42628\")",
-      "Bash(powershell -Command \"Get-Process -Id 39552, 42628 | Select-Object Id, ProcessName, MainWindowTitle\")"
+      "Bash(powershell -Command \"Get-Process -Id 39552, 42628 | Select-Object Id, ProcessName, MainWindowTitle\")",
+      "Bash(gh run:*)",
+      "Bash(brew list:*)",
+      "Bash(git branch:*)",
+      "Bash(gunzip -c /Users/igrunskyi/Git/telemetry-analyst/db/seed.sql.gz)",
+      "Bash(grep -B 2 -A 5 \"queryKey: \\\\[''admin'', ''users''\\\\]\" frontend/src/pages/Admin.tsx)"
     ],
     "additionalDirectories": [
       "d:\\Claude\\.tmp\\telemetry-analyst_auth-admin-ui\\backend"
