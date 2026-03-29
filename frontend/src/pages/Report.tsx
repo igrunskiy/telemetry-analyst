@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react'
-import { useParams, Link, useNavigate } from 'react-router-dom'
+import { useParams, Link, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User, RefreshCw, Share2, Check } from 'lucide-react'
 import { getAnalysis, deleteAnalysis, regenerateAnalysis, shareAnalysis, getSharedAnalysis } from '../api/client'
@@ -178,6 +178,28 @@ function formatLapTime(raw: number): string {
   return `${mins}:${secs}`
 }
 
+async function copyText(text: string): Promise<void> {
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.select()
+
+  const copied = document.execCommand('copy')
+  document.body.removeChild(textarea)
+
+  if (!copied) {
+    throw new Error('Copy failed')
+  }
+}
+
 function IRatingBadge({ value }: { value: number }) {
   // iRacing iRating tiers with colour + label
   const tiers = [
@@ -303,6 +325,7 @@ const TABS: { id: Tab; label: string }[] = [
 export default function ReportPage({ readOnly = false }: { readOnly?: boolean }) {
   const { analysisId, shareToken } = useParams<{ analysisId?: string; shareToken?: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<Tab>('summary')
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
@@ -313,10 +336,19 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
   const [shareState, setShareState] = useState<'idle' | 'loading' | 'copied'>('idle')
   // Snapshot of the report before regeneration starts — kept visible until the user dismisses
   const [savedReport, setSavedReport] = useState<typeof report | null>(null)
+  const backTo = (location.state as { backTo?: { pathname: string; state?: unknown } } | null)?.backTo
+  const backHref = backTo?.pathname ?? '/app'
+  const goBack = () => {
+    if (backTo) {
+      navigate(backTo.pathname, { state: backTo.state })
+      return
+    }
+    navigate('/app')
+  }
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteAnalysis(analysisId!),
-    onSuccess: () => navigate('/'),
+    onSuccess: () => goBack(),
   })
 
   const regenerateMutation = useMutation({
@@ -340,7 +372,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
       // If already shared, use existing token from report; otherwise generate one
       const token = report?.share_token ?? (await shareAnalysis(analysisId)).share_token
       const url = `${window.location.origin}/shared/${token}`
-      await navigator.clipboard.writeText(url)
+      await copyText(url)
       setShareState('copied')
       setTimeout(() => setShareState('idle'), 2000)
     } catch {
@@ -426,7 +458,8 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
           <div className="h-14 flex items-center gap-3">
             {!readOnly && (
               <Link
-                to="/"
+                to={backHref}
+                state={backTo?.state}
                 className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors flex-shrink-0"
               >
                 <ArrowLeft className="w-4 h-4" />
@@ -484,7 +517,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                   : 'Fetching data, processing laps, and generating AI coaching report.'}
               </p>
             </div>
-            <Link to="/" className="text-slate-500 hover:text-slate-300 text-sm transition-colors">
+            <Link to={backHref} state={backTo?.state} className="text-slate-500 hover:text-slate-300 text-sm transition-colors">
               &larr; Back to lap selector
             </Link>
           </div>
@@ -505,7 +538,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                   {regenerateMutation.isPending ? 'Re-running…' : 'Re-run analysis'}
                 </button>
               )}
-              <Link to="/" className="text-amber-500 hover:text-amber-400 text-sm">
+              <Link to={backHref} state={backTo?.state} className="text-amber-500 hover:text-amber-400 text-sm">
                 &larr; Back to lap selector
               </Link>
             </div>
@@ -515,7 +548,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
         {isError && (
           <div className="card text-center py-12">
             <p className="text-red-400 mb-2">Failed to load analysis report.</p>
-            <Link to="/" className="text-amber-500 hover:text-amber-400 text-sm">
+            <Link to={backHref} state={backTo?.state} className="text-amber-500 hover:text-amber-400 text-sm">
               &larr; Back to lap selector
             </Link>
           </div>

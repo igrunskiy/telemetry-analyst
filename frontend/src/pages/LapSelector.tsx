@@ -1670,7 +1670,9 @@ export default function LapSelectorPage() {
                     <div key={item.id} className="relative group">
                       <button
                         data-testid="analysis-history-item"
-                        onClick={() => navigate(`/report/${item.id}`)}
+                        onClick={() => navigate(`/report/${item.id}`, {
+                          state: { backTo: { pathname: '/app' } },
+                        })}
                         className={`w-full card text-left hover:bg-slate-700 transition-colors pr-10 py-2.5 border-l-2 ${
                           isSoloItem ? 'border-l-violet-500/50' : 'border-l-orange-500/50'
                         }`}

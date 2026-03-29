@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield, Users, Settings, ChevronLeft, Check, X, RefreshCw, Plus, Save, AlertTriangle, Activity, BarChart2, ChevronRight, Loader2, FileText, Trash2, Star } from 'lucide-react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   adminListUsers,
   adminSetSuspended,
@@ -28,7 +28,9 @@ import type { AdminUser, AdminReport, PromptMeta, PromptsDefaults } from '../typ
 type Section = 'users' | 'config' | 'prompt' | 'workers' | 'reports'
 
 export default function AdminPage() {
-  const [section, setSection] = useState<Section>('users')
+  const location = useLocation()
+  const initialSection = (location.state as { initialSection?: Section } | null)?.initialSection
+  const [section, setSection] = useState<Section>(initialSection ?? 'users')
 
   return (
     <div className="min-h-screen bg-slate-900 text-white">
@@ -555,7 +557,9 @@ function WorkerMonitor() {
                     <span className="font-mono text-xs text-slate-400">{task.job_id}</span>
                     <div className="flex items-center gap-3">
                       <button
-                        onClick={() => navigate(`/report/${task.job_id}`)}
+                        onClick={() => navigate(`/report/${task.job_id}`, {
+                          state: { backTo: { pathname: '/admin', state: { initialSection: 'workers' satisfies Section } } },
+                        })}
                         className="text-xs text-amber-400/70 hover:text-amber-400 transition-colors flex items-center gap-1"
                       >
                         <ChevronRight className="w-3 h-3" />View
@@ -978,7 +982,9 @@ function ReportRow({ r }: { r: AdminReport }) {
     <div className="space-y-0">
       <div className={`card ${isFailed ? 'border-red-500/20' : ''} p-0 overflow-hidden`}>
         <button
-          onClick={() => isFailed ? setExpanded(v => !v) : isOngoing ? undefined : navigate(`/report/${r.id}`)}
+          onClick={() => isFailed ? setExpanded(v => !v) : isOngoing ? undefined : navigate(`/report/${r.id}`, {
+            state: { backTo: { pathname: '/admin', state: { initialSection: 'reports' satisfies Section } } },
+          })}
           className={`w-full text-left transition-colors group px-4 py-3 ${isOngoing ? 'cursor-default' : 'hover:bg-slate-700'}`}
         >
           <div className="flex items-center gap-3">

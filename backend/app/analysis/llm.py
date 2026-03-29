@@ -25,9 +25,9 @@ CLAUDE_MODEL = "claude-sonnet-4-6"
 # ---------------------------------------------------------------------------
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
+_PROMPT_TEMPLATES_DIR = Path(__file__).parent / "prompt_templates"
 
-_USER_PROMPT_TEMPLATE = (_PROMPTS_DIR / "user_prompt.md").read_text(encoding="utf-8")
-_SOLO_PROMPT_TEMPLATE = (_PROMPTS_DIR / "solo_prompt.md").read_text(encoding="utf-8")
+_ANALYSIS_PROMPT_TEMPLATE = (_PROMPT_TEMPLATES_DIR / "analysis_request.md").read_text(encoding="utf-8")
 
 # Backward-compat constant (tests / other modules that import SYSTEM_PROMPT directly)
 SYSTEM_PROMPT = resolve_prompt(None, "claude")
@@ -204,15 +204,53 @@ def _build_solo_prompt(
     gear_table = _build_gear_table(processed)
     sector_corner_map = _build_sector_corner_map(processed)
 
-    return _SOLO_PROMPT_TEMPLATE.format_map({
+    return _ANALYSIS_PROMPT_TEMPLATE.format_map({
+        "title": "Solo Lap Analysis Request",
         "car_name": car_name,
         "track_name": track_name,
+        "context_block": (
+            '**Context:** These are all laps from the SAME driver. The "best lap" is compared '
+            'against the point-by-point **median** of the driver\'s other laps to find consistency '
+            'patterns and recurring mistakes. There is no external benchmark — focus entirely on '
+            'the driver\'s own variance and recurring weak spots. Use the word "median" (not '
+            '"average") when referring to the reference.'
+        ),
         "corner_summary": corner_summary or "No corners detected.",
+        "corner_table_heading": "best lap vs. driver's other laps",
         "corner_table": corner_table,
         "sector_table": sector_table,
         "gear_table": gear_table,
         "sector_corner_map": sector_corner_map,
+        "weak_section_title": "Variance Zones (corners where the driver loses time on non-best laps)",
         "weak_table": weak_table,
+        "strengths_section": "",
+        "task_block": (
+            "Analyse these laps and identify the driver's own patterns, inconsistencies, and areas "
+            'where they could be more consistent or improve their technique. Do NOT mention '
+            '"reference lap" or "reference driver" — these are all the same driver\'s laps.'
+        ),
+        "summary_schema": "3-5 sentence overall assessment of the driver's consistency and patterns",
+        "description_schema": "detailed explanation of the inconsistency or pattern and its impact",
+        "technique_schema": "specific actionable technique advice for achieving consistency here",
+        "telemetry_evidence_schema": "what the telemetry numbers specifically show about the variance",
+        "strengths_schema": '["area where the driver is consistent lap-to-lap", "another consistent strength"]',
+        "sector_notes_schema": '["note about sector 1 consistency", "note about sector 2", "note about sector 3"]',
+        "braking_points_comment": "1-2 sentence assessment of braking point consistency lap-to-lap",
+        "brake_application_comment": "1-2 sentence assessment of brake pressure consistency, trail braking repeatability",
+        "throttle_pickup_comment": "1-2 sentence assessment of throttle pickup point consistency and application smoothness",
+        "steering_comment": "1-2 sentence assessment of steering input consistency and correction frequency across laps",
+        "sector_braking_points_comment": "sector 1 braking point lap-to-lap consistency based on corners in this sector",
+        "sector_brake_application_comment": "sector 1 brake pressure repeatability",
+        "sector_throttle_pickup_comment": "sector 1 throttle pickup consistency",
+        "sector_steering_comment": "sector 1 steering consistency across laps",
+        "score_meaning": "Score meaning: 0 = very inconsistent, 50 = moderate lap-to-lap variance, 75 = good consistency, 90+ = very consistent.",
+        "score_guidance": (
+            "Base scores on actual lap-to-lap variance shown in the data — braking points on "
+            "variance in brake zone distances, brake application on pressure trace repeatability, "
+            "throttle pickup on variation in pickup point distances, steering on mid-corner speed "
+            "stability.\n"
+        ),
+        "sector_score_focus": "consistency areas",
     })
 
 
@@ -281,16 +319,48 @@ def _build_user_prompt(
     gear_table = _build_gear_table(processed)
     sector_corner_map = _build_sector_corner_map(processed)
 
-    return _USER_PROMPT_TEMPLATE.format_map({
+    strengths_section = "### Strongest Sectors (user faster than reference)\n" + strength_bullets
+
+    return _ANALYSIS_PROMPT_TEMPLATE.format_map({
+        "title": "Telemetry Analysis Request",
         "car_name": car_name,
         "track_name": track_name,
+        "context_block": "",
         "corner_summary": corner_summary or "No corners detected.",
+        "corner_table_heading": "user vs. reference",
         "corner_table": corner_table,
         "sector_table": sector_table,
         "gear_table": gear_table,
         "sector_corner_map": sector_corner_map,
+        "weak_section_title": "Weak Zones (sorted by severity)",
         "weak_table": weak_table,
-        "strength_bullets": strength_bullets,
+        "strengths_section": strengths_section,
+        "task_block": (
+            "Analyse this telemetry data and provide specific, actionable coaching feedback.\n"
+            "The driver wants to close the gap to the reference lap."
+        ),
+        "summary_schema": "2-3 sentence overall assessment of the lap",
+        "description_schema": "detailed explanation of the problem and its impact",
+        "technique_schema": "specific actionable technique advice for this corner/zone",
+        "telemetry_evidence_schema": "what the telemetry numbers specifically show",
+        "strengths_schema": '["strength 1", "strength 2"]',
+        "sector_notes_schema": '["note about sector 1", "note about sector 2", "note about sector 3"]',
+        "braking_points_comment": "1-2 sentence assessment of braking point consistency and accuracy across corners",
+        "brake_application_comment": "1-2 sentence assessment of brake pressure modulation, threshold braking, and trail braking into corners",
+        "throttle_pickup_comment": "1-2 sentence assessment of throttle application timing and progressiveness on corner exits",
+        "steering_comment": "1-2 sentence assessment of steering smoothness, correction frequency, and line accuracy",
+        "sector_braking_points_comment": "sector 1 specific braking assessment based on corners in this sector",
+        "sector_brake_application_comment": "sector 1 brake pressure and trail braking",
+        "sector_throttle_pickup_comment": "sector 1 throttle timing and progressiveness",
+        "sector_steering_comment": "sector 1 steering smoothness and line accuracy",
+        "score_meaning": "Score meaning: 0 = very poor, 50 = average amateur, 75 = competent, 90+ = excellent.",
+        "score_guidance": (
+            "Base scores on the telemetry evidence — braking points on brake zone distances vs "
+            "reference, brake application & abs on pressure trace shape, throttle pickup on "
+            "throttle pickup distance vs reference, steering on mid-corner speed stability and "
+            "correction events.\n"
+        ),
+        "sector_score_focus": "technique areas",
     })
 
 

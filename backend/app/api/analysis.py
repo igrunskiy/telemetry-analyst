@@ -467,12 +467,11 @@ async def share_analysis(
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID format")
 
-    result = await db.execute(
-        select(AnalysisResult).where(
-            AnalysisResult.id == uid,
-            AnalysisResult.user_id == current_user.id,
-        )
-    )
+    query = select(AnalysisResult).where(AnalysisResult.id == uid)
+    if current_user.role != "admin":
+        query = query.where(AnalysisResult.user_id == current_user.id)
+
+    result = await db.execute(query)
     record = result.scalar_one_or_none()
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not found")
@@ -482,5 +481,4 @@ async def share_analysis(
         await db.flush()
 
     return {"share_token": record.share_token}
-
 
