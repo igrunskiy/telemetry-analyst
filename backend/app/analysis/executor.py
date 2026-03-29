@@ -15,8 +15,8 @@ from app.analysis.gemini import analyze_with_gemini, GEMINI_MODEL
 from app.analysis.processor import TelemetryProcessor
 from app.analysis.zones import detect_weak_zones
 from app.auth.crypto import decrypt
-from app.garage61.client import Garage61Client
 from app.models.user import User
+from app.telemetry.catalog import load_csv_for_lap_id
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ async def execute_analysis(
     laps_metadata: list[dict] | None,
     llm_provider: str = "claude",
     prompt_version: str | None = None,
+    uploaded_telemetry: list[dict[str, Any]] | None = None,
     user: User,
     db,
 ) -> dict[str, Any]:
@@ -46,21 +47,19 @@ async def execute_analysis(
         lap_id, reference_lap_ids, car_name, track_name, analysis_mode, llm_provider, model_name,
     )
 
-    # Build Garage61 client for this user
-    access_token = decrypt(user.access_token_enc)
-    refresh_token = decrypt(user.refresh_token_enc) if user.refresh_token_enc else None
-    client = Garage61Client(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        user_id=str(user.garage61_user_id),
-        db=db,
-    )
-
-    # Fetch all CSVs concurrently
-    logger.debug("Fetching %d lap CSVs from Garage61", len(all_lap_ids))
+    upload_ids = {item["id"] for item in (uploaded_telemetry or [])}
+    logger.debug("Fetching %d lap CSVs from telemetry sources", len(all_lap_ids))
     t0 = time.monotonic()
     csv_results = await asyncio.gather(
-        *[client.get_lap_csv(lid) for lid in all_lap_ids],
+        *[
+            load_csv_for_lap_id(
+                lid,
+                user=user,
+                db=db,
+                uploaded_telemetry=uploaded_telemetry,
+            )
+            for lid in all_lap_ids
+        ],
         return_exceptions=True,
     )
     logger.info("CSV fetch complete in %.2fs", time.monotonic() - t0)
@@ -77,6 +76,7 @@ async def execute_analysis(
                 "role": "user" if i == 0 else "reference",
                 "driver_name": "",
                 "lap_time": 0,
+                "source": "custom" if lid in upload_ids else "garage61",
             }
             for i, lid in enumerate(all_lap_ids)
         ]
