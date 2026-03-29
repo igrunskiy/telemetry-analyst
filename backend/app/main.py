@@ -129,6 +129,140 @@ async def lifespan(app: FastAPI):
             await conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS ix_users_email ON users (email) WHERE email IS NOT NULL"
             ))
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_telemetry_cars_source_platform "
+                "ON telemetry_cars (source, platform_id)"
+            ))
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_telemetry_cars_source_normalized "
+                "ON telemetry_cars (source, normalized_name)"
+            ))
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_telemetry_tracks_source_platform "
+                "ON telemetry_tracks (source, platform_id)"
+            ))
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_telemetry_tracks_source_normalized "
+                "ON telemetry_tracks (source, normalized_name)"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE uploaded_telemetry ADD COLUMN IF NOT EXISTS car_id UUID"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE uploaded_telemetry ADD COLUMN IF NOT EXISTS track_id UUID"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS car_id UUID"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS track_id UUID"
+            ))
+            await conn.execute(text(
+                "DO $$ BEGIN "
+                "ALTER TABLE uploaded_telemetry ADD CONSTRAINT fk_uploaded_telemetry_car "
+                "FOREIGN KEY (car_id) REFERENCES telemetry_cars(id) ON DELETE SET NULL; "
+                "EXCEPTION WHEN duplicate_object THEN NULL; END $$;"
+            ))
+            await conn.execute(text(
+                "DO $$ BEGIN "
+                "ALTER TABLE uploaded_telemetry ADD CONSTRAINT fk_uploaded_telemetry_track "
+                "FOREIGN KEY (track_id) REFERENCES telemetry_tracks(id) ON DELETE SET NULL; "
+                "EXCEPTION WHEN duplicate_object THEN NULL; END $$;"
+            ))
+            await conn.execute(text(
+                "DO $$ BEGIN "
+                "ALTER TABLE analysis_results ADD CONSTRAINT fk_analysis_results_car "
+                "FOREIGN KEY (car_id) REFERENCES telemetry_cars(id) ON DELETE SET NULL; "
+                "EXCEPTION WHEN duplicate_object THEN NULL; END $$;"
+            ))
+            await conn.execute(text(
+                "DO $$ BEGIN "
+                "ALTER TABLE analysis_results ADD CONSTRAINT fk_analysis_results_track "
+                "FOREIGN KEY (track_id) REFERENCES telemetry_tracks(id) ON DELETE SET NULL; "
+                "EXCEPTION WHEN duplicate_object THEN NULL; END $$;"
+            ))
+            await conn.execute(text(
+                "DO $$ BEGIN "
+                "IF to_regclass('public.garage61_dictionary') IS NOT NULL THEN "
+                "  INSERT INTO telemetry_cars (id, source, platform_id, name, normalized_name, created_at, updated_at) "
+                "  SELECT gen_random_uuid(), 'garage61', d.platform_id, d.name, "
+                "    lower(regexp_replace(trim(d.name), '\\s+', ' ', 'g')), d.created_at, d.updated_at "
+                "  FROM ("
+                "    SELECT DISTINCT ON (lower(regexp_replace(trim(name), '\\s+', ' ', 'g'))) "
+                "      platform_id, name, created_at, updated_at "
+                "    FROM garage61_dictionary "
+                "    WHERE entry_type = 'car' AND platform_id IS NOT NULL "
+                "    ORDER BY lower(regexp_replace(trim(name), '\\s+', ' ', 'g')), updated_at DESC"
+                "  ) d "
+                "  WHERE NOT EXISTS ("
+                "    SELECT 1 FROM telemetry_cars tc "
+                "    WHERE tc.source = 'garage61' AND ("
+                "      tc.platform_id = d.platform_id OR "
+                "      tc.normalized_name = lower(regexp_replace(trim(d.name), '\\s+', ' ', 'g'))"
+                "    )"
+                "  ); "
+                "END IF; "
+                "END $$;"
+            ))
+            await conn.execute(text(
+                "DO $$ BEGIN "
+                "IF to_regclass('public.garage61_dictionary') IS NOT NULL THEN "
+                "  INSERT INTO telemetry_tracks (id, source, platform_id, name, variant, display_name, normalized_name, created_at, updated_at) "
+                "  SELECT gen_random_uuid(), 'garage61', d.platform_id, d.name, d.variant, d.display_name, "
+                "    lower(regexp_replace(trim(d.display_name), '\\s+', ' ', 'g')), d.created_at, d.updated_at "
+                "  FROM ("
+                "    SELECT DISTINCT ON (lower(regexp_replace(trim(display_name), '\\s+', ' ', 'g'))) "
+                "      platform_id, name, variant, display_name, created_at, updated_at "
+                "    FROM garage61_dictionary "
+                "    WHERE entry_type = 'track' AND platform_id IS NOT NULL "
+                "    ORDER BY lower(regexp_replace(trim(display_name), '\\s+', ' ', 'g')), updated_at DESC"
+                "  ) d "
+                "  WHERE NOT EXISTS ("
+                "    SELECT 1 FROM telemetry_tracks tt "
+                "    WHERE tt.source = 'garage61' AND ("
+                "      tt.platform_id = d.platform_id OR "
+                "      tt.normalized_name = lower(regexp_replace(trim(d.display_name), '\\s+', ' ', 'g'))"
+                "    )"
+                "  ); "
+                "END IF; "
+                "END $$;"
+            ))
+            await conn.execute(text(
+                "INSERT INTO telemetry_cars (id, source, platform_id, name, normalized_name, created_at, updated_at) "
+                "SELECT gen_random_uuid(), 'custom', NULL, car_name, lower(regexp_replace(trim(car_name), '\\s+', ' ', 'g')), NOW(), NOW() "
+                "FROM (SELECT DISTINCT car_name FROM uploaded_telemetry WHERE car_name IS NOT NULL AND trim(car_name) <> '') cars "
+                "ON CONFLICT (source, normalized_name) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()"
+            ))
+            await conn.execute(text(
+                "INSERT INTO telemetry_tracks (id, source, platform_id, name, variant, display_name, normalized_name, created_at, updated_at) "
+                "SELECT gen_random_uuid(), 'custom', NULL, track_name, NULL, track_name, lower(regexp_replace(trim(track_name), '\\s+', ' ', 'g')), NOW(), NOW() "
+                "FROM (SELECT DISTINCT track_name FROM uploaded_telemetry WHERE track_name IS NOT NULL AND trim(track_name) <> '') tracks "
+                "ON CONFLICT (source, normalized_name) DO UPDATE SET display_name = EXCLUDED.display_name, name = EXCLUDED.name, updated_at = NOW()"
+            ))
+            await conn.execute(text(
+                "UPDATE uploaded_telemetry ut SET car_id = tc.id "
+                "FROM telemetry_cars tc "
+                "WHERE ut.car_id IS NULL AND lower(regexp_replace(trim(ut.car_name), '\\s+', ' ', 'g')) = tc.normalized_name "
+                "AND (tc.source = 'garage61' OR tc.source = 'custom')"
+            ))
+            await conn.execute(text(
+                "UPDATE uploaded_telemetry ut SET track_id = tt.id "
+                "FROM telemetry_tracks tt "
+                "WHERE ut.track_id IS NULL AND lower(regexp_replace(trim(ut.track_name), '\\s+', ' ', 'g')) = tt.normalized_name "
+                "AND (tt.source = 'garage61' OR tt.source = 'custom')"
+            ))
+            await conn.execute(text(
+                "UPDATE analysis_results ar SET car_id = tc.id "
+                "FROM telemetry_cars tc "
+                "WHERE ar.car_id IS NULL AND lower(regexp_replace(trim(ar.car_name), '\\s+', ' ', 'g')) = tc.normalized_name "
+                "AND (tc.source = 'garage61' OR tc.source = 'custom')"
+            ))
+            await conn.execute(text(
+                "UPDATE analysis_results ar SET track_id = tt.id "
+                "FROM telemetry_tracks tt "
+                "WHERE ar.track_id IS NULL AND lower(regexp_replace(trim(ar.track_name), '\\s+', ' ', 'g')) = tt.normalized_name "
+                "AND (tt.source = 'garage61' OR tt.source = 'custom')"
+            ))
             # Seed default admin
             await _seed_default_admin(conn)
         finally:
@@ -169,12 +303,14 @@ app.add_middleware(
 from app.auth.router import router as auth_router
 from app.api.laps import router as laps_router
 from app.api.analysis import router as analysis_router
+from app.api.telemetry import router as telemetry_router
 from app.api.profile import router as profile_router
 from app.api.admin import router as admin_router
 
 app.include_router(auth_router)
 app.include_router(laps_router)
 app.include_router(analysis_router)
+app.include_router(telemetry_router)
 app.include_router(profile_router)
 app.include_router(admin_router)
 
