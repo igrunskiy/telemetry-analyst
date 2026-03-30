@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User, RefreshCw, Share2, Check } from 'lucide-react'
@@ -11,7 +11,7 @@ import SectorDelta from '../components/SectorDelta'
 import AnalysisCards from '../components/AnalysisCards'
 import { ThemeToggle } from '../components/ThemeToggle'
 import TelemetryInsights from '../components/TelemetryInsights'
-import type { AnalysisReport, ImprovementArea, LapMeta, SectorData } from '../types'
+import type { AnalysisReport, ImprovementArea, LapConditions, LapMeta, SectorData } from '../types'
 
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 }
 
@@ -222,6 +222,46 @@ function IRatingBadge({ value }: { value: number }) {
   )
 }
 
+function formatLapConditions(conditions?: LapConditions | null): string {
+  if (!conditions) return '—'
+
+  const parts: string[] = []
+  if (conditions.summary) parts.push(conditions.summary)
+  if (conditions.weather) parts.push(conditions.weather)
+  if (conditions.track_state) parts.push(`Track ${conditions.track_state}`)
+  if (conditions.air_temp_c != null) parts.push(`Air ${conditions.air_temp_c.toFixed(1)}C`)
+  if (conditions.track_temp_c != null) parts.push(`Track ${conditions.track_temp_c.toFixed(1)}C`)
+  if (conditions.humidity_pct != null) parts.push(`Humidity ${conditions.humidity_pct.toFixed(0)}%`)
+  if (conditions.wind_kph != null) {
+    const direction = conditions.wind_direction ? ` ${conditions.wind_direction}` : ''
+    parts.push(`Wind ${conditions.wind_kph.toFixed(1)} kph${direction}`)
+  } else if (conditions.wind_direction) {
+    parts.push(`Wind ${conditions.wind_direction}`)
+  }
+  if (conditions.time_of_day) parts.push(conditions.time_of_day)
+
+  return parts.length > 0 ? parts.join(' • ') : '—'
+}
+
+function formatElapsedLabel(startedAt?: string | null, nowMs?: number): string | null {
+  if (!startedAt) return null
+  const started = new Date(startedAt)
+  if (Number.isNaN(started.getTime())) return null
+
+  const elapsedSeconds = Math.max(0, Math.floor(((nowMs ?? Date.now()) - started.getTime()) / 1000))
+  const hours = Math.floor(elapsedSeconds / 3600)
+  const minutes = Math.floor((elapsedSeconds % 3600) / 60)
+  const seconds = elapsedSeconds % 60
+
+  if (hours > 0) {
+    return `${hours}h ${minutes.toString().padStart(2, '0')}m ${seconds.toString().padStart(2, '0')}s`
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`
+  }
+  return `${seconds}s`
+}
+
 function LapMetaTable({ laps, userLapId, isSolo }: { laps: LapMeta[]; userLapId: string; isSolo: boolean }) {
   const userLap = laps.find((l) => l.id === userLapId || l.role === 'user')
   const userTimeMs = normalizeLapTimeMs(userLap?.lap_time ?? 0)
@@ -243,6 +283,7 @@ function LapMetaTable({ laps, userLapId, isSolo }: { laps: LapMeta[]; userLapId:
             {!isSolo && <th className="text-right pb-2 pr-4 font-medium">iRating</th>}
             <th className="text-right pb-2 pr-4 font-medium">Lap Time</th>
             <th className="text-right pb-2 font-medium">{isSolo ? 'Δ vs Best' : 'Δ vs You'}</th>
+            <th className="text-left pb-2 pl-4 font-medium">Conditions</th>
             <th className="pb-2 pl-3"></th>
           </tr>
         </thead>
@@ -292,6 +333,9 @@ function LapMetaTable({ laps, userLapId, isSolo }: { laps: LapMeta[]; userLapId:
                 <td className={`py-2 text-right font-mono ${deltaColor}`}>
                   {deltaLabel}
                 </td>
+                <td className="py-2 pl-4 text-slate-400 max-w-[24rem]">
+                  {formatLapConditions(lap.conditions)}
+                </td>
                 <td className="py-2 pl-3">
                   <a
                     href={`https://garage61.net/app/laps/${lap.id}`}
@@ -334,6 +378,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
   const [activeCornerNums, setActiveCornerNums] = useState<number[]>([])
   const [metaExpanded, setMetaExpanded] = useState(false)
   const [shareState, setShareState] = useState<'idle' | 'loading' | 'copied'>('idle')
+  const [liveNowMs, setLiveNowMs] = useState(() => Date.now())
   // Snapshot of the report before regeneration starts — kept visible until the user dismisses
   const [savedReport, setSavedReport] = useState<typeof report | null>(null)
   const backTo = (location.state as { backTo?: { pathname: string; state?: unknown } } | null)?.backTo
@@ -400,6 +445,20 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
     regenerateMutation.isPending ||
     report?.status === 'enqueued' ||
     report?.status === 'processing'
+
+  useEffect(() => {
+    if (!isRegenerating) {
+      return
+    }
+    setLiveNowMs(Date.now())
+    const timer = window.setInterval(() => {
+      setLiveNowMs(Date.now())
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [isRegenerating])
+
+  const elapsedStartAt = report?.enqueued_at ?? report?.created_at
+  const elapsedLabel = isRegenerating ? formatElapsedLabel(elapsedStartAt, liveNowMs) : null
 
   // The report to render — fall back to the saved snapshot while regeneration is in flight
   const displayReport = savedReport ?? report
@@ -516,6 +575,11 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                   ? 'Your analysis is queued and will start shortly.'
                   : 'Fetching data, processing laps, and generating AI coaching report.'}
               </p>
+              {elapsedLabel && (
+                <p className="text-amber-400 text-sm font-medium mt-3">
+                  Time elapsed: {elapsedLabel}
+                </p>
+              )}
             </div>
             <Link to={backHref} state={backTo?.state} className="text-slate-500 hover:text-slate-300 text-sm transition-colors">
               &larr; Back to lap selector
@@ -602,7 +666,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                     <span className="text-slate-500">{soloTotalLaps} {soloTotalLaps === 1 ? 'lap' : 'laps'} analyzed</span>
                   </span>
                   {/* Generation time + model */}
-                  {(displayReport.generation_time_s != null || displayReport.model_name || displayReport.llm_provider) && (
+                  {(displayReport.generation_time_s != null || displayReport.model_name || displayReport.llm_provider || displayReport.prompt_version) && (
                     <span className="flex items-center gap-1.5">
                       <RefreshCw className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                       <span className="text-slate-500">Generated{displayReport.generation_time_s != null ? ` in ${displayReport.generation_time_s}s` : ''}</span>
@@ -610,6 +674,12 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                         <>
                           <span className="text-slate-600">by</span>
                           <span className="font-mono text-xs text-amber-400/80 bg-amber-400/10 px-1.5 py-0.5 rounded">{displayReport.model_name ?? displayReport.llm_provider}</span>
+                        </>
+                      )}
+                      {displayReport.prompt_version && (
+                        <>
+                          <span className="text-slate-600">with</span>
+                          <span className="font-mono text-xs text-sky-300/90 bg-sky-400/10 px-1.5 py-0.5 rounded">{displayReport.prompt_version}</span>
                         </>
                       )}
                     </span>
@@ -711,7 +781,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       </span>
                     </span>
                   )}
-                  {(displayReport.generation_time_s != null || displayReport.model_name || displayReport.llm_provider) && (
+                  {(displayReport.generation_time_s != null || displayReport.model_name || displayReport.llm_provider || displayReport.prompt_version) && (
                     <span className="flex items-center gap-1.5">
                       <RefreshCw className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                       <span className="text-slate-500">Generated{displayReport.generation_time_s != null ? ` in ${displayReport.generation_time_s}s` : ''}</span>
@@ -719,6 +789,12 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                         <>
                           <span className="text-slate-600">by</span>
                           <span className="font-mono text-xs text-amber-400/80 bg-amber-400/10 px-1.5 py-0.5 rounded">{displayReport.model_name ?? displayReport.llm_provider}</span>
+                        </>
+                      )}
+                      {displayReport.prompt_version && (
+                        <>
+                          <span className="text-slate-600">with</span>
+                          <span className="font-mono text-xs text-sky-300/90 bg-sky-400/10 px-1.5 py-0.5 rounded">{displayReport.prompt_version}</span>
                         </>
                       )}
                     </span>

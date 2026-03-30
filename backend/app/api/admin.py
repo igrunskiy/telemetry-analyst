@@ -70,6 +70,7 @@ class AdminReportItem(BaseModel):
     status: str
     llm_provider: str | None
     model_name: str | None
+    prompt_version: str | None
     created_at: str
     enqueued_at: str | None
     error_message: str | None
@@ -253,6 +254,7 @@ async def list_all_reports(
             status=record.status,
             llm_provider=input_data.get("llm_provider") or rj.get("llm_provider"),
             model_name=rj.get("model_name"),
+            prompt_version=rj.get("prompt_version") or input_data.get("prompt_version"),
             created_at=record.created_at.isoformat(),
             enqueued_at=record.enqueued_at.isoformat() if record.enqueued_at else None,
             error_message=record.error_message,

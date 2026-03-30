@@ -108,7 +108,7 @@ def make_processed(
             "dist_apex": float(dist[int(n * 0.25)]),
             "dist_end": float(dist[int(n * 0.35)]),
             "min_speed": float(user_speed[int(n * 0.25)]),
-            "label": "T1",
+            "label": "T1 Andretti Hairpin",
         },
         {
             "corner_num": 2,
@@ -116,7 +116,7 @@ def make_processed(
             "dist_apex": float(dist[int(n * 0.60)]),
             "dist_end": float(dist[int(n * 0.70)]),
             "min_speed": float(user_speed[int(n * 0.60)]),
-            "label": "T2",
+            "label": "T2 Rainey Curve",
         },
     ]
 

@@ -53,6 +53,25 @@ export interface Lap {
   file_name?: string
   sample_count?: number
   track_length_m?: number | null
+  conditions?: LapConditions | null
+}
+
+export interface RecentActivityEntry {
+  date: string
+  lap_count?: number
+  source: 'garage61' | 'upload'
+}
+
+export interface RecentActivity {
+  id: string
+  car_name: string
+  track_name: string
+  car_id?: string | number
+  track_id?: string | number
+  recorded_at: string
+  lap_count?: number
+  source?: 'garage61' | 'upload' | 'mixed'
+  entries: RecentActivityEntry[]
 }
 
 export interface Session {
@@ -130,6 +149,19 @@ export interface LapMeta {
   file_name?: string
   recorded_at?: string
   source?: 'garage61' | 'custom'
+  conditions?: LapConditions | null
+}
+
+export interface LapConditions {
+  summary?: string
+  weather?: string
+  track_state?: string
+  air_temp_c?: number
+  track_temp_c?: number
+  humidity_pct?: number
+  wind_kph?: number
+  wind_direction?: string | number
+  time_of_day?: string
 }
 
 export interface UploadedTelemetryInput extends LapMeta {
@@ -195,7 +227,9 @@ export interface AnalysisReport {
   analysis_mode?: 'vs_reference' | 'solo'
   llm_provider?: 'claude' | 'gemini'
   model_name?: string
+  prompt_version?: string
   created_at: string
+  enqueued_at?: string | null
   status?: 'enqueued' | 'processing' | 'completed' | 'failed'
   error_message?: string
   summary: string
@@ -239,6 +273,7 @@ export interface AdminReport {
   status: string
   llm_provider?: string
   model_name?: string
+  prompt_version?: string
   created_at: string
   enqueued_at?: string | null
   error_message?: string | null
@@ -290,4 +325,5 @@ export interface AnalysisHistoryItem {
   status?: string
   llm_provider?: 'claude' | 'gemini'
   model_name?: string
+  prompt_version?: string
 }

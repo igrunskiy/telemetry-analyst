@@ -15,7 +15,7 @@ _METADATA_FILE = _PROMPTS_DIR / "metadata.json"
 def _load_metadata() -> dict:
     if _METADATA_FILE.exists():
         return json.loads(_METADATA_FILE.read_text(encoding="utf-8"))
-    return {"defaults": {"claude": "telemetry_analysis", "gemini": "telemetry_analysis"}}
+    return {"defaults": {"claude": "analysis_v1", "gemini": "analysis_v1"}}
 
 
 def _save_metadata(meta: dict) -> None:
@@ -53,7 +53,7 @@ def delete_prompt(name: str) -> bool:
 
 
 def get_defaults() -> dict[str, str]:
-    return _load_metadata().get("defaults", {"claude": "telemetry_analysis", "gemini": "telemetry_analysis"})
+    return _load_metadata().get("defaults", {"claude": "analysis_v1", "gemini": "analysis_v1"})
 
 
 def set_defaults(defaults: dict[str, str]) -> None:
@@ -63,13 +63,20 @@ def set_defaults(defaults: dict[str, str]) -> None:
 
 
 def get_default_prompt_name(model: str) -> str:
-    return get_defaults().get(model, "telemetry_analysis")
+    return get_defaults().get(model, "analysis_v1")
+
+
+def resolve_prompt_name(name: str | None, model: str) -> str:
+    """Return the actual prompt name that will be used for the given model."""
+    effective = name or get_default_prompt_name(model)
+    content = get_prompt(effective)
+    if content is None or not content.strip():
+        return "analysis_v1"
+    return effective
 
 
 def resolve_prompt(name: str | None, model: str) -> str:
     """Return prompt content for the given name (or model's default if name is None)."""
-    effective = name or get_default_prompt_name(model)
-    content = get_prompt(effective)
-    if content is None:
-        content = get_prompt("telemetry_analysis") or ""
+    effective = resolve_prompt_name(name, model)
+    content = get_prompt(effective) or ""
     return content.strip()

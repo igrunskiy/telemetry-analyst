@@ -9,7 +9,9 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import settings
 from sqlalchemy import text
@@ -285,6 +287,23 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request, exc: RequestValidationError):
+    logger = logging.getLogger(__name__)
+    try:
+        body = await request.body()
+        body_text = body.decode("utf-8", errors="replace")
+    except Exception:
+        body_text = "<unavailable>"
+    logger.warning(
+        "Request validation failed: path=%s errors=%s body=%s",
+        request.url.path,
+        exc.errors(),
+        body_text[:4000],
+    )
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 # ---------------------------------------------------------------------------
 # CORS

@@ -25,7 +25,7 @@ import {
   deleteAnalysis,
   logout,
 } from '../api/client'
-import type { Lap, Session, AnalysisHistoryItem, Car as CarType, Track, UploadInspection, ImportedTelemetry, Garage61DictionaryEntry } from '../types'
+import type { Lap, Session, AnalysisHistoryItem, Car as CarType, Track, UploadInspection, ImportedTelemetry, Garage61DictionaryEntry, RecentActivity } from '../types'
 
 function normalizeLapTimeMs(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
@@ -118,6 +118,21 @@ function formatDateTime(dateStr: string): string {
   if (!hasTime) return date
   const time = parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
   return `${date} ${time}`
+}
+
+function formatLapConditionsCompact(lap: Lap): string {
+  const conditions = lap.conditions
+  if (!conditions) {
+    return '—'
+  }
+
+  const parts: string[] = []
+  if (conditions.weather) parts.push(conditions.weather)
+  if (conditions.track_temp_c != null) parts.push(`Track ${conditions.track_temp_c.toFixed(0)}C`)
+  if (conditions.air_temp_c != null) parts.push(`Air ${conditions.air_temp_c.toFixed(0)}C`)
+  if (conditions.time_of_day) parts.push(conditions.time_of_day)
+
+  return parts.length > 0 ? parts.join(' • ') : '—'
 }
 
 function formatTrackName(track: Track): string {
@@ -263,7 +278,7 @@ export default function LapSelectorPage() {
     enabled: isAdmin,
   })
 
-  const { data: recentLaps = [], isLoading: recentLoading } = useQuery({
+  const { data: recentLaps = [], isLoading: recentLoading } = useQuery<RecentActivity[]>({
     queryKey: ['recentLaps'],
     queryFn: () => getRecentLaps(25),
   })
@@ -284,7 +299,7 @@ export default function LapSelectorPage() {
   const selectedTrackName = tracks.find((t: Track) => t.id === selectedTrackId)
   const selectedTrackDisplayName = selectedTrackName ? formatTrackName(selectedTrackName) : null
   const filteredRecentLaps = recentLaps.filter((lap) => {
-    if (recentSourceFilter !== 'all' && lap.source !== recentSourceFilter) return false
+    if (recentSourceFilter !== 'all' && !lap.entries.some((entry) => entry.source === recentSourceFilter)) return false
     if (selectedCarId) {
       const carMatch = lap.car_id === selectedCarId || (selectedCarName && lap.car_name === selectedCarName)
       if (!carMatch) return false
@@ -300,14 +315,14 @@ export default function LapSelectorPage() {
 
   const recentCarIds = new Set(
     recentLaps
-      .filter((l: Lap) => !selectedTrackId || l.track_id === selectedTrackId)
-      .map((l: Lap) => l.car_id)
+      .filter((l: RecentActivity) => !selectedTrackId || l.track_id === selectedTrackId)
+      .map((l: RecentActivity) => l.car_id)
       .filter(Boolean)
   )
   const recentTrackIds = new Set(
     recentLaps
-      .filter((l: Lap) => !selectedCarId || l.car_id === selectedCarId)
-      .map((l: Lap) => l.track_id)
+      .filter((l: RecentActivity) => !selectedCarId || l.car_id === selectedCarId)
+      .map((l: RecentActivity) => l.track_id)
       .filter(Boolean)
   )
 
@@ -370,7 +385,7 @@ export default function LapSelectorPage() {
     setHistoryPage(0)
   }
 
-  function resolveRecentIds(lap: Lap) {
+  function resolveRecentIds(lap: RecentActivity) {
     const carIds = new Set(cars.map((c: CarType) => c.id))
     const trackIds = new Set(tracks.map((t: Track) => t.id))
     const carId =
@@ -600,8 +615,8 @@ export default function LapSelectorPage() {
         const primary = sorted[0]
         const rest = sorted.slice(1)
         const lapsMetadata = [
-          { id: primary.id, role: 'user' as const, driver_name: normalizeDriverName(primary.driver_name), source_driver_name: primary.driver_name, driver_key: primary.driver_key ?? buildDriverKey(primary.driver_name), lap_time: parseLapTime(primary.lap_time) },
-          ...rest.map((l) => ({ id: l.id, role: 'reference' as const, driver_name: normalizeDriverName(l.driver_name), source_driver_name: l.driver_name, driver_key: l.driver_key ?? buildDriverKey(l.driver_name), lap_time: parseLapTime(l.lap_time) })),
+          { id: primary.id, role: 'user' as const, driver_name: normalizeDriverName(primary.driver_name), source_driver_name: primary.driver_name, driver_key: primary.driver_key ?? buildDriverKey(primary.driver_name), lap_time: parseLapTime(primary.lap_time), conditions: primary.conditions ?? undefined },
+          ...rest.map((l) => ({ id: l.id, role: 'reference' as const, driver_name: normalizeDriverName(l.driver_name), source_driver_name: l.driver_name, driver_key: l.driver_key ?? buildDriverKey(l.driver_name), lap_time: parseLapTime(l.lap_time), conditions: l.conditions ?? undefined })),
         ]
         const pv = isAdmin && promptVersion !== 'default' ? promptVersion : null
         return runAnalysis(primary.id, rest.map((l) => l.id), primary.car_name, primary.track_name, 'solo', lapsMetadata, llmModel, pv)
@@ -609,10 +624,10 @@ export default function LapSelectorPage() {
         const lap = myLaps.find((l) => l.id === selectedLapId)
         if (!lap) throw new Error('Selected lap not found')
         const lapsMetadata = [
-          { id: lap.id, role: 'user' as const, driver_name: normalizeDriverName(lap.driver_name), source_driver_name: lap.driver_name, driver_key: lap.driver_key ?? buildDriverKey(lap.driver_name), lap_time: parseLapTime(lap.lap_time) },
+          { id: lap.id, role: 'user' as const, driver_name: normalizeDriverName(lap.driver_name), source_driver_name: lap.driver_name, driver_key: lap.driver_key ?? buildDriverKey(lap.driver_name), lap_time: parseLapTime(lap.lap_time), conditions: lap.conditions ?? undefined },
           ...Array.from(selectedRefIds).map((id) => {
             const ref = refLaps.find((r) => r.id === id)
-            return { id, role: 'reference' as const, driver_name: normalizeDriverName(ref?.driver_name ?? ''), source_driver_name: ref?.driver_name ?? '', driver_key: ref?.driver_key ?? buildDriverKey(ref?.driver_name ?? ''), lap_time: parseLapTime(ref?.lap_time ?? 0), irating: ref?.irating }
+            return { id, role: 'reference' as const, driver_name: normalizeDriverName(ref?.driver_name ?? ''), source_driver_name: ref?.driver_name ?? '', driver_key: ref?.driver_key ?? buildDriverKey(ref?.driver_name ?? ''), lap_time: parseLapTime(ref?.lap_time ?? 0), irating: ref?.irating, conditions: ref?.conditions ?? undefined }
           }),
         ]
         const pv = isAdmin && promptVersion !== 'default' ? promptVersion : null
@@ -1058,6 +1073,7 @@ export default function LapSelectorPage() {
                               <th className="text-left pb-2 font-medium">
                                 <Calendar className="w-3 h-3 inline mr-1" />Date
                               </th>
+                              <th className="text-left pb-2 font-medium">Conditions</th>
                               <th className="text-left pb-2 font-medium">Src</th>
                             </tr>
                           </thead>
@@ -1086,6 +1102,11 @@ export default function LapSelectorPage() {
                                   </td>
                                   <td className="py-2.5 text-slate-400">
                                     {formatDate(lap.recorded_at)}
+                                  </td>
+                                  <td className="py-2.5 text-xs text-slate-400 max-w-[18rem]">
+                                    <span className="block truncate" title={formatLapConditionsCompact(lap)}>
+                                      {formatLapConditionsCompact(lap)}
+                                    </span>
                                   </td>
                                   <td className="py-2.5">
                                     {lap.source === 'upload' ? (
@@ -1553,9 +1574,9 @@ export default function LapSelectorPage() {
             </div>
 
             {recentLoading ? (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {[...Array(3)].map((_, i) => (
-                  <div key={i} className="h-16 bg-slate-800 rounded-xl border border-slate-700 animate-pulse" />
+                  <div key={i} className="h-12 bg-slate-800 rounded-xl border border-slate-700 animate-pulse" />
                 ))}
               </div>
             ) : recentLaps.length === 0 ? (
@@ -1566,7 +1587,7 @@ export default function LapSelectorPage() {
               </div>
             ) : (
               <>
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {recentPageLaps.map((lap) => {
                     const { carId, trackId } = resolveRecentIds(lap)
                     const canApply = Boolean(carId && trackId)
@@ -1581,30 +1602,60 @@ export default function LapSelectorPage() {
                             ? 'Use this car and track for filtering'
                             : 'Car or track not available for filtering'
                         }
-                        className={`card text-left transition-colors w-full ${
+                        className={`card text-left transition-colors w-full px-3 py-2.5 ${
                           canApply ? 'hover:bg-slate-700' : 'opacity-70 cursor-not-allowed'
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 text-sm">
-                              <Car className="w-4 h-4 text-slate-500" />
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 text-sm min-w-0">
+                              <Car className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                               <span className="text-amber-400 font-semibold truncate">{lap.car_name}</span>
-                            </div>
-                            <div className="flex items-center gap-2 text-sm mt-1">
-                              <MapPin className="w-4 h-4 text-slate-500" />
+                              <span className="text-slate-600 flex-shrink-0">/</span>
+                              <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                               <span className="text-slate-300 truncate">{lap.track_name}</span>
                             </div>
+                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                              {lap.entries.slice(0, 4).map((entry, idx) => (
+                                <span
+                                  key={`${lap.id}-${entry.date}-${idx}`}
+                                  className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] ${
+                                    entry.source === 'upload'
+                                      ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/20'
+                                      : 'bg-blue-500/10 text-blue-300 ring-1 ring-blue-500/20'
+                                  }`}
+                                >
+                                  <span className="text-slate-300">{formatDate(entry.date)}</span>
+                                  <span className="text-slate-500">•</span>
+                                  <span>{entry.lap_count ?? 0}L</span>
+                                  <span className="uppercase tracking-wide opacity-80">
+                                    {entry.source === 'upload' ? 'csv' : 'g61'}
+                                  </span>
+                                </span>
+                              ))}
+                              {lap.entries.length > 4 && (
+                                <span className="text-[11px] text-slate-500">
+                                  +{lap.entries.length - 4} more
+                                </span>
+                              )}
+                            </div>
                           </div>
-                          <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
-                            <span className="text-slate-500 text-xs text-right">
-                              {formatDateTime(lap.recorded_at)}
+                          <div className="flex flex-col items-end gap-1 flex-shrink-0 text-right">
+                            <span className="text-[11px] text-slate-500">
+                              {lap.lap_count ?? 0} laps
+                            </span>
+                            <span className="text-[11px] text-slate-600">
+                              {lap.entries.length} date{lap.entries.length === 1 ? '' : 's'}
                             </span>
                             {lap.source && (
                               <span className={`text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ${
-                                lap.source === 'upload' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-blue-500/20 text-blue-400'
+                                lap.source === 'upload'
+                                  ? 'bg-emerald-500/20 text-emerald-400'
+                                  : lap.source === 'garage61'
+                                    ? 'bg-blue-500/20 text-blue-400'
+                                    : 'bg-slate-600/40 text-slate-300'
                               }`}>
-                                {lap.source === 'upload' ? 'csv' : 'g61'}
+                                {lap.source === 'upload' ? 'csv' : lap.source === 'garage61' ? 'g61' : 'mix'}
                               </span>
                             )}
                           </div>
@@ -1666,6 +1717,9 @@ export default function LapSelectorPage() {
                 <div className="space-y-2">
                   {pagedHistory.map((item: AnalysisHistoryItem) => {
                     const isSoloItem = item.analysis_mode === 'solo'
+                    const isQueued = item.status === 'enqueued'
+                    const isProcessing = item.status === 'processing'
+                    const isActive = isQueued || isProcessing
                     return (
                     <div key={item.id} className="relative group">
                       <button
@@ -1675,10 +1729,12 @@ export default function LapSelectorPage() {
                         })}
                         className={`w-full card text-left hover:bg-slate-700 transition-colors pr-10 py-2.5 border-l-2 ${
                           isSoloItem ? 'border-l-violet-500/50' : 'border-l-orange-500/50'
+                        } ${
+                          isActive ? 'bg-slate-800/55 border-slate-700/70' : ''
                         }`}
                       >
                         <div className="flex items-center justify-between gap-3">
-                          <div className="flex-1 min-w-0">
+                          <div className={`flex-1 min-w-0 transition-opacity ${isActive ? 'opacity-75' : 'opacity-100'}`}>
                             {/* Row 1: badge · car @ track · time gain */}
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${
@@ -1688,15 +1744,15 @@ export default function LapSelectorPage() {
                               }`}>
                                 {isSoloItem ? 'Session' : 'Reference'}
                               </span>
-                              {item.status === 'enqueued' && (
-                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-slate-600/40 text-slate-400 flex-shrink-0">
-                                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                              {isQueued && (
+                                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-sky-500/20 text-sky-300 ring-1 ring-sky-400/30 shadow-[0_0_0_1px_rgba(56,189,248,0.08)] flex-shrink-0 opacity-100">
+                                  <Loader2 className="w-3 h-3 animate-spin" />
                                   In queue
                                 </span>
                               )}
-                              {item.status === 'processing' && (
-                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-400 flex-shrink-0">
-                                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                              {isProcessing && (
+                                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-400/20 text-amber-300 ring-1 ring-amber-300/35 shadow-[0_0_0_1px_rgba(251,191,36,0.08)] flex-shrink-0 opacity-100">
+                                  <Loader2 className="w-3 h-3 animate-spin" />
                                   Processing
                                 </span>
                               )}
@@ -1713,7 +1769,9 @@ export default function LapSelectorPage() {
                                 {item.track_name}
                               </span>
                               {item.estimated_time_gain_seconds != null && item.estimated_time_gain_seconds > 0 && (
-                                <span className="inline-flex items-center gap-1 bg-amber-500/20 border border-amber-500/30 text-amber-400 font-semibold text-xs px-2 py-0.5 rounded-full flex-shrink-0">
+                                <span className={`inline-flex items-center gap-1 bg-amber-500/20 border border-amber-500/30 text-amber-400 font-semibold text-xs px-2 py-0.5 rounded-full flex-shrink-0 ${
+                                  isActive ? 'opacity-70' : ''
+                                }`}>
                                   <Zap className="w-3 h-3" />
                                   +{item.estimated_time_gain_seconds.toFixed(1)}s
                                 </span>
@@ -1751,12 +1809,17 @@ export default function LapSelectorPage() {
                               )}
                               <span className="text-slate-600">·</span>
                               <span className="text-slate-600">{formatDateTime(item.created_at)}</span>
-                              {(item.model_name || item.llm_provider) && (
+                              {(item.model_name || item.llm_provider || item.prompt_version) && (
                                 <>
                                   <span className="text-slate-600">·</span>
                                   <span className="font-mono text-amber-400/70 bg-amber-400/10 px-1.5 py-0.5 rounded text-xs">
                                     {item.model_name ?? item.llm_provider}
                                   </span>
+                                  {item.prompt_version && (
+                                    <span className="font-mono text-sky-300/80 bg-sky-400/10 px-1.5 py-0.5 rounded text-xs">
+                                      {item.prompt_version}
+                                    </span>
+                                  )}
                                 </>
                               )}
                             </div>

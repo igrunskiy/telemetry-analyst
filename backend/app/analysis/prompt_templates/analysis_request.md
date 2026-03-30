@@ -5,8 +5,14 @@
 
 {context_block}
 
+### Lap Conditions
+{lap_conditions_block}
+
 ### Corner Map
 {corner_summary}
+
+### Corner Names
+{corner_names_table}
 
 ### Per-Corner Telemetry ({corner_table_heading})
 {corner_table}

@@ -111,6 +111,66 @@ def _format_track_name(track: dict[str, Any]) -> str:
     return name
 
 
+def _coerce_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    cleaned = "".join(ch for ch in text if ch.isdigit() or ch in ".-")
+    if not cleaned:
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def _get_first_value(payload: dict[str, Any], *aliases: str) -> Any:
+    alias_map = {key.casefold(): key for key in payload.keys()}
+    for alias in aliases:
+        actual = alias_map.get(alias.casefold())
+        if actual is not None:
+            value = payload.get(actual)
+            if value not in (None, "", {}):
+                return value
+    return None
+
+
+def extract_lap_conditions(payload: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+
+    scopes = [payload]
+    for key in ("conditions", "condition", "weather", "session", "sessionConditions", "session_conditions"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            scopes.append(nested)
+
+    def lookup(*aliases: str) -> Any:
+        for scope in scopes:
+            value = _get_first_value(scope, *aliases)
+            if value is not None:
+                return value
+        return None
+
+    conditions = {
+        "summary": lookup("conditionSummary", "conditionsSummary", "conditions", "condition", "weatherSummary"),
+        "weather": lookup("weather", "weatherType", "weather_type", "sky", "skyCondition"),
+        "track_state": lookup("trackState", "track_state", "surfaceState", "surface_state"),
+        "air_temp_c": _coerce_float(lookup("airTemp", "airTemperature", "ambientTemp", "ambientTemperature")),
+        "track_temp_c": _coerce_float(lookup("trackTemp", "trackTemperature", "surfaceTemp", "surfaceTemperature")),
+        "humidity_pct": _coerce_float(lookup("humidity", "relativeHumidity", "humidityPct", "humidityPercent")),
+        "wind_kph": _coerce_float(lookup("windSpeed", "windVelocity", "windKph", "windSpeedKph")),
+        "wind_direction": lookup("windDirection", "windDir", "wind_direction"),
+        "time_of_day": lookup("timeOfDay", "sessionTimeOfDay", "localTimeOfDay"),
+    }
+    normalized = {key: value for key, value in conditions.items() if value not in (None, "", [])}
+    return normalized or None
+
+
 async def list_garage61_cars(db: AsyncSession) -> list[TelemetryCar]:
     result = await db.execute(
         select(TelemetryCar)
@@ -262,6 +322,7 @@ def _normalize_uploaded_lap(item: UploadedTelemetry) -> dict[str, Any]:
         "source": SOURCE_UPLOAD,
         "import_batch_id": str(item.import_batch_id),
         "created_at": item.created_at.isoformat(),
+        "conditions": None,
     }
 
 
@@ -286,6 +347,7 @@ def _normalize_garage61_lap(item: dict[str, Any], fallback_id: str) -> dict[str,
         "irating": item.get("driverRating"),
         "season": item.get("seasonName") or (item["season"]["name"] if isinstance(item.get("season"), dict) else item.get("season")),
         "source": SOURCE_GARAGE61,
+        "conditions": extract_lap_conditions(item),
     }
 
 
@@ -638,21 +700,45 @@ async def list_combined_reference_laps(
 
 
 async def list_combined_recent_laps(user: User, db: AsyncSession, limit: int) -> list[dict[str, Any]]:
-    """Return recent activity as session-level entries (one per car+track+date).
+    """Return recent activity grouped by car+track with per-date entries."""
+    grouped: dict[str, dict[str, Any]] = {}
 
-    Garage61 data comes from /me/statistics (single API call).
-    Uploaded files are grouped by (car, track, date).
-    """
-    items: list[dict[str, Any]] = []
-    seen_keys: set[str] = set()
+    def ensure_group(
+        *,
+        source: str,
+        car_name: str,
+        track_name: str,
+        car_id: str | None,
+        track_id: str | None,
+    ) -> dict[str, Any]:
+        key = f"{car_name.casefold()}::{track_name.casefold()}"
+        existing = grouped.get(key)
+        if existing is not None:
+            if not existing.get("car_id") and car_id:
+                existing["car_id"] = car_id
+            if not existing.get("track_id") and track_id:
+                existing["track_id"] = track_id
+            if existing.get("source") != source:
+                existing["source"] = "mixed"
+            return existing
+
+        existing = {
+            "id": make_lap_id(source, f"recent-{len(grouped)}"),
+            "car_name": car_name,
+            "track_name": track_name,
+            "car_id": car_id,
+            "track_id": track_id,
+            "recorded_at": "",
+            "source": source,
+            "entries": [],
+            "lap_count": 0,
+        }
+        grouped[key] = existing
+        return existing
 
     # --- Garage61: extract from /me/statistics (single API call) ---
-    # Each drivingStatistics entry looks like:
-    #   {"day": "2024-12-10", "car": 1, "track": 34, "sessionType": 1,
-    #    "events": 1, "timeOnTrack": 440.16, "lapsDriven": 1, "cleanLapsDriven": 1}
     garage61 = await get_optional_garage61_client(user, db)
     if garage61:
-        # Build car/track name lookup from local dictionary
         car_lookup: dict[str, str] = {}
         track_lookup: dict[str, str] = {}
         for entry in await list_garage61_cars(db):
@@ -667,7 +753,6 @@ async def list_combined_recent_laps(user: User, db: AsyncSession, limit: int) ->
             driving_stats = stats.get("drivingStatistics") or []
 
             if isinstance(driving_stats, list):
-                # Sort by day descending so we get the most recent first
                 driving_stats.sort(key=lambda e: e.get("day") or "" if isinstance(e, dict) else "", reverse=True)
 
                 for entry in driving_stats:
@@ -678,30 +763,28 @@ async def list_combined_recent_laps(user: User, db: AsyncSession, limit: int) ->
                     if car_id is None or track_id is None:
                         continue
                     day = entry.get("day") or ""
-                    dedup = f"g61:{car_id}:{track_id}:{day}"
-                    if dedup in seen_keys:
-                        continue
-                    seen_keys.add(dedup)
-
                     car_name = car_lookup.get(str(car_id), f"Car {car_id}")
                     track_name = track_lookup.get(str(track_id), f"Track {track_id}")
                     laps_driven = int(entry.get("lapsDriven") or 0)
-
-                    items.append({
-                        "id": make_lap_id(SOURCE_GARAGE61, f"stats-{car_id}-{track_id}-{day}"),
-                        "lap_time": 0,
-                        "car_name": car_name,
-                        "track_name": track_name,
-                        "car_id": make_car_key(SOURCE_GARAGE61, car_id),
-                        "track_id": make_track_key(SOURCE_GARAGE61, track_id),
-                        "recorded_at": day,
+                    group = ensure_group(
+                        source=SOURCE_GARAGE61,
+                        car_name=car_name,
+                        track_name=track_name,
+                        car_id=make_car_key(SOURCE_GARAGE61, car_id),
+                        track_id=make_track_key(SOURCE_GARAGE61, track_id),
+                    )
+                    group["entries"].append({
+                        "date": day,
                         "lap_count": laps_driven,
                         "source": SOURCE_GARAGE61,
                     })
+                    group["lap_count"] += laps_driven
+                    if day and str(day) > str(group.get("recorded_at") or ""):
+                        group["recorded_at"] = day
         except Exception:
             logger.exception("Failed to fetch Garage61 statistics for recent activity")
 
-    # --- Uploaded telemetry: one entry per file ---
+    # --- Uploaded telemetry: group by car+track and aggregate laps by date ---
     result = await db.execute(
         select(UploadedTelemetry)
         .options(selectinload(UploadedTelemetry.car), selectinload(UploadedTelemetry.track))
@@ -711,22 +794,34 @@ async def list_combined_recent_laps(user: User, db: AsyncSession, limit: int) ->
     for row in result.scalars().all():
         car_name = row.car.name if row.car else row.car_name
         track_name = row.track.display_name if row.track else row.track_name
-        dedup = f"up:{row.id}"
-        if dedup in seen_keys:
-            continue
-        seen_keys.add(dedup)
-        items.append({
-            "id": make_lap_id(SOURCE_UPLOAD, str(row.id)),
-            "lap_time": row.lap_time_ms,
-            "car_name": car_name,
-            "track_name": track_name,
-            "car_id": make_car_key(SOURCE_UPLOAD, row.car_id or car_name),
-            "track_id": make_track_key(SOURCE_UPLOAD, row.track_id or track_name),
-            "recorded_at": row.recorded_at or row.created_at.isoformat(),
-            "driver_name": row.driver_name,
-            "file_name": row.file_name,
-            "source": SOURCE_UPLOAD,
-        })
+        recorded_at = row.recorded_at or row.created_at.isoformat()
+        group = ensure_group(
+            source=SOURCE_UPLOAD,
+            car_name=car_name,
+            track_name=track_name,
+            car_id=make_car_key(SOURCE_UPLOAD, row.car_id or car_name),
+            track_id=make_track_key(SOURCE_UPLOAD, row.track_id or track_name),
+        )
+        day = recorded_at[:10]
+        existing_entry = next(
+            (entry for entry in group["entries"] if entry.get("source") == SOURCE_UPLOAD and str(entry.get("date") or "")[:10] == day),
+            None,
+        )
+        if existing_entry is None:
+            group["entries"].append({
+                "date": day,
+                "lap_count": 1,
+                "source": SOURCE_UPLOAD,
+            })
+        else:
+            existing_entry["lap_count"] = int(existing_entry.get("lap_count") or 0) + 1
+        group["lap_count"] += 1
+        if recorded_at and str(recorded_at) > str(group.get("recorded_at") or ""):
+            group["recorded_at"] = recorded_at
+
+    items = list(grouped.values())
+    for item in items:
+        item["entries"].sort(key=lambda entry: str(entry.get("date") or ""), reverse=True)
 
     items.sort(key=lambda x: str(x.get("recorded_at") or ""), reverse=True)
     return items[:limit]

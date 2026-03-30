@@ -12,6 +12,7 @@ from typing import Any
 
 from app.analysis.llm import analyze_with_claude, CLAUDE_MODEL
 from app.analysis.gemini import analyze_with_gemini, GEMINI_MODEL
+from app.analysis.prompts_manager import resolve_prompt_name
 from app.analysis.processor import TelemetryProcessor
 from app.analysis.zones import detect_weak_zones
 from app.auth.crypto import decrypt
@@ -40,6 +41,7 @@ async def execute_analysis(
     Raises ValueError or Exception on failure (caller decides how to surface errors).
     """
     model_name = GEMINI_MODEL if llm_provider == "gemini" else CLAUDE_MODEL
+    effective_prompt_version = resolve_prompt_name(prompt_version, llm_provider)
     all_lap_ids = [lap_id] + list(reference_lap_ids)
 
     logger.info(
@@ -131,7 +133,8 @@ async def execute_analysis(
             track_name=track_name,
             gemini_api_key=gemini_key,
             analysis_mode=analysis_mode,
-            prompt_version=prompt_version,
+            prompt_version=effective_prompt_version,
+            laps_metadata=laps_metadata,
         )
     else:
         claude_key = decrypt(user.claude_api_key_enc) if user.claude_api_key_enc else ""
@@ -142,7 +145,8 @@ async def execute_analysis(
             track_name=track_name,
             claude_api_key=claude_key,
             analysis_mode=analysis_mode,
-            prompt_version=prompt_version,
+            prompt_version=effective_prompt_version,
+            laps_metadata=laps_metadata,
         )
     t_llm = time.monotonic() - t0
     logger.info(
@@ -190,6 +194,7 @@ async def execute_analysis(
         "analysis_mode": analysis_mode,
         "llm_provider": llm_provider,
         "model_name": model_name,
+        "prompt_version": effective_prompt_version,
         "summary": llm_result.get("summary", ""),
         "estimated_time_gain_seconds": llm_result.get("estimated_time_gain_seconds"),
         "improvement_areas": llm_result.get("improvement_areas", []),
