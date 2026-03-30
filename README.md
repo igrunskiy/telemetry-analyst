@@ -61,7 +61,8 @@ On your VM:
    - `IMAGE_OWNER` (default: `igrunskiy`)
    - `IMAGE_REPO` (default: `telemetry-analyst`)
    - `IMAGE_TAG` (default: `latest`)
-3. Deploy: `sudo -u telemetry bash /opt/telemetry-analyst/deploy/deploy-images.sh`
+3. Deploy pre-built images: `sudo -u telemetry bash /opt/telemetry-analyst/deploy/deploy-images.sh`
+4. If you changed repo-managed files on the VM, such as `docker-compose.prod.yml` or deploy scripts, update the checkout separately with: `sudo -u telemetry bash /opt/telemetry-analyst/deploy/deploy.sh`
 
 ## Architecture
 
