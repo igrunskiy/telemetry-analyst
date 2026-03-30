@@ -38,6 +38,25 @@ def get_system_prompt(name: str | None = None) -> str:
     return resolve_prompt(name, "claude")
 
 
+def _corner_ref(corner: dict[str, Any] | None) -> str:
+    if not corner:
+        return "Straight"
+    label = str(corner.get("label") or "").strip()
+    if label:
+        return label
+    corner_num = corner.get("corner_num")
+    return f"T{corner_num}" if corner_num else "Straight"
+
+
+def _corner_ref_from_num(corner_num: int | None, corners: list[dict[str, Any]] | None) -> str:
+    if corner_num is None:
+        return "Straight"
+    for corner in corners or []:
+        if corner.get("corner_num") == corner_num:
+            return _corner_ref(corner)
+    return f"T{corner_num}"
+
+
 def _build_corner_table(processed: dict, weak_zones: list[dict]) -> str:
     """Build a per-corner telemetry data table for the LLM prompt."""
     corners = processed.get("corners", [])
@@ -60,6 +79,7 @@ def _build_corner_table(processed: dict, weak_zones: list[dict]) -> str:
     for c in corners[:15]:
         c_num = c["corner_num"]
         d_apex = c["dist_apex"]
+        corner_ref = _corner_ref(c)
 
         u_apex_speeds = [v for v, d in zip(user_speed, dist_grid) if d is not None and abs(d - d_apex) <= 50 and v is not None]
         r_apex_speeds = [v for v, d in zip(ref_speed, dist_grid) if d is not None and abs(d - d_apex) <= 50 and v is not None]
@@ -74,7 +94,7 @@ def _build_corner_table(processed: dict, weak_zones: list[dict]) -> str:
         brake_str = f"{abs(brake_z['delta']):.0f}m early" if brake_z else "ok"
         throttle_str = f"{abs(throttle_z['delta']):.0f}m late" if throttle_z else "ok"
 
-        rows.append(f"| T{c_num} | {d_apex:.0f}m | {u_min} | {r_min} | {spd_delta} | {brake_str} | {throttle_str} |")
+        rows.append(f"| {corner_ref} | {d_apex:.0f}m | {u_min} | {r_min} | {spd_delta} | {brake_str} | {throttle_str} |")
 
     header = (
         "| Corner | Apex dist | User min spd (km/h) | Ref min spd (km/h) | Δ spd | Braking | Throttle |\n"
@@ -100,7 +120,7 @@ def _build_gear_table(processed: dict) -> str:
     rows = []
     for c in corners[:15]:
         d_apex = c["dist_apex"]
-        c_num = c["corner_num"]
+        corner_ref = _corner_ref(c)
 
         u_gears = [int(round(v)) for v, d in zip(user_gear, dist_grid) if d is not None and abs(d - d_apex) <= 30 and v is not None]
         r_gears = [int(round(v)) for v, d in zip(ref_gear, dist_grid) if d is not None and abs(d - d_apex) <= 30 and v is not None] if ref_gear else []
@@ -114,7 +134,7 @@ def _build_gear_table(processed: dict) -> str:
         if u_apex_gear is not None and r_apex_gear is not None and u_apex_gear != r_apex_gear:
             diff = f" ⚠ {u_apex_gear - r_apex_gear:+d}"
 
-        rows.append(f"| T{c_num} | {d_apex:.0f}m | {u_str} | {r_str} |{diff} |")
+        rows.append(f"| {corner_ref} | {d_apex:.0f}m | {u_str} | {r_str} |{diff} |")
 
     header = (
         "| Corner | Apex dist | User gear | Ref gear | Note |\n"
@@ -139,7 +159,7 @@ def _build_sector_corner_map(processed: dict) -> str:
         s_start = s_idx * sector_size_m
         s_end = (s_idx + 1) * sector_size_m
         in_sector = [
-            f"T{c['corner_num']}"
+            _corner_ref(c)
             for c in corners
             if s_start <= c["dist_apex"] < s_end
         ]
@@ -168,18 +188,80 @@ def _build_sector_table(processed: dict) -> str:
     return header + "\n".join(rows)
 
 
+def _format_conditions_for_prompt(conditions: dict[str, Any] | None) -> str:
+    if not conditions:
+        return "No conditions recorded"
+
+    parts: list[str] = []
+    if conditions.get("summary"):
+        parts.append(str(conditions["summary"]))
+    if conditions.get("weather"):
+        parts.append(f"weather: {conditions['weather']}")
+    if conditions.get("track_state"):
+        parts.append(f"track: {conditions['track_state']}")
+    if conditions.get("air_temp_c") is not None:
+        parts.append(f"air {float(conditions['air_temp_c']):.1f}C")
+    if conditions.get("track_temp_c") is not None:
+        parts.append(f"track temp {float(conditions['track_temp_c']):.1f}C")
+    if conditions.get("humidity_pct") is not None:
+        parts.append(f"humidity {float(conditions['humidity_pct']):.0f}%")
+    if conditions.get("wind_kph") is not None:
+        wind = f"wind {float(conditions['wind_kph']):.1f} kph"
+        if conditions.get("wind_direction"):
+            wind += f" {conditions['wind_direction']}"
+        parts.append(wind)
+    elif conditions.get("wind_direction"):
+        parts.append(f"wind {conditions['wind_direction']}")
+    if conditions.get("time_of_day"):
+        parts.append(f"time: {conditions['time_of_day']}")
+    return "; ".join(parts) if parts else "No conditions recorded"
+
+
+def _build_lap_conditions_table(laps_metadata: list[dict[str, Any]] | None) -> str:
+    if not laps_metadata:
+        return "No lap conditions metadata available."
+
+    rows = []
+    for lap in laps_metadata:
+        role = "User" if lap.get("role") == "user" else "Reference"
+        driver = str(lap.get("driver_name") or "Unknown").strip() or "Unknown"
+        conditions = _format_conditions_for_prompt(lap.get("conditions"))
+        rows.append(f"| {role} | {driver} | {conditions} |")
+
+    header = "| Role | Driver | Conditions |\n|------|--------|------------|\n"
+    return header + "\n".join(rows)
+
+
+def _build_corner_names_table(processed: dict) -> str:
+    corners = processed.get("corners", [])
+    if not corners:
+        return "No corner names available."
+
+    rows = []
+    for corner in corners[:20]:
+        corner_num = corner.get("corner_num")
+        corner_ref = _corner_ref(corner)
+        rows.append(
+            f"| T{corner_num} | {corner_ref} | {corner['dist_apex']:.0f}m |"
+        )
+
+    header = "| Turn | Corner name | Apex dist |\n|------|-------------|-----------|\n"
+    return header + "\n".join(rows)
+
+
 def _build_solo_prompt(
     processed: dict,
     weak_zones: list[dict],
     car_name: str,
     track_name: str,
+    laps_metadata: list[dict[str, Any]] | None = None,
 ) -> str:
     """Construct the analysis prompt for solo (own-laps) mode."""
 
     if weak_zones:
         table_rows = []
         for z in weak_zones[:15]:
-            corner = f"T{z['corner_num']}" if z.get("corner_num") else "Straight"
+            corner = _corner_ref_from_num(z.get("corner_num"), processed.get("corners", []))
             table_rows.append(
                 f"| {corner} | {z['zone_type']} | {z['metric']} "
                 f"| Best: {z['ref_value']} vs Other: {z['user_value']} "
@@ -195,14 +277,16 @@ def _build_solo_prompt(
 
     corners = processed.get("corners", [])
     corner_summary = ", ".join(
-        f"T{c['corner_num']} @ {c['dist_apex']:.0f}m (min {c['min_speed']:.0f} km/h)"
+        f"{_corner_ref(c)} @ {c['dist_apex']:.0f}m (min {c['min_speed']:.0f} km/h)"
         for c in corners[:12]
     )
 
+    corner_names_table = _build_corner_names_table(processed)
     corner_table = _build_corner_table(processed, weak_zones)
     sector_table = _build_sector_table(processed)
     gear_table = _build_gear_table(processed)
     sector_corner_map = _build_sector_corner_map(processed)
+    lap_conditions = _build_lap_conditions_table(laps_metadata)
 
     return _ANALYSIS_PROMPT_TEMPLATE.format_map({
         "title": "Solo Lap Analysis Request",
@@ -213,9 +297,12 @@ def _build_solo_prompt(
             'against the point-by-point **median** of the driver\'s other laps to find consistency '
             'patterns and recurring mistakes. There is no external benchmark — focus entirely on '
             'the driver\'s own variance and recurring weak spots. Use the word "median" (not '
-            '"average") when referring to the reference.'
+            '"average") when referring to the reference. When lap conditions differ, account for '
+            'those differences and avoid over-attributing losses that are plausibly explained by conditions.'
         ),
+        "lap_conditions_block": lap_conditions,
         "corner_summary": corner_summary or "No corners detected.",
+        "corner_names_table": corner_names_table,
         "corner_table_heading": "best lap vs. driver's other laps",
         "corner_table": corner_table,
         "sector_table": sector_table,
@@ -227,7 +314,9 @@ def _build_solo_prompt(
         "task_block": (
             "Analyse these laps and identify the driver's own patterns, inconsistencies, and areas "
             'where they could be more consistent or improve their technique. Do NOT mention '
-            '"reference lap" or "reference driver" — these are all the same driver\'s laps.'
+            '"reference lap" or "reference driver" — these are all the same driver\'s laps. '
+            "Use the lap conditions metadata as context when deciding whether a gap looks driver-caused "
+            "versus condition-influenced."
         ),
         "summary_schema": "3-5 sentence overall assessment of the driver's consistency and patterns",
         "description_schema": "detailed explanation of the inconsistency or pattern and its impact",
@@ -259,14 +348,16 @@ def _build_user_prompt(
     weak_zones: list[dict],
     car_name: str,
     track_name: str,
+    laps_metadata: list[dict[str, Any]] | None = None,
 ) -> str:
     """Construct the analysis prompt with telemetry context."""
+    corners = processed.get("corners", [])
 
     # Summarise weak zones in a markdown table
     if weak_zones:
         table_rows = []
         for z in weak_zones[:15]:  # cap to top 15
-            corner = f"T{z['corner_num']}" if z.get("corner_num") else "Straight"
+            corner = _corner_ref_from_num(z.get("corner_num"), corners)
             table_rows.append(
                 f"| {corner} | {z['zone_type']} | {z['metric']} "
                 f"| User: {z['user_value']} vs Ref: {z['ref_value']} "
@@ -284,11 +375,9 @@ def _build_user_prompt(
     delta = processed.get("delta", {})
     speed_delta = delta.get("speed_delta", [])
     dist_grid = delta.get("dist", [])
-    corners = processed.get("corners", [])
 
     strengths: list[str] = []
     for corner in corners:
-        c_num = corner["corner_num"]
         region_speed = [
             v
             for v, d in zip(speed_delta, dist_grid)
@@ -298,7 +387,7 @@ def _build_user_prompt(
             avg_delta = sum(region_speed) / len(region_speed)
             if avg_delta < -1.5:  # user faster by >1.5 km/h on average
                 strengths.append(
-                    f"T{c_num} (avg {abs(avg_delta):.1f} km/h faster than reference)"
+                    f"{_corner_ref(corner)} (avg {abs(avg_delta):.1f} km/h faster than reference)"
                 )
         if len(strengths) >= 3:
             break
@@ -310,14 +399,16 @@ def _build_user_prompt(
 
     # Corner summary
     corner_summary = ", ".join(
-        f"T{c['corner_num']} @ {c['dist_apex']:.0f}m (min {c['min_speed']:.0f} km/h)"
+        f"{_corner_ref(c)} @ {c['dist_apex']:.0f}m (min {c['min_speed']:.0f} km/h)"
         for c in corners[:12]
     )
 
+    corner_names_table = _build_corner_names_table(processed)
     corner_table = _build_corner_table(processed, weak_zones)
     sector_table = _build_sector_table(processed)
     gear_table = _build_gear_table(processed)
     sector_corner_map = _build_sector_corner_map(processed)
+    lap_conditions = _build_lap_conditions_table(laps_metadata)
 
     strengths_section = "### Strongest Sectors (user faster than reference)\n" + strength_bullets
 
@@ -325,8 +416,13 @@ def _build_user_prompt(
         "title": "Telemetry Analysis Request",
         "car_name": car_name,
         "track_name": track_name,
-        "context_block": "",
+        "context_block": (
+            "Use lap conditions as supporting context when interpreting pace differences. "
+            "If conditions differ materially between laps, note that and be careful not to frame every gap as pure driver execution."
+        ),
+        "lap_conditions_block": lap_conditions,
         "corner_summary": corner_summary or "No corners detected.",
+        "corner_names_table": corner_names_table,
         "corner_table_heading": "user vs. reference",
         "corner_table": corner_table,
         "sector_table": sector_table,
@@ -337,7 +433,7 @@ def _build_user_prompt(
         "strengths_section": strengths_section,
         "task_block": (
             "Analyse this telemetry data and provide specific, actionable coaching feedback.\n"
-            "The driver wants to close the gap to the reference lap."
+            "The driver wants to close the gap to the reference lap. Consider the lap conditions metadata when separating likely driver losses from likely environmental differences."
         ),
         "summary_schema": "2-3 sentence overall assessment of the lap",
         "description_schema": "detailed explanation of the problem and its impact",
@@ -376,6 +472,7 @@ async def analyze_with_claude(
     claude_api_key: str,
     analysis_mode: str = "vs_reference",
     prompt_version: str | None = None,
+    laps_metadata: list[dict[str, Any]] | None = None,
 ) -> dict:
     """
     Call Claude to produce a structured coaching analysis.
@@ -408,9 +505,9 @@ async def analyze_with_claude(
     client = anthropic.AsyncAnthropic(api_key=effective_key)
 
     if analysis_mode == "solo":
-        user_prompt = _build_solo_prompt(processed, weak_zones, car_name, track_name)
+        user_prompt = _build_solo_prompt(processed, weak_zones, car_name, track_name, laps_metadata)
     else:
-        user_prompt = _build_user_prompt(processed, weak_zones, car_name, track_name)
+        user_prompt = _build_user_prompt(processed, weak_zones, car_name, track_name, laps_metadata)
 
     message = await client.messages.create(
         model=CLAUDE_MODEL,

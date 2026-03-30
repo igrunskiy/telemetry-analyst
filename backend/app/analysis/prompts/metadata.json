@@ -1,6 +1,6 @@
 {
   "defaults": {
-    "claude": "telemetry_analysis",
-    "gemini": "telemetry_analysis"
+    "claude": "analysis_v2",
+    "gemini": "analysis_v2"
   }
 }

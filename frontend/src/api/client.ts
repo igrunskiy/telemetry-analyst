@@ -6,6 +6,7 @@ import type {
   Car,
   Track,
   Lap,
+  RecentActivity,
   Session,
   LapMeta,
   AnalysisReport,
@@ -92,8 +93,8 @@ export async function getMySessions(
   return data
 }
 
-export async function getRecentLaps(limit = 5): Promise<Lap[]> {
-  const { data } = await api.get<Lap[]>('/api/laps/recent', {
+export async function getRecentLaps(limit = 5): Promise<RecentActivity[]> {
+  const { data } = await api.get<RecentActivity[]>('/api/laps/recent', {
     params: { limit },
   })
   return data

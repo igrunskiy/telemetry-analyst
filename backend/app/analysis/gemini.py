@@ -28,6 +28,7 @@ async def analyze_with_gemini(
     gemini_api_key: str,
     analysis_mode: str = "vs_reference",
     prompt_version: str | None = None,
+    laps_metadata: list[dict] | None = None,
 ) -> dict:
     """
     Call Gemini to produce a structured coaching analysis.
@@ -45,9 +46,9 @@ async def analyze_with_gemini(
     client = genai.Client(api_key=effective_key)
 
     if analysis_mode == "solo":
-        user_prompt = _build_solo_prompt(processed, weak_zones, car_name, track_name)
+        user_prompt = _build_solo_prompt(processed, weak_zones, car_name, track_name, laps_metadata)
     else:
-        user_prompt = _build_user_prompt(processed, weak_zones, car_name, track_name)
+        user_prompt = _build_user_prompt(processed, weak_zones, car_name, track_name, laps_metadata)
 
     response = await client.aio.models.generate_content(
         model=GEMINI_MODEL,

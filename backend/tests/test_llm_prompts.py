@@ -5,12 +5,15 @@ import pytest
 
 from app.analysis.llm import (
     _build_corner_table,
+    _build_corner_names_table,
     _build_gear_table,
+    _build_lap_conditions_table,
     _build_sector_table,
     _build_user_prompt,
     _build_solo_prompt,
     SYSTEM_PROMPT,
 )
+from app.analysis.lap_metadata import normalize_lap_meta_dict
 from tests.conftest import make_processed
 
 
@@ -70,6 +73,26 @@ class TestBuildCornerTable:
         assert "Braking" in result or "braking" in result.lower()
         assert "Throttle" in result or "throttle" in result.lower()
 
+    def test_includes_corner_names_when_available(self):
+        result = _build_corner_table(make_processed(), [])
+        assert "Andretti Hairpin" in result
+
+
+class TestBuildCornerNamesTable:
+    def test_returns_string(self):
+        assert isinstance(_build_corner_names_table(make_processed()), str)
+
+    def test_contains_named_corners(self):
+        result = _build_corner_names_table(make_processed())
+        assert "Andretti Hairpin" in result
+        assert "Rainey Curve" in result
+
+    def test_fallback_when_no_corners(self):
+        processed = make_processed()
+        processed["corners"] = []
+        result = _build_corner_names_table(processed)
+        assert "No corner" in result
+
 
 # ---------------------------------------------------------------------------
 # _build_gear_table
@@ -123,6 +146,42 @@ class TestBuildSectorTable:
         assert "No sector" in result
 
 
+class TestLapConditionsHelpers:
+    def test_builds_conditions_table(self):
+        result = _build_lap_conditions_table([
+            {
+                "id": "lap-1",
+                "role": "user",
+                "driver_name": "Driver A",
+                "conditions": {
+                    "weather": "Overcast",
+                    "air_temp_c": 18.5,
+                    "track_temp_c": 24.0,
+                },
+            }
+        ])
+        assert "Overcast" in result
+        assert "18.5C" in result
+        assert "24.0C" in result
+
+    def test_normalizes_nested_conditions(self):
+        normalized = normalize_lap_meta_dict({
+            "id": "lap-1",
+            "role": "user",
+            "driver_name": " Driver A ",
+            "conditions": {
+                "weather": "Clear",
+                "air_temp_c": 22.0,
+                "humidity_pct": None,
+            },
+        })
+        assert normalized["driver_name"] == "Driver A"
+        assert normalized["conditions"] == {
+            "weather": "Clear",
+            "air_temp_c": 22.0,
+        }
+
+
 # ---------------------------------------------------------------------------
 # _build_user_prompt (vs_reference mode)
 # ---------------------------------------------------------------------------
@@ -151,11 +210,27 @@ class TestBuildUserPrompt:
         result = _build_user_prompt(make_processed(), [], "Car", "Track")
         assert "T1" in result
 
+    def test_includes_corner_names_section(self):
+        result = _build_user_prompt(make_processed(), [], "Car", "Track")
+        assert "Corner Names" in result
+        assert "Andretti Hairpin" in result
+
     def test_does_not_mention_median(self):
         """vs_reference prompt should not use solo-mode language."""
         result = _build_user_prompt(make_processed(), [], "Car", "Track")
         # "median" is specific to solo mode context
         assert "median of all your" not in result.lower()
+
+    def test_includes_lap_conditions_section(self):
+        result = _build_user_prompt(
+            make_processed(),
+            [],
+            "Car",
+            "Track",
+            [{"id": "lap-1", "role": "user", "driver_name": "Driver A", "conditions": {"weather": "Clear"}}],
+        )
+        assert "Lap Conditions" in result
+        assert "Clear" in result
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +246,11 @@ class TestBuildSoloPrompt:
         result = _build_solo_prompt(make_processed(), [], "MX-5", "Brands Hatch")
         assert "MX-5" in result
         assert "Brands Hatch" in result
+
+    def test_includes_corner_names_section(self):
+        result = _build_solo_prompt(make_processed(), [], "Car", "Track")
+        assert "Corner Names" in result
+        assert "Rainey Curve" in result
 
     def test_uses_median_language(self):
         result = _build_solo_prompt(make_processed(), [], "Car", "Track")
@@ -197,3 +277,14 @@ class TestBuildSoloPrompt:
         """Should explain what the scores mean in solo/consistency context."""
         result = _build_solo_prompt(make_processed(), [], "Car", "Track")
         assert "consistent" in result.lower() or "consistency" in result.lower()
+
+    def test_mentions_condition_context(self):
+        result = _build_solo_prompt(
+            make_processed(),
+            [],
+            "Car",
+            "Track",
+            [{"id": "lap-1", "role": "user", "driver_name": "Driver A", "conditions": {"weather": "Rain"}}],
+        )
+        assert "Rain" in result
+        assert "condition" in result.lower()

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import secrets
 import uuid
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,6 +16,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.worker import get_active_job_count
+from app.analysis.lap_metadata import canonical_driver_name as _canonical_driver_name
+from app.analysis.lap_metadata import driver_key as _driver_key
+from app.analysis.lap_metadata import normalize_lap_meta_dict as _normalize_lap_meta_dict
 from app.analysis.upload_inspector import inspect_upload
 from app.auth.jwt import get_current_user
 from app.config import settings
@@ -24,6 +28,7 @@ from app.models.user import User
 from app.telemetry.catalog import resolve_or_create_car, resolve_or_create_track
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -31,6 +36,17 @@ router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 # ---------------------------------------------------------------------------
 
 class LapMetaInput(BaseModel):
+    class LapConditionsInput(BaseModel):
+        summary: str | None = None
+        weather: str | None = None
+        track_state: str | None = None
+        air_temp_c: float | None = None
+        track_temp_c: float | None = None
+        humidity_pct: float | None = None
+        wind_kph: float | None = None
+        wind_direction: str | float | None = None
+        time_of_day: str | None = None
+
     id: str
     role: str = "reference"
     driver_name: str = ""
@@ -41,6 +57,7 @@ class LapMetaInput(BaseModel):
     file_name: str | None = None
     recorded_at: str | None = None
     source: str | None = None
+    conditions: LapConditionsInput | None = None
 
 
 class UploadedTelemetryInput(BaseModel):
@@ -57,6 +74,7 @@ class UploadedTelemetryInput(BaseModel):
     car_name: str | None = None
     track_name: str | None = None
     source: str = "custom"
+    conditions: LapMetaInput.LapConditionsInput | None = None
 
 
 class RunAnalysisRequest(BaseModel):
@@ -83,6 +101,7 @@ class AnalysisHistoryItemResponse(BaseModel):
     status: str = "completed"
     llm_provider: str | None = None
     model_name: str | None = None
+    prompt_version: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +110,7 @@ class AnalysisHistoryItemResponse(BaseModel):
 
 def _enqueued_response(record: AnalysisResult) -> dict[str, Any]:
     """Return a minimal response for a newly enqueued or in-progress record."""
+    input_data = record.input_json or {}
     return {
         "id": str(record.id),
         "status": record.status,
@@ -99,20 +119,28 @@ def _enqueued_response(record: AnalysisResult) -> dict[str, Any]:
         "car_name": record.car_name,
         "track_name": record.track_name,
         "created_at": record.created_at.isoformat(),
+        "enqueued_at": record.enqueued_at.isoformat() if record.enqueued_at else None,
         "analysis_mode": (record.input_json or {}).get("analysis_mode", "vs_reference"),
+        "llm_provider": input_data.get("llm_provider"),
+        "prompt_version": input_data.get("prompt_version"),
     }
 
 
 def _completed_response(record: AnalysisResult) -> dict[str, Any]:
     enriched = dict(record.result_json or {})
+    input_data = record.input_json or {}
     enriched["id"] = str(record.id)
     enriched["status"] = record.status
     enriched["created_at"] = record.created_at.isoformat()
+    enriched["enqueued_at"] = record.enqueued_at.isoformat() if record.enqueued_at else None
     enriched["share_token"] = record.share_token
+    if not enriched.get("prompt_version"):
+        enriched["prompt_version"] = input_data.get("prompt_version")
     return enriched
 
 
 def _failed_response(record: AnalysisResult) -> dict[str, Any]:
+    input_data = record.input_json or {}
     return {
         "id": str(record.id),
         "status": "failed",
@@ -122,6 +150,9 @@ def _failed_response(record: AnalysisResult) -> dict[str, Any]:
         "car_name": record.car_name,
         "track_name": record.track_name,
         "created_at": record.created_at.isoformat(),
+        "enqueued_at": record.enqueued_at.isoformat() if record.enqueued_at else None,
+        "llm_provider": input_data.get("llm_provider"),
+        "prompt_version": input_data.get("prompt_version"),
     }
 
 
@@ -131,28 +162,6 @@ def _record_response(record: AnalysisResult) -> dict[str, Any]:
     if record.status == "failed":
         return _failed_response(record)
     return _enqueued_response(record)
-
-
-def _canonical_driver_name(value: str | None) -> str:
-    if not value:
-        return ""
-    return " ".join(value.split()).strip()
-
-
-def _driver_key(value: str | None) -> str:
-    name = _canonical_driver_name(value).lower()
-    return "".join(ch for ch in name if ch.isalnum())
-
-
-def _normalize_lap_meta_dict(item: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(item)
-    display_name = _canonical_driver_name(str(item.get("driver_name") or item.get("source_driver_name") or ""))
-    source_name = _canonical_driver_name(str(item.get("source_driver_name") or item.get("driver_name") or ""))
-    normalized["driver_name"] = display_name
-    normalized["source_driver_name"] = source_name or None
-    normalized["driver_key"] = str(item.get("driver_key") or _driver_key(display_name) or _driver_key(source_name) or "") or None
-    return normalized
-
 
 def _resolve_uploaded_context(body: RunAnalysisRequest) -> tuple[str, str, list[dict[str, Any]] | None]:
     uploaded = [_normalize_lap_meta_dict(item.model_dump()) for item in (body.uploaded_telemetry or [])]
@@ -197,6 +206,14 @@ async def run_analysis(
     process it and update the record to 'completed' or 'failed'.
     """
     if not body.reference_lap_ids:
+        logger.warning(
+            "Rejecting analysis request with no reference laps: lap_id=%s car=%r track=%r mode=%s laps_metadata_count=%d",
+            body.lap_id,
+            body.car_name,
+            body.track_name,
+            body.analysis_mode,
+            len(body.laps_metadata or []),
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="At least one additional lap ID is required",
@@ -218,7 +235,7 @@ async def run_analysis(
                 response.status_code = status.HTTP_200_OK
                 enriched = _completed_response(record)
                 if body.laps_metadata:
-                    enriched["laps_metadata"] = [m.model_dump() for m in body.laps_metadata]
+                    enriched["laps_metadata"] = [_normalize_lap_meta_dict(m.model_dump()) for m in body.laps_metadata]
                 return enriched
 
     # ----- Queue size check -----
@@ -366,6 +383,7 @@ async def get_history(
                 status=r.status,
                 llm_provider=input_data.get("llm_provider") or rj.get("llm_provider"),
                 model_name=rj.get("model_name"),
+                prompt_version=rj.get("prompt_version") or input_data.get("prompt_version"),
             )
         )
 
@@ -481,4 +499,3 @@ async def share_analysis(
         await db.flush()
 
     return {"share_token": record.share_token}
-
