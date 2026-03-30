@@ -137,7 +137,6 @@ export default function TrackMap({
   showRef = true,
 }: TrackMapProps) {
   const [mapStyle, setMapStyle] = useState<MapStyle>('satellite')
-
   const hasGpsData = userLat.length > 0 && userLon.length > 0
 
   const center = useMemo((): [number, number] => {
@@ -281,7 +280,7 @@ export default function TrackMap({
               className={`px-2 py-1 rounded-lg font-medium transition-colors ${
                 mapStyle === s
                   ? 'bg-slate-500 text-white'
-                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600 disabled:opacity-35 disabled:cursor-not-allowed'
               }`}
             >
               {icon}
@@ -308,12 +307,10 @@ export default function TrackMap({
             : <TileLayer url={OSM_URL} attribution="&copy; OpenStreetMap contributors" maxNativeZoom={19} maxZoom={22} />
         )}
 
-        {/* Reference line — solid green */}
         {showRef && refPositions.length > 0 && (
-          <Polyline positions={refPositions} pathOptions={{ color: '#22c55e', weight: 1.5, opacity: 0.7 }} />
+          <Polyline positions={refPositions} pathOptions={{ color: '#22c55e', weight: 1.5, opacity: 0.78 }} />
         )}
 
-        {/* User line — speed-delta diverging gradient (red=slower, grey=matched, green=faster) */}
         {speedDeltaSegments.length > 0
           ? speedDeltaSegments.map((seg, i) => (
               <Polyline key={`ud-${i}`} positions={seg.positions}
@@ -325,7 +322,6 @@ export default function TrackMap({
             ))
         }
 
-        {/* Corner labels */}
         {cornerData.map((c) => {
           const highlighted = highlightCornerNums.includes(c.num)
           return (
@@ -349,7 +345,6 @@ export default function TrackMap({
           )
         })}
 
-        {/* Hover cursor */}
         {hoverIndex != null && hoverIndex >= 0 && hoverIndex < userLat.length && (
           <CircleMarker
             center={[userLat[hoverIndex], userLon[hoverIndex]]}

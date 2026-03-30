@@ -34,6 +34,13 @@
 ### Task
 {task_block}
 
+Corner naming requirement:
+- Use the real track corner names from the `Corner Names` section whenever they are available.
+- In all natural-language JSON fields such as `summary`, `title`, `description`, `technique`, `telemetry_evidence`, `strengths`, and `sector_notes`, prefer names like `(T1) Andretti Hairpin` or ` (T2) Rainey Curve` over plain `T1` or `T2`.
+- If a corner has both a turn number and a real name, you may write them together on first mention, for example `(T1) Andretti Hairpin`, then use the real name after that.
+- Keep `corner_refs` numeric only. Do not put names inside `corner_refs`.
+- Only fall back to plain `T1`, `T2`, etc. if no real corner name is available in the provided data.
+
 Return your analysis as a valid JSON object matching EXACTLY this schema:
 ```json
 {{

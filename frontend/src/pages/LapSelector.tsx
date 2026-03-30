@@ -97,6 +97,13 @@ function parseDate(value: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
+function parseOptionalNumber(value: string): number | undefined {
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  const parsed = Number(trimmed)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
 function formatDate(dateStr: string): string {
   const parsed = parseDate(dateStr)
   if (!parsed) {
@@ -126,10 +133,27 @@ function formatLapConditionsCompact(lap: Lap): string {
     return '—'
   }
 
+  const formatWindDirection = (value?: string | number): string | null => {
+    if (value == null || value === '') return null
+    if (typeof value === 'string') return value
+    const degrees = Math.abs(value) <= Math.PI * 2 + 0.001 ? (value * 180) / Math.PI : value
+    const normalized = ((degrees % 360) + 360) % 360
+    const labels = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+    const label = labels[Math.round(normalized / 45) % labels.length]
+    return `${label} ${normalized.toFixed(0)}deg`
+  }
+
   const parts: string[] = []
   if (conditions.weather) parts.push(conditions.weather)
   if (conditions.track_temp_c != null) parts.push(`Track ${conditions.track_temp_c.toFixed(0)}C`)
   if (conditions.air_temp_c != null) parts.push(`Air ${conditions.air_temp_c.toFixed(0)}C`)
+  if (conditions.wind_kph != null) {
+    const windDirection = formatWindDirection(conditions.wind_direction)
+    parts.push(`Wind ${conditions.wind_kph.toFixed(0)}${windDirection ? ` ${windDirection}` : ''}`)
+  } else {
+    const windDirection = formatWindDirection(conditions.wind_direction)
+    if (windDirection) parts.push(`Wind ${windDirection}`)
+  }
   if (conditions.time_of_day) parts.push(conditions.time_of_day)
 
   return parts.length > 0 ? parts.join(' • ') : '—'
@@ -152,6 +176,10 @@ function buildDriverKey(value: string): string | undefined {
   return key || undefined
 }
 
+function getLapSourceLabel(lapId: string): 'csv' | 'g61' {
+  return lapId.startsWith('upload:') ? 'csv' : 'g61'
+}
+
 type UploadTab = 'files' | 'metadata'
 type PageTab = 'analysis' | 'import'
 
@@ -165,6 +193,8 @@ type UploadedLapDraft = {
   driver_name: string
   lap_time: string
   recorded_at: string
+  air_temp_c: string
+  track_temp_c: string
   source: 'custom'
   valid: boolean
   error: string | null
@@ -192,6 +222,8 @@ function buildUploadDraft(file: File, accountOwnerName: string, inspection?: Upl
     driver_name: accountOwnerName || meta.driver_name || '',
     lap_time: meta.lap_time ? formatLapTime(meta.lap_time) : '',
     recorded_at: meta.recorded_at ?? '',
+    air_temp_c: '',
+    track_temp_c: '',
     source: 'custom',
     valid: inspection?.valid ?? true,
     error: inspection?.error ?? null,
@@ -228,6 +260,7 @@ export default function LapSelectorPage() {
   const [mySessionsLimit, setMySessionsLimit] = useState(10)
   const [mySessionsPage, setMySessionsPage] = useState(0)
   const [recentPage, setRecentPage] = useState(0)
+  const [expandedRecentIds, setExpandedRecentIds] = useState<Set<string>>(new Set())
   const [recentSourceFilter, setRecentSourceFilter] = useState<'all' | 'garage61' | 'upload'>('all')
   const RECENT_PAGE_SIZE = 5
   const [historyPage, setHistoryPage] = useState(0)
@@ -279,8 +312,13 @@ export default function LapSelectorPage() {
   })
 
   const { data: recentLaps = [], isLoading: recentLoading } = useQuery<RecentActivity[]>({
-    queryKey: ['recentLaps'],
-    queryFn: () => getRecentLaps(25),
+    queryKey: ['recentLaps', selectedCarId, selectedTrackId, recentSourceFilter],
+    queryFn: () =>
+      getRecentLaps(100, {
+        carId: selectedCarId,
+        trackId: selectedTrackId,
+        source: recentSourceFilter,
+      }),
   })
 
   const { data: importedTelemetry = [] } = useQuery({
@@ -295,21 +333,9 @@ export default function LapSelectorPage() {
     queryKey: ['garage61Dictionary', 'track'],
     queryFn: () => getGarage61Dictionary('track'),
   })
-  const selectedCarName = cars.find((c: CarType) => c.id === selectedCarId)?.name ?? null
-  const selectedTrackName = tracks.find((t: Track) => t.id === selectedTrackId)
-  const selectedTrackDisplayName = selectedTrackName ? formatTrackName(selectedTrackName) : null
-  const filteredRecentLaps = recentLaps.filter((lap) => {
-    if (recentSourceFilter !== 'all' && !lap.entries.some((entry) => entry.source === recentSourceFilter)) return false
-    if (selectedCarId) {
-      const carMatch = lap.car_id === selectedCarId || (selectedCarName && lap.car_name === selectedCarName)
-      if (!carMatch) return false
-    }
-    if (selectedTrackId) {
-      const trackMatch = lap.track_id === selectedTrackId || (selectedTrackDisplayName && lap.track_name === selectedTrackDisplayName)
-      if (!trackMatch) return false
-    }
-    return true
-  })
+  const garage61CarNames = new Set(garage61CarDictionary.map((entry) => entry.name))
+  const garage61TrackNames = new Set(garage61TrackDictionary.map((entry) => entry.display_name))
+  const filteredRecentLaps = recentLaps
   const recentPageLaps = filteredRecentLaps.slice(recentPage * RECENT_PAGE_SIZE, (recentPage + 1) * RECENT_PAGE_SIZE)
   const recentTotalPages = Math.ceil(filteredRecentLaps.length / RECENT_PAGE_SIZE)
 
@@ -397,6 +423,18 @@ export default function LapSelectorPage() {
       tracks.find((track) => formatTrackName(track) === lap.track_name)?.id ??
       null
     return { carId, trackId }
+  }
+
+  function toggleRecentCard(id: string) {
+    setExpandedRecentIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
   }
 
   function toggleRefLap(lapId: string) {
@@ -488,7 +526,9 @@ export default function LapSelectorPage() {
       return next.some((lap, index) => lap !== prev[index]) ? next : prev
     })
   }, [accountOwnerName])
-  const uploadHasRequiredMetadata = uploadCarName.trim().length > 0 && uploadTrackName.trim().length > 0
+  const uploadCarMatchesDictionary = garage61CarNames.has(uploadCarName.trim())
+  const uploadTrackMatchesDictionary = garage61TrackNames.has(uploadTrackName.trim())
+  const uploadHasRequiredMetadata = uploadCarMatchesDictionary && uploadTrackMatchesDictionary
   const uploadHasLapTimes = normalizedUploadedLaps.every((lap) => lap.parsedLapTime > 0)
   const uploadFilesAreValid = normalizedUploadedLaps.length > 0 && normalizedUploadedLaps.every((lap) => lap.valid)
   const canImportTelemetry = uploadHasRequiredMetadata && uploadHasLapTimes && uploadFilesAreValid && normalizedUploadedLaps.length > 0 && !isInspectingUploads
@@ -506,6 +546,8 @@ export default function LapSelectorPage() {
         driver_key: lap.driver_key,
         lap_time: lap.parsedLapTime,
         recorded_at: lap.recorded_at || undefined,
+        air_temp_c: parseOptionalNumber(lap.air_temp_c),
+        track_temp_c: parseOptionalNumber(lap.track_temp_c),
         sample_count: lap.sample_count,
       }))
       return importTelemetryFiles(
@@ -1356,6 +1398,11 @@ export default function LapSelectorPage() {
                             <input className="select mt-1" list="garage61-track-options" value={uploadTrackName} onChange={(e) => setUploadTrackName(e.target.value)} placeholder="Spa-Francorchamps" />
                           </label>
                         </div>
+                        {(!uploadCarMatchesDictionary || !uploadTrackMatchesDictionary) && (
+                          <p className="text-xs text-amber-300 mt-3">
+                            Select both car and track from the Garage61 dictionary before importing CSV telemetry.
+                          </p>
+                        )}
                         <p className="text-xs text-slate-500 mt-3">These batch-level values are extracted from file content or file name when possible. You can override them manually or pick a canonical Garage61 value from the dictionary.</p>
                       </div>
 
@@ -1419,6 +1466,14 @@ export default function LapSelectorPage() {
                                       <label className="text-xs text-slate-400">
                                         Session Date / Time
                                         <input className="select mt-1" value={lap.recorded_at} onChange={(e) => updateUploadedLap(lap.localId, { recorded_at: e.target.value })} placeholder="2026-03-28 21:15:00" />
+                                      </label>
+                                      <label className="text-xs text-slate-400">
+                                        Air Temp C
+                                        <input className="select mt-1" value={lap.air_temp_c} onChange={(e) => updateUploadedLap(lap.localId, { air_temp_c: e.target.value })} placeholder="24" />
+                                      </label>
+                                      <label className="text-xs text-slate-400">
+                                        Track Temp C
+                                        <input className="select mt-1" value={lap.track_temp_c} onChange={(e) => updateUploadedLap(lap.localId, { track_temp_c: e.target.value })} placeholder="38" />
                                       </label>
                                     </div>
                                   </div>
@@ -1591,76 +1646,89 @@ export default function LapSelectorPage() {
                   {recentPageLaps.map((lap) => {
                     const { carId, trackId } = resolveRecentIds(lap)
                     const canApply = Boolean(carId && trackId)
+                    const isExpanded = expandedRecentIds.has(lap.id)
                     return (
-                      <button
+                      <div
                         key={lap.id}
-                        type="button"
-                        onClick={() => applyRecentFilters(carId, trackId)}
-                        disabled={!canApply}
-                        title={
-                          canApply
-                            ? 'Use this car and track for filtering'
-                            : 'Car or track not available for filtering'
-                        }
                         className={`card text-left transition-colors w-full px-3 py-2.5 ${
-                          canApply ? 'hover:bg-slate-700' : 'opacity-70 cursor-not-allowed'
+                          canApply ? 'hover:bg-slate-700' : 'opacity-70'
                         }`}
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 text-sm min-w-0">
-                              <Car className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                              <span className="text-amber-400 font-semibold truncate">{lap.car_name}</span>
-                              <span className="text-slate-600 flex-shrink-0">/</span>
-                              <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                              <span className="text-slate-300 truncate">{lap.track_name}</span>
-                            </div>
-                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                              {lap.entries.slice(0, 4).map((entry, idx) => (
-                                <span
-                                  key={`${lap.id}-${entry.date}-${idx}`}
-                                  className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] ${
-                                    entry.source === 'upload'
-                                      ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/20'
-                                      : 'bg-blue-500/10 text-blue-300 ring-1 ring-blue-500/20'
-                                  }`}
-                                >
-                                  <span className="text-slate-300">{formatDate(entry.date)}</span>
-                                  <span className="text-slate-500">•</span>
-                                  <span>{entry.lap_count ?? 0}L</span>
-                                  <span className="uppercase tracking-wide opacity-80">
-                                    {entry.source === 'upload' ? 'csv' : 'g61'}
+                          <button
+                            type="button"
+                            onClick={() => toggleRecentCard(lap.id)}
+                            className="min-w-0 flex-1 text-left"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 min-w-0 text-sm">
+                                <ChevronRight className={`w-3.5 h-3.5 text-slate-500 transition-transform flex-shrink-0 ${isExpanded ? 'rotate-90' : ''}`} />
+                                <Car className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                                <span className="text-amber-400 font-semibold truncate">{lap.car_name}</span>
+                                <span className="text-slate-600 flex-shrink-0">·</span>
+                                <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                                <span className="text-slate-300 truncate">{lap.track_name}</span>
+                              </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-1.5 pl-5 text-[11px]">
+                                <span className="rounded-md bg-slate-800 px-2 py-0.5 text-slate-300">
+                                  {lap.lap_count ?? 0} laps
+                                </span>
+                                <span className="rounded-md bg-slate-800 px-2 py-0.5 text-slate-400">
+                                  {lap.entries.length} date{lap.entries.length === 1 ? '' : 's'}
+                                </span>
+                                {lap.source && (
+                                  <span className={`text-[10px] uppercase tracking-wide font-semibold px-2 py-0.5 rounded-md ${
+                                    lap.source === 'upload'
+                                      ? 'bg-emerald-500/20 text-emerald-400'
+                                      : lap.source === 'garage61'
+                                        ? 'bg-blue-500/20 text-blue-400'
+                                        : 'bg-slate-600/40 text-slate-300'
+                                  }`}>
+                                    {lap.source === 'upload' ? 'csv' : lap.source === 'garage61' ? 'g61' : 'mix'}
                                   </span>
-                                </span>
-                              ))}
-                              {lap.entries.length > 4 && (
-                                <span className="text-[11px] text-slate-500">
-                                  +{lap.entries.length - 4} more
-                                </span>
-                              )}
+                                )}
+                              </div>
                             </div>
-                          </div>
-                          <div className="flex flex-col items-end gap-1 flex-shrink-0 text-right">
-                            <span className="text-[11px] text-slate-500">
-                              {lap.lap_count ?? 0} laps
-                            </span>
-                            <span className="text-[11px] text-slate-600">
-                              {lap.entries.length} date{lap.entries.length === 1 ? '' : 's'}
-                            </span>
-                            {lap.source && (
-                              <span className={`text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ${
-                                lap.source === 'upload'
-                                  ? 'bg-emerald-500/20 text-emerald-400'
-                                  : lap.source === 'garage61'
-                                    ? 'bg-blue-500/20 text-blue-400'
-                                    : 'bg-slate-600/40 text-slate-300'
-                              }`}>
-                                {lap.source === 'upload' ? 'csv' : lap.source === 'garage61' ? 'g61' : 'mix'}
-                              </span>
-                            )}
+                          </button>
+                          <div className="flex items-start gap-2 flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => canApply && applyRecentFilters(carId, trackId)}
+                              disabled={!canApply}
+                              className="text-[11px] px-2.5 py-1 rounded-md border border-slate-700 bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                              title={
+                                canApply
+                                  ? 'Filter by this car and track'
+                                  : 'Car or track not available for filtering'
+                              }
+                            >
+                              Filter
+                            </button>
                           </div>
                         </div>
-                      </button>
+                        {isExpanded && (
+                          <div className="mt-2 border-t border-slate-700/50 pt-2">
+                            <div className="space-y-1.5">
+                              {lap.entries.map((entry, idx) => (
+                                <div
+                                  key={`${lap.id}-${entry.date}-${idx}`}
+                                  className="flex items-center justify-between gap-3 rounded-md bg-slate-800/70 px-2.5 py-1.5 text-[11px]"
+                                >
+                                  <span className="text-slate-300">{formatDate(entry.date)}</span>
+                                  <div className="flex items-center gap-2 flex-shrink-0">
+                                    <span className="text-slate-400">{entry.lap_count ?? 0} laps</span>
+                                    <span className={`uppercase tracking-wide font-semibold ${
+                                      entry.source === 'upload' ? 'text-emerald-400' : 'text-blue-400'
+                                    }`}>
+                                      {entry.source === 'upload' ? 'csv' : 'g61'}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     )
                   })}
                 </div>
@@ -1720,6 +1788,7 @@ export default function LapSelectorPage() {
                     const isQueued = item.status === 'enqueued'
                     const isProcessing = item.status === 'processing'
                     const isActive = isQueued || isProcessing
+                    const sourceLabel = getLapSourceLabel(item.lap_id)
                     return (
                     <div key={item.id} className="relative group">
                       <button
@@ -1727,7 +1796,7 @@ export default function LapSelectorPage() {
                         onClick={() => navigate(`/report/${item.id}`, {
                           state: { backTo: { pathname: '/app' } },
                         })}
-                        className={`w-full card text-left hover:bg-slate-700 transition-colors pr-10 py-2.5 border-l-2 ${
+                        className={`w-full card text-left hover:bg-slate-700 transition-colors pr-10 py-2 border-l-2 ${
                           isSoloItem ? 'border-l-violet-500/50' : 'border-l-orange-500/50'
                         } ${
                           isActive ? 'bg-slate-800/55 border-slate-700/70' : ''
@@ -1735,7 +1804,6 @@ export default function LapSelectorPage() {
                       >
                         <div className="flex items-center justify-between gap-3">
                           <div className={`flex-1 min-w-0 transition-opacity ${isActive ? 'opacity-75' : 'opacity-100'}`}>
-                            {/* Row 1: badge · car @ track · time gain */}
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${
                                 isSoloItem
@@ -1777,51 +1845,22 @@ export default function LapSelectorPage() {
                                 </span>
                               )}
                             </div>
-                            {/* Row 2: lap IDs · date */}
-                            <div className="flex items-center gap-1.5 flex-wrap text-xs text-slate-500 mt-1">
-                              {isSoloItem ? (
+                            <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-slate-500 mt-1">
+                              <span className={`uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ${
+                                sourceLabel === 'csv'
+                                  ? 'bg-emerald-500/15 text-emerald-400'
+                                  : 'bg-blue-500/15 text-blue-400'
+                              }`}>
+                                {sourceLabel}
+                              </span>
+                              {isSoloItem && (
                                 <>
-                                  <span className="font-mono bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-400">
-                                    {item.lap_id.slice(0, 8)}
-                                  </span>
                                   <span className="text-slate-600">·</span>
-                                  <span>{item.reference_lap_ids.length + 1} laps from session</span>
-                                </>
-                              ) : (
-                                <>
-                                  <span className="font-mono bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-400">
-                                    {item.lap_id.slice(0, 8)}
-                                  </span>
-                                  {item.reference_lap_ids.length > 0 && (
-                                    <>
-                                      <span>vs</span>
-                                      {item.reference_lap_ids.slice(0, 3).map((rid) => (
-                                        <span key={rid} className="font-mono bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-500">
-                                          {rid.slice(0, 8)}
-                                        </span>
-                                      ))}
-                                      {item.reference_lap_ids.length > 3 && (
-                                        <span className="text-slate-600">+{item.reference_lap_ids.length - 3} more</span>
-                                      )}
-                                    </>
-                                  )}
+                                  <span>{item.reference_lap_ids.length + 1} laps</span>
                                 </>
                               )}
                               <span className="text-slate-600">·</span>
                               <span className="text-slate-600">{formatDateTime(item.created_at)}</span>
-                              {(item.model_name || item.llm_provider || item.prompt_version) && (
-                                <>
-                                  <span className="text-slate-600">·</span>
-                                  <span className="font-mono text-amber-400/70 bg-amber-400/10 px-1.5 py-0.5 rounded text-xs">
-                                    {item.model_name ?? item.llm_provider}
-                                  </span>
-                                  {item.prompt_version && (
-                                    <span className="font-mono text-sky-300/80 bg-sky-400/10 px-1.5 py-0.5 rounded text-xs">
-                                      {item.prompt_version}
-                                    </span>
-                                  )}
-                                </>
-                              )}
                             </div>
                           </div>
                           <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-amber-500 flex-shrink-0 transition-colors" />

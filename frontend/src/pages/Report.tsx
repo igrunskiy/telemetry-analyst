@@ -225,6 +225,16 @@ function IRatingBadge({ value }: { value: number }) {
 function formatLapConditions(conditions?: LapConditions | null): string {
   if (!conditions) return '—'
 
+  const formatWindDirection = (value?: string | number): string | null => {
+    if (value == null || value === '') return null
+    if (typeof value === 'string') return value
+    const degrees = Math.abs(value) <= Math.PI * 2 + 0.001 ? (value * 180) / Math.PI : value
+    const normalized = ((degrees % 360) + 360) % 360
+    const labels = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+    const label = labels[Math.round(normalized / 45) % labels.length]
+    return `${label} ${normalized.toFixed(0)}deg`
+  }
+
   const parts: string[] = []
   if (conditions.summary) parts.push(conditions.summary)
   if (conditions.weather) parts.push(conditions.weather)
@@ -232,11 +242,12 @@ function formatLapConditions(conditions?: LapConditions | null): string {
   if (conditions.air_temp_c != null) parts.push(`Air ${conditions.air_temp_c.toFixed(1)}C`)
   if (conditions.track_temp_c != null) parts.push(`Track ${conditions.track_temp_c.toFixed(1)}C`)
   if (conditions.humidity_pct != null) parts.push(`Humidity ${conditions.humidity_pct.toFixed(0)}%`)
+  const windDirection = formatWindDirection(conditions.wind_direction)
   if (conditions.wind_kph != null) {
-    const direction = conditions.wind_direction ? ` ${conditions.wind_direction}` : ''
+    const direction = windDirection ? ` ${windDirection}` : ''
     parts.push(`Wind ${conditions.wind_kph.toFixed(1)} kph${direction}`)
-  } else if (conditions.wind_direction) {
-    parts.push(`Wind ${conditions.wind_direction}`)
+  } else if (windDirection) {
+    parts.push(`Wind ${windDirection}`)
   }
   if (conditions.time_of_day) parts.push(conditions.time_of_day)
 

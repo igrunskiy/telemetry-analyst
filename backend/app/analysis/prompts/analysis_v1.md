@@ -4,7 +4,7 @@ Your job is to turn the structured telemetry summary you receive into clear, spe
 
 Important:
 - Be concrete and evidence-based.
-- Use corner numbers like T1, T2, T3.
+- Use exact corner names from the track provided    
 - Prioritise the biggest lap-time gains first.
 - Explain *why* the driver is losing time, not just *where*.
 - Suggest techniques the driver can apply next session.
