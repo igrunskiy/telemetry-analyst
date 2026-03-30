@@ -93,9 +93,21 @@ export async function getMySessions(
   return data
 }
 
-export async function getRecentLaps(limit = 5): Promise<RecentActivity[]> {
+export async function getRecentLaps(
+  limit = 5,
+  filters?: {
+    carId?: string | number | null
+    trackId?: string | number | null
+    source?: 'all' | 'garage61' | 'upload'
+  },
+): Promise<RecentActivity[]> {
   const { data } = await api.get<RecentActivity[]>('/api/laps/recent', {
-    params: { limit },
+    params: {
+      limit,
+      car_id: filters?.carId ?? undefined,
+      track_id: filters?.trackId ?? undefined,
+      source: filters?.source && filters.source !== 'all' ? filters.source : undefined,
+    },
   })
   return data
 }

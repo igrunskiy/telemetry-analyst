@@ -1,5 +1,3 @@
-
-
 # Telemetry Analysis Prompt (Advanced)
 
 You are given telemetry data and session context for a racing driver.
@@ -12,18 +10,7 @@ Analyze the data and return a structured coaching report following the required 
 
 You will receive:
 
-* **Corner Map**
-* **Per-Corner Telemetry Table**
-* **Gear Table**
-* **Sector Times**
-* **Sector–Corner Map**
-* **Optional Context**, which may include:
-
-  * Track conditions (temperature, grip level, wet/dry, wind)
-  * Tire state (compound, wear, temperature)
-  * Fuel load
-  * Traffic or invalid laps
-
+Telemetry data files in a format compatible with garage61
 ---
 
 ## Determine Analysis Mode

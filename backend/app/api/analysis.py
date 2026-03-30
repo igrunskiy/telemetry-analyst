@@ -19,11 +19,14 @@ from app.analysis.worker import get_active_job_count
 from app.analysis.lap_metadata import canonical_driver_name as _canonical_driver_name
 from app.analysis.lap_metadata import driver_key as _driver_key
 from app.analysis.lap_metadata import normalize_lap_meta_dict as _normalize_lap_meta_dict
-from app.analysis.upload_inspector import inspect_upload
+from app.analysis.upload_inspector import inspect_upload_with_llm
+from app.auth.crypto import decrypt
 from app.auth.jwt import get_current_user
 from app.config import settings
 from app.database import get_db
 from app.models.analysis import AnalysisResult
+from app.models.telemetry_car import TelemetryCar
+from app.models.telemetry_track import TelemetryTrack
 from app.models.user import User
 from app.telemetry.catalog import resolve_or_create_car, resolve_or_create_track
 
@@ -286,13 +289,34 @@ async def run_analysis(
 @router.post("/inspect-upload")
 async def inspect_uploaded_telemetry(
     files: list[UploadFile] = File(...),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
+    car_result = await db.execute(
+        select(TelemetryCar.name).where(TelemetryCar.source == "garage61").order_by(TelemetryCar.updated_at.desc())
+    )
+    track_result = await db.execute(
+        select(TelemetryTrack.display_name).where(TelemetryTrack.source == "garage61").order_by(TelemetryTrack.updated_at.desc())
+    )
+    car_candidates = [name for name in car_result.scalars().all() if name]
+    track_candidates = [name for name in track_result.scalars().all() if name]
+    claude_key = decrypt(current_user.claude_api_key_enc) if current_user.claude_api_key_enc else settings.CLAUDE_API_KEY
+    gemini_key = decrypt(current_user.gemini_api_key_enc) if current_user.gemini_api_key_enc else settings.GEMINI_API_KEY
+
     results: list[dict[str, Any]] = []
     for file in files:
         contents = await file.read()
         text = contents.decode("utf-8", errors="replace")
-        results.append(inspect_upload(file.filename or "upload.csv", text))
+        results.append(
+            await inspect_upload_with_llm(
+                file.filename or "upload.csv",
+                text,
+                car_candidates=car_candidates,
+                track_candidates=track_candidates,
+                claude_api_key=claude_key,
+                gemini_api_key=gemini_key,
+            )
+        )
     return results
 
 

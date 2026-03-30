@@ -42,6 +42,8 @@ class ImportedTelemetryResponse(BaseModel):
     recorded_at: str | None = None
     sample_count: int = 0
     track_length_m: float | None = None
+    air_temp_c: float | None = None
+    track_temp_c: float | None = None
     created_at: str
     source: str = "upload"
 
@@ -52,6 +54,8 @@ class ImportedTelemetryUpdateRequest(BaseModel):
     driver_name: str
     lap_time: float
     recorded_at: str | None = None
+    air_temp_c: float | None = None
+    track_temp_c: float | None = None
 
 
 class Garage61DictionaryEntryResponse(BaseModel):
@@ -76,6 +80,8 @@ def _row_to_response(row: UploadedTelemetry) -> ImportedTelemetryResponse:
         recorded_at=row.recorded_at,
         sample_count=row.sample_count,
         track_length_m=row.track_length_m,
+        air_temp_c=row.air_temp_c,
+        track_temp_c=row.track_temp_c,
         created_at=row.created_at.isoformat(),
     )
 
@@ -108,6 +114,14 @@ async def import_telemetry_files(
         for item in metadata_items
         if isinstance(item, dict) and item.get("file_name")
     }
+    car_result = await db.execute(
+        select(TelemetryCar.name).where(TelemetryCar.source == "garage61")
+    )
+    track_result = await db.execute(
+        select(TelemetryTrack.display_name).where(TelemetryTrack.source == "garage61")
+    )
+    valid_car_names = {name.strip() for name in car_result.scalars().all() if name}
+    valid_track_names = {name.strip() for name in track_result.scalars().all() if name}
     import_batch_id = uuid.uuid4()
     created: list[UploadedTelemetry] = []
 
@@ -126,6 +140,11 @@ async def import_telemetry_files(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Car and track are required for {file_name}",
+            )
+        if car_name not in valid_car_names or track_name not in valid_track_names:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Car and track for {file_name} must be selected from the Garage61 dictionary",
             )
 
         driver_name = " ".join(str(item.get("driver_name") or current_user.display_name or "").split()).strip()
@@ -149,6 +168,8 @@ async def import_telemetry_files(
             driver_key=str(item.get("driver_key") or driver_key(driver_name) or "") or None,
             lap_time_ms=lap_time,
             recorded_at=str(item.get("recorded_at") or inspection["metadata"].get("recorded_at") or "").strip() or None,
+            air_temp_c=float(item["air_temp_c"]) if item.get("air_temp_c") not in (None, "") else None,
+            track_temp_c=float(item["track_temp_c"]) if item.get("track_temp_c") not in (None, "") else None,
             sample_count=int(item.get("sample_count") or inspection.get("sample_count") or 0),
             track_length_m=inspection.get("track_length_m"),
         )
@@ -215,6 +236,8 @@ async def update_imported_telemetry(
     row.driver_key = driver_key(driver_name)
     row.lap_time_ms = float(payload.lap_time or 0)
     row.recorded_at = payload.recorded_at.strip() if payload.recorded_at else None
+    row.air_temp_c = payload.air_temp_c
+    row.track_temp_c = payload.track_temp_c
 
     await db.flush()
     await db.refresh(row)

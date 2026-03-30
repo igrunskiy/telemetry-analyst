@@ -198,6 +198,8 @@ export interface ImportedTelemetry {
   recorded_at?: string | null
   sample_count: number
   track_length_m?: number | null
+  air_temp_c?: number | null
+  track_temp_c?: number | null
   created_at: string
   source: 'upload'
 }
@@ -208,6 +210,8 @@ export interface ImportedTelemetryUpdateInput {
   driver_name: string
   lap_time: number
   recorded_at?: string | null
+  air_temp_c?: number | null
+  track_temp_c?: number | null
 }
 
 export interface Garage61DictionaryEntry {

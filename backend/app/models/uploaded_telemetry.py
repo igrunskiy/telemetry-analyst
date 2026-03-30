@@ -49,6 +49,8 @@ class UploadedTelemetry(Base):
     driver_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     lap_time_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     recorded_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    air_temp_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    track_temp_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     track_length_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

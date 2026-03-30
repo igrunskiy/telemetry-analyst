@@ -322,7 +322,14 @@ def _normalize_uploaded_lap(item: UploadedTelemetry) -> dict[str, Any]:
         "source": SOURCE_UPLOAD,
         "import_batch_id": str(item.import_batch_id),
         "created_at": item.created_at.isoformat(),
-        "conditions": None,
+        "conditions": {
+            key: value
+            for key, value in {
+                "air_temp_c": item.air_temp_c,
+                "track_temp_c": item.track_temp_c,
+            }.items()
+            if value is not None
+        } or None,
     }
 
 
@@ -699,7 +706,14 @@ async def list_combined_reference_laps(
     return laps[:limit]
 
 
-async def list_combined_recent_laps(user: User, db: AsyncSession, limit: int) -> list[dict[str, Any]]:
+async def list_combined_recent_laps(
+    user: User,
+    db: AsyncSession,
+    limit: int,
+    car_key: str | None = None,
+    track_key: str | None = None,
+    source: str | None = None,
+) -> list[dict[str, Any]]:
     """Return recent activity grouped by car+track with per-date entries."""
     grouped: dict[str, dict[str, Any]] = {}
 
@@ -820,11 +834,30 @@ async def list_combined_recent_laps(user: User, db: AsyncSession, limit: int) ->
             group["recorded_at"] = recorded_at
 
     items = list(grouped.values())
+    filtered_items: list[dict[str, Any]] = []
     for item in items:
         item["entries"].sort(key=lambda entry: str(entry.get("date") or ""), reverse=True)
 
-    items.sort(key=lambda x: str(x.get("recorded_at") or ""), reverse=True)
-    return items[:limit]
+        if car_key and item.get("car_id") != car_key:
+            continue
+        if track_key and item.get("track_id") != track_key:
+            continue
+        if source and source != "all":
+            filtered_entries = [entry for entry in item["entries"] if entry.get("source") == source]
+            if not filtered_entries:
+                continue
+            filtered_item = dict(item)
+            filtered_item["entries"] = filtered_entries
+            filtered_item["lap_count"] = sum(int(entry.get("lap_count") or 0) for entry in filtered_entries)
+            filtered_item["source"] = source
+            filtered_item["recorded_at"] = max((str(entry.get("date") or "") for entry in filtered_entries), default=str(item.get("recorded_at") or ""))
+            filtered_items.append(filtered_item)
+            continue
+
+        filtered_items.append(item)
+
+    filtered_items.sort(key=lambda x: str(x.get("recorded_at") or ""), reverse=True)
+    return filtered_items[:limit]
 
 
 async def load_csv_for_lap_id(

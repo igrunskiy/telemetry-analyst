@@ -57,12 +57,15 @@ async def list_my_laps(
 
 @router.get("/recent")
 async def list_recent_laps(
-    limit: int = Query(default=25, ge=1, le=50),
+    car_id: str | None = Query(default=None, description="Filter by car key"),
+    track_id: str | None = Query(default=None, description="Filter by track key"),
+    source: str | None = Query(default=None, description="Filter by source"),
+    limit: int = Query(default=25, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """Return recent laps for the current user across telemetry sources."""
-    return await list_combined_recent_laps(current_user, db, limit)
+    return await list_combined_recent_laps(current_user, db, limit, car_id, track_id, source)
 
 
 

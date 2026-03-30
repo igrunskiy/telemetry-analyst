@@ -154,6 +154,12 @@ async def lifespan(app: FastAPI):
                 "ALTER TABLE uploaded_telemetry ADD COLUMN IF NOT EXISTS track_id UUID"
             ))
             await conn.execute(text(
+                "ALTER TABLE uploaded_telemetry ADD COLUMN IF NOT EXISTS air_temp_c DOUBLE PRECISION"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE uploaded_telemetry ADD COLUMN IF NOT EXISTS track_temp_c DOUBLE PRECISION"
+            ))
+            await conn.execute(text(
                 "ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS car_id UUID"
             ))
             await conn.execute(text(
