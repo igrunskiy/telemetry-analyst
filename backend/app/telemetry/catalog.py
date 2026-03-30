@@ -867,10 +867,16 @@ async def load_csv_for_lap_id(
     db: AsyncSession,
     uploaded_telemetry: list[dict[str, Any]] | None = None,
 ) -> str:
+    def _require_non_empty_csv(csv_text: Any, *, source_name: str) -> str:
+        text = str(csv_text or "")
+        if not text.lstrip("\ufeff").strip():
+            raise ValueError(f"{source_name} returned an empty CSV body for lap {lap_id}")
+        return text
+
     source, raw_id = parse_lap_id(lap_id)
     upload_map = {item["id"]: item for item in (uploaded_telemetry or [])}
     if lap_id in upload_map:
-        return str(upload_map[lap_id]["csv_data"])
+        return _require_non_empty_csv(upload_map[lap_id]["csv_data"], source_name="Uploaded telemetry")
     if source == SOURCE_UPLOAD:
         try:
             upload_uuid = uuid.UUID(raw_id)
@@ -885,9 +891,15 @@ async def load_csv_for_lap_id(
         item = result.scalar_one_or_none()
         if item is None:
             raise ValueError(f"Uploaded telemetry not found: {lap_id}")
-        return decompress_csv(item.csv_blob, item.compression)
+        return _require_non_empty_csv(
+            decompress_csv(item.csv_blob, item.compression),
+            source_name="Uploaded telemetry",
+        )
 
     garage61 = await get_optional_garage61_client(user, db)
     if not garage61:
         raise ValueError(f"Garage61 not connected — cannot fetch lap {lap_id}. Upload CSV telemetry instead.")
-    return await garage61.get_lap_csv(raw_id)
+    return _require_non_empty_csv(
+        await garage61.get_lap_csv(raw_id),
+        source_name="Garage61",
+    )

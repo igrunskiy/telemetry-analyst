@@ -273,8 +273,25 @@ class Garage61Client:
 
     async def get_lap_csv(self, lap_id: str) -> str:
         """GET /laps/{lap_id}/csv — return raw CSV text."""
-        response = await self._get_raw(f"/laps/{lap_id}/csv")
-        return response.text
+        response = await self._get_raw(
+            f"/laps/{lap_id}/csv",
+            headers={"Accept": "text/csv, text/plain;q=0.9, */*;q=0.8"},
+        )
+        text = response.text or ""
+        stripped = text.lstrip("\ufeff").strip()
+        content_type = response.headers.get("content-type", "")
+
+        if not stripped:
+            raise ValueError(f"Garage61 returned an empty CSV body for lap {lap_id}")
+
+        lower = stripped.lower()
+        if lower.startswith("<!doctype html") or lower.startswith("<html"):
+            raise ValueError(
+                "Garage61 returned HTML instead of CSV "
+                f"for lap {lap_id} (content-type={content_type or 'unknown'})"
+            )
+
+        return text
 
 
 # ---------------------------------------------------------------------------
