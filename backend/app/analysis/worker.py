@@ -38,6 +38,10 @@ def _timeout() -> int:
     return settings.ANALYSIS_WORKER_TIMEOUT
 
 
+def _timeout_reason(timeout_seconds: int) -> str:
+    return f"Job timed out after {timeout_seconds} seconds"
+
+
 # ---------------------------------------------------------------------------
 # Queue helpers
 # ---------------------------------------------------------------------------
@@ -243,7 +247,17 @@ class WorkerPool:
                 )
                 self._active[job_id] = active
                 try:
-                    await job_task
+                    timeout_seconds = _timeout()
+                    await asyncio.wait_for(job_task, timeout=timeout_seconds)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Worker: timing out job %s after %ds",
+                        job_id, timeout_seconds,
+                    )
+                    if not job_task.done():
+                        job_task.cancel()
+                        await asyncio.gather(job_task, return_exceptions=True)
+                    await _mark_job_failed(job_id, _timeout_reason(timeout_seconds))
                 except asyncio.CancelledError:
                     # Two cases:
                     # 1. job_task was cancelled by watchdog (timeout)
@@ -258,7 +272,7 @@ class WorkerPool:
                         await _mark_job_failed(job_id, "Worker shutting down")
                         raise
                     # Case 1: watchdog timeout — mark failed, keep loop alive
-                    await _mark_job_failed(job_id, "Job timed out after 2 minutes")
+                    await _mark_job_failed(job_id, _timeout_reason(_timeout()))
                 finally:
                     self._active.pop(job_id, None)
 

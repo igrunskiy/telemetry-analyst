@@ -8,6 +8,7 @@ import {
   adminSetRole,
   adminCreateUser,
   adminGetConfig,
+  adminGetSharedReportLimit,
   adminSaveConfig,
   adminListPrompts,
   adminGetPrompt,
@@ -18,6 +19,7 @@ import {
   adminDeletePrompt,
   adminGetWorkerStatus,
   adminSetWorkerPoolSize,
+  adminSetSharedReportLimit,
   adminListReports,
   adminFailReport,
   adminGetDbHealth,
@@ -215,6 +217,9 @@ function UserRow({
   if (user.username) authMethods.push('local')
   if (user.garage61_user_id) authMethods.push('garage61')
   if (user.discord_user_id) authMethods.push('discord')
+  const llmProviders: string[] = []
+  if (user.has_custom_claude_key) llmProviders.push('Claude')
+  if (user.has_custom_gemini_key) llmProviders.push('Gemini')
 
   return (
     <div className={`bg-slate-800 border rounded-xl px-4 py-3 flex items-center gap-4 ${
@@ -243,6 +248,21 @@ function UserRow({
           <span className="text-slate-600 text-xs">
             last seen {user.last_login_at ? new Date(user.last_login_at).toLocaleDateString() : 'never'}
           </span>
+        </div>
+        <div className="flex items-center gap-2 mt-2 flex-wrap">
+          <span className="text-[11px] uppercase tracking-wide text-slate-500">LLM Keys</span>
+          {llmProviders.length > 0 ? (
+            llmProviders.map((provider) => (
+              <span
+                key={provider}
+                className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400"
+              >
+                {provider}
+              </span>
+            ))
+          ) : (
+            <span className="text-xs text-slate-500">none connected</span>
+          )}
         </div>
       </div>
 
@@ -598,13 +618,20 @@ function WorkerMonitor() {
 
 
 function ConfigEditor() {
+  const queryClient = useQueryClient()
   const [content, setContent] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [sharedReportsPerDay, setSharedReportsPerDay] = useState(6)
+  const [sharedLimitMessage, setSharedLimitMessage] = useState<string | null>(null)
 
   const { isLoading, data: configData } = useQuery({
     queryKey: ['admin', 'config'],
     queryFn: adminGetConfig,
+  })
+  const { data: sharedLimitData } = useQuery({
+    queryKey: ['admin', 'shared-report-limit'],
+    queryFn: adminGetSharedReportLimit,
   })
 
   useEffect(() => {
@@ -612,6 +639,12 @@ function ConfigEditor() {
       setContent(configData)
     }
   }, [configData])
+
+  useEffect(() => {
+    if (sharedLimitData) {
+      setSharedReportsPerDay(sharedLimitData.reports_per_day)
+    }
+  }, [sharedLimitData])
 
   const saveMutation = useMutation({
     mutationFn: () => adminSaveConfig(content ?? ''),
@@ -623,6 +656,20 @@ function ConfigEditor() {
     onError: (err: any) => {
       const detail = err?.response?.data?.detail
       setSaveError(typeof detail === 'string' ? detail : 'Save failed')
+    },
+  })
+
+  const sharedLimitMutation = useMutation({
+    mutationFn: () => adminSetSharedReportLimit(sharedReportsPerDay),
+    onSuccess: (data) => {
+      setSharedReportsPerDay(data.reports_per_day)
+      setSharedLimitMessage('Shared daily report limit saved.')
+      queryClient.invalidateQueries({ queryKey: ['admin', 'config'] })
+      queryClient.invalidateQueries({ queryKey: ['admin', 'shared-report-limit'] })
+      setTimeout(() => setSharedLimitMessage(null), 3000)
+    },
+    onError: () => {
+      setSharedLimitMessage('Failed to save shared report limit.')
     },
   })
 
@@ -664,6 +711,39 @@ function ConfigEditor() {
           Changes are written directly to disk. The backend must be restarted to pick up changes.
           To update a sensitive value, replace <code className="text-slate-400">***</code> with the new value before saving.
         </p>
+      </div>
+
+      <div className="bg-slate-900/70 border border-slate-700 rounded-xl px-4 py-4 mb-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h3 className="text-sm font-semibold text-white">Shared LLM Daily Limit</h3>
+            <p className="text-slate-400 text-sm mt-1">
+              Legacy setting retained in the config UI. Report generation now requires each user to add a personal Claude or Gemini API key.
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min={0}
+              value={sharedReportsPerDay}
+              onChange={(e) => setSharedReportsPerDay(Math.max(0, Number(e.target.value) || 0))}
+              className="w-24 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-amber-500"
+            />
+            <button
+              onClick={() => sharedLimitMutation.mutate()}
+              disabled={sharedLimitMutation.isPending}
+              className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-900 font-medium rounded-xl text-sm transition-colors"
+            >
+              <Save className="w-4 h-4" />
+              {sharedLimitMutation.isPending ? 'Saving...' : 'Save limit'}
+            </button>
+          </div>
+        </div>
+        {sharedLimitMessage && (
+          <p className={`mt-3 text-sm ${sharedLimitMessage.includes('Failed') ? 'text-red-400' : 'text-emerald-400'}`}>
+            {sharedLimitMessage}
+          </p>
+        )}
       </div>
 
       {saveError && (

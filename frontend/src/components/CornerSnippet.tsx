@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useRef } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../lib/plotly'
 import type * as Plotly from 'plotly.js'
 import { MapContainer, TileLayer, Polyline, CircleMarker, Tooltip, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -33,7 +33,8 @@ function TileFader() {
   const map = useMap()
   useEffect(() => {
     const pane = map.getPane('tilePane')
-    if (pane) pane.style.filter = 'brightness(0.38) saturate(0.45)'
+    const isDarkMode = document.documentElement.classList.contains('dark')
+    if (pane) pane.style.filter = isDarkMode ? 'brightness(0.38) saturate(0.45)' : ''
   }, [map])
   return null
 }

@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 import logging
+import time
 
 import httpx
 from fastapi import Depends, HTTPException, status
@@ -98,20 +99,37 @@ class Garage61Client:
             user.refresh_token_enc = encrypt(new_refresh) if new_refresh else None
             await self._db.flush()
 
+    def _log_response(self, method: str, path: str, response: httpx.Response, started_at: float, attempt: int = 1) -> None:
+        latency_ms = round((time.perf_counter() - started_at) * 1000, 1)
+        response_bytes = len(response.content or b"")
+        logger.info(
+            "Garage61 %s %s status=%s latency_ms=%.1f response_bytes=%d attempt=%d",
+            method,
+            path,
+            response.status_code,
+            latency_ms,
+            response_bytes,
+            attempt,
+        )
+
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         """
         Make an authenticated API request with automatic token refresh on 401.
         Returns parsed JSON.
         """
         async with self._make_client() as client:
+            started_at = time.perf_counter()
             response = await client.request(method, path, **kwargs)
+            self._log_response(method, path, response, started_at, attempt=1)
 
             if response.status_code == 401 and self._refresh_token:
                 # Refresh and retry once
                 await self._refresh_and_update()
                 # Update the Authorization header for the retry
                 async with self._make_client() as retry_client:
+                    started_at = time.perf_counter()
                     response = await retry_client.request(method, path, **kwargs)
+                    self._log_response(method, path, response, started_at, attempt=2)
 
             if response.status_code == 401:
                 raise HTTPException(
@@ -128,12 +146,16 @@ class Garage61Client:
         Handles token refresh on 401.
         """
         async with self._make_client() as client:
+            started_at = time.perf_counter()
             response = await client.get(path, **kwargs)
+            self._log_response("GET", path, response, started_at, attempt=1)
 
             if response.status_code == 401 and self._refresh_token:
                 await self._refresh_and_update()
                 async with self._make_client() as retry_client:
+                    started_at = time.perf_counter()
                     response = await retry_client.get(path, **kwargs)
+                    self._log_response("GET", path, response, started_at, attempt=2)
 
             if response.status_code == 401:
                 raise HTTPException(

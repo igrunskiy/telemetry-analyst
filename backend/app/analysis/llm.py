@@ -8,7 +8,9 @@ then returns a parsed JSON analysis result.
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,7 @@ from app.analysis.prompts_manager import resolve_prompt
 
 # Model to use for analysis
 CLAUDE_MODEL = "claude-sonnet-4-6"
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Prompts — loaded from external files at import time
@@ -91,8 +94,8 @@ def _build_corner_table(processed: dict, weak_zones: list[dict]) -> str:
         zones = zone_by_corner.get(c_num, [])
         brake_z = next((z for z in zones if z["zone_type"] == "braking_point"), None)
         throttle_z = next((z for z in zones if z["zone_type"] == "throttle_pickup"), None)
-        brake_str = f"{abs(brake_z['delta']):.0f}m early" if brake_z else "ok"
-        throttle_str = f"{abs(throttle_z['delta']):.0f}m late" if throttle_z else "ok"
+        brake_str = f"{abs(brake_z['delta']):.0f}m early" if brake_z else "solid"
+        throttle_str = f"{abs(throttle_z['delta']):.0f}m late" if throttle_z else "solid"
 
         rows.append(f"| {corner_ref} | {d_apex:.0f}m | {u_min} | {r_min} | {spd_delta} | {brake_str} | {throttle_str} |")
 
@@ -486,20 +489,18 @@ async def analyze_with_claude(
     car_name : str
     track_name : str
     claude_api_key : str
-        User-supplied key; falls back to settings.CLAUDE_API_KEY if empty.
+        User-supplied key. Required.
 
     Returns
     -------
     dict
         Parsed JSON analysis result matching the schema above.
     """
-    effective_key = claude_api_key.strip() if claude_api_key else ""
-    if not effective_key:
-        effective_key = settings.CLAUDE_API_KEY
+    effective_key = claude_api_key.strip() if claude_api_key else settings.CLAUDE_API_KEY.strip()
 
     if not effective_key:
         raise ValueError(
-            "No Claude API key available. Please add your Anthropic API key in profile settings."
+            "No Claude API key available. Add a personal Anthropic API key in Profile or configure a shared CLAUDE_API_KEY."
         )
 
     client = anthropic.AsyncAnthropic(api_key=effective_key)
@@ -508,15 +509,28 @@ async def analyze_with_claude(
         user_prompt = _build_solo_prompt(processed, weak_zones, car_name, track_name, laps_metadata)
     else:
         user_prompt = _build_user_prompt(processed, weak_zones, car_name, track_name, laps_metadata)
+    system_prompt = get_system_prompt(prompt_version)
+    request_payload_bytes = len(system_prompt.encode("utf-8")) + len(user_prompt.encode("utf-8"))
 
+    started_at = time.perf_counter()
     message = await client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=settings.CLAUDE_MAX_TOKENS,
-        system=get_system_prompt(prompt_version),
+        system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}],
     )
+    latency_ms = round((time.perf_counter() - started_at) * 1000, 1)
 
     raw_text = message.content[0].text.strip()
+    response_bytes = len(raw_text.encode("utf-8"))
+    logger.info(
+        "LLM claude model=%s latency_ms=%.1f request_bytes=%d response_bytes=%d prompt_version=%s",
+        CLAUDE_MODEL,
+        latency_ms,
+        request_payload_bytes,
+        response_bytes,
+        prompt_version or "default",
+    )
 
     # Strip markdown fences if Claude added them despite instructions
     raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
@@ -539,4 +553,5 @@ async def analyze_with_claude(
                 f"Claude returned invalid JSON. Raw response: {raw_text[:500]}"
             ) from exc
 
+    result["_request_payload_bytes"] = request_payload_bytes
     return result

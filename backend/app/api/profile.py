@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.crypto import encrypt
 from app.auth.jwt import get_current_user
 from app.database import get_db
+from app.llm_access import build_llm_access_state
 from app.models.user import User
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
@@ -37,6 +38,7 @@ class UserProfileResponse(BaseModel):
     has_custom_gemini_key: bool
     created_at: datetime
     last_login_at: datetime
+    llm_access: dict
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +53,7 @@ async def update_claude_key(
 ) -> None:
     """
     Store (or remove) the user's personal Anthropic API key.
-    Send an empty string to remove the override and fall back to the operator key.
+    Send an empty string to remove the saved key.
     Returns 204 No Content on success.
     """
     if body.api_key.strip():
@@ -70,7 +72,7 @@ async def update_gemini_key(
 ) -> None:
     """
     Store (or remove) the user's personal Google AI (Gemini) API key.
-    Send an empty string to remove the override and fall back to the operator key.
+    Send an empty string to remove the saved key.
     Returns 204 No Content on success.
     """
     if body.api_key.strip():
@@ -84,6 +86,7 @@ async def update_gemini_key(
 @router.get("/", response_model=UserProfileResponse)
 async def get_profile(
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> UserProfileResponse:
     """Return the current user's profile information."""
     return UserProfileResponse(
@@ -95,4 +98,5 @@ async def get_profile(
         has_custom_gemini_key=bool(current_user.gemini_api_key_enc),
         created_at=current_user.created_at,
         last_login_at=current_user.last_login_at,
+        llm_access=await build_llm_access_state(current_user, db),
     )

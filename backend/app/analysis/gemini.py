@@ -8,7 +8,9 @@ an identical result dict.
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 
 from google import genai
 from google.genai import types
@@ -18,6 +20,7 @@ from app.analysis.llm import _build_user_prompt, _build_solo_prompt
 from app.analysis.prompts_manager import resolve_prompt
 
 GEMINI_MODEL = "gemini-2.5-pro"
+logger = logging.getLogger(__name__)
 
 
 async def analyze_with_gemini(
@@ -34,13 +37,11 @@ async def analyze_with_gemini(
     Call Gemini to produce a structured coaching analysis.
     Returns the same dict shape as analyze_with_claude().
     """
-    effective_key = gemini_api_key.strip() if gemini_api_key else ""
-    if not effective_key:
-        effective_key = settings.GEMINI_API_KEY
+    effective_key = gemini_api_key.strip() if gemini_api_key else settings.GEMINI_API_KEY.strip()
 
     if not effective_key:
         raise ValueError(
-            "No Gemini API key available. Please add your Google AI API key in profile settings."
+            "No Gemini API key available. Add a personal Google AI API key in Profile or configure a shared GEMINI_API_KEY."
         )
 
     client = genai.Client(api_key=effective_key)
@@ -49,17 +50,30 @@ async def analyze_with_gemini(
         user_prompt = _build_solo_prompt(processed, weak_zones, car_name, track_name, laps_metadata)
     else:
         user_prompt = _build_user_prompt(processed, weak_zones, car_name, track_name, laps_metadata)
+    system_prompt = resolve_prompt(prompt_version, "gemini")
+    request_payload_bytes = len(system_prompt.encode("utf-8")) + len(user_prompt.encode("utf-8"))
 
+    started_at = time.perf_counter()
     response = await client.aio.models.generate_content(
         model=GEMINI_MODEL,
         contents=user_prompt,
         config=types.GenerateContentConfig(
-            system_instruction=resolve_prompt(prompt_version, "gemini"),
+            system_instruction=system_prompt,
             max_output_tokens=settings.GEMINI_MAX_TOKENS,
         ),
     )
+    latency_ms = round((time.perf_counter() - started_at) * 1000, 1)
 
     raw_text = response.text.strip()
+    response_bytes = len(raw_text.encode("utf-8"))
+    logger.info(
+        "LLM gemini model=%s latency_ms=%.1f request_bytes=%d response_bytes=%d prompt_version=%s",
+        GEMINI_MODEL,
+        latency_ms,
+        request_payload_bytes,
+        response_bytes,
+        prompt_version or "default",
+    )
 
     # Strip markdown fences if present
     raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
@@ -81,4 +95,5 @@ async def analyze_with_gemini(
                 f"Gemini returned invalid JSON. Raw response: {raw_text[:500]}"
             ) from exc
 
+    result["_request_payload_bytes"] = request_payload_bytes
     return result

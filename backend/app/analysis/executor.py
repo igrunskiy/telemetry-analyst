@@ -151,6 +151,7 @@ async def execute_analysis(
             laps_metadata=laps_metadata,
         )
     t_llm = time.monotonic() - t0
+    llm_payload_bytes = llm_result.pop("_request_payload_bytes", None)
     logger.info(
         "LLM analysis complete in %.2fs: %d improvement areas, est. gain=%.2fs",
         t_llm,
@@ -197,6 +198,7 @@ async def execute_analysis(
         "llm_provider": llm_provider,
         "model_name": model_name,
         "prompt_version": effective_prompt_version,
+        "llm_payload_bytes": llm_payload_bytes,
         "summary": llm_result.get("summary", ""),
         "estimated_time_gain_seconds": llm_result.get("estimated_time_gain_seconds"),
         "improvement_areas": llm_result.get("improvement_areas", []),

@@ -225,7 +225,7 @@ async def _extract_filename_metadata_with_llm(
             f"Track candidates: {json.dumps(candidate_tracks)}"
         )
 
-        effective_claude_key = claude_api_key.strip() if claude_api_key else settings.CLAUDE_API_KEY
+        effective_claude_key = claude_api_key.strip() if claude_api_key else ""
         if effective_claude_key:
             import anthropic
 
@@ -243,7 +243,7 @@ async def _extract_filename_metadata_with_llm(
             text = re.sub(r"\s*```$", "", text)
             return _coerce_llm_metadata(json.loads(text), candidate_cars, candidate_tracks)
 
-        effective_gemini_key = gemini_api_key.strip() if gemini_api_key else settings.GEMINI_API_KEY
+        effective_gemini_key = gemini_api_key.strip() if gemini_api_key else ""
         if effective_gemini_key:
             from google import genai
 

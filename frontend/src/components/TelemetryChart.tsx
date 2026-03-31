@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../lib/plotly'
 import type * as Plotly from 'plotly.js'
 import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import type { Corner } from '../types'
@@ -453,7 +453,7 @@ export default function TelemetryChart({
         yLabel="km/h"
         userValues={userSpeed}
         refValues={refSpeed}
-        height={180}
+        height={198}
         {...sharedProps}
       />
 
@@ -462,7 +462,7 @@ export default function TelemetryChart({
         yLabel="%"
         userValues={userThrottle}
         refValues={refThrottle}
-        height={150}
+        height={165}
         {...sharedProps}
       />
 
@@ -471,7 +471,7 @@ export default function TelemetryChart({
         yLabel="%"
         userValues={userBrake}
         refValues={refBrake}
-        height={150}
+        height={165}
         {...sharedProps}
       />
 
@@ -482,7 +482,7 @@ export default function TelemetryChart({
           userValues={userGear}
           refValues={refGear && refGear.length > 0 ? refGear : undefined}
           isStep
-          height={120}
+          height={132}
           {...sharedProps}
         />
       )}
@@ -492,7 +492,7 @@ export default function TelemetryChart({
         yLabel="s"
         userValues={deltaMs}
         isDelta
-        height={150}
+        height={165}
         {...sharedProps}
       />
     </div>

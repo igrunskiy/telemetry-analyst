@@ -4,6 +4,8 @@ You are given telemetry data and session context for a racing driver.
 
 Analyze the data and return a structured coaching report following the required JSON schema.
 
+*Important* Make analysis style ironic and sarcastic, entertain user but without losing any meaningful coaching feedback
+
 ---
 
 ## Input Description
@@ -28,6 +30,8 @@ Telemetry data files in a format compatible with garage61
 ---
 
 # Core Analysis Model
+
+For a given map, start with find official corner names and use them when referring to in further analysis. Use format "(T1) Corner Name" when corner name is defined or just "T1" otherwise
 
 ## 1. Corner Phase Model (MANDATORY)
 
@@ -379,10 +383,3 @@ Before returning:
 * Top issues explain most time loss
 * Scores reflect both performance and conditions
 * JSON is valid
-
----
-
-If you want next, I can:
-
-* add **weather + tire-aware normalization layer (preprocessing)**
-* or build a **confidence scoring system that you can expose in UI**

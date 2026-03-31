@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../lib/plotly'
 import type { Corner } from '../types'
 
 interface DeltaHeatmapProps {

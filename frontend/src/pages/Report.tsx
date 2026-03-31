@@ -1,26 +1,26 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User, RefreshCw, Share2, Check } from 'lucide-react'
+import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User, RefreshCw, Share2, Check, Zap, FileText } from 'lucide-react'
 import { getAnalysis, deleteAnalysis, regenerateAnalysis, shareAnalysis, getSharedAnalysis } from '../api/client'
 import TrackMap from '../components/TrackMap'
-import TelemetryChart, { SingleChart } from '../components/TelemetryChart'
+import TelemetryChart from '../components/TelemetryChart'
 import HeatMap from '../components/HeatMap'
 import DeltaHeatmap from '../components/DeltaHeatmap'
-import SectorDelta from '../components/SectorDelta'
 import AnalysisCards from '../components/AnalysisCards'
 import { ThemeToggle } from '../components/ThemeToggle'
 import TelemetryInsights from '../components/TelemetryInsights'
+import { useAuth } from '../hooks/useAuth'
 import type { AnalysisReport, ImprovementArea, LapConditions, LapMeta, SectorData } from '../types'
 
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 }
 
-function TabInsights({ report, tab, isSolo }: { report: AnalysisReport; tab: Tab; isSolo: boolean }) {
+function TabInsights({ report, tab }: { report: AnalysisReport; tab: Tab }) {
   const areas = report.improvement_areas ?? []
   const sectors: SectorData[] = report.telemetry?.sectors ?? []
 
   const content = useMemo(() => {
-    if (tab === 'summary') {
+    if (tab === 'focus') {
       const top = [...areas].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]).slice(0, 3)
       if (!top.length) return null
       return {
@@ -31,25 +31,6 @@ function TabInsights({ report, tab, isSolo }: { report: AnalysisReport; tab: Tab
           severity: a.severity,
         })),
         hint: areas.length > 3 ? `+${areas.length - 3} more areas in the full list below.` : null,
-      }
-    }
-
-    if (tab === 'lines') {
-      const relevant = areas.filter((a: ImprovementArea) =>
-        ['racing_line', 'corner_speed'].includes(a.issue_type) || a.corner_refs.length > 0
-      )
-      if (!relevant.length) return null
-      const corners = [...new Set(relevant.flatMap((a: ImprovementArea) => a.corner_refs))].sort((a, b) => a - b)
-      return {
-        heading: 'Racing Line Findings',
-        items: relevant.map((a: ImprovementArea) => ({
-          label: a.title,
-          detail: a.technique || a.description,
-          severity: a.severity,
-        })),
-        hint: corners.length > 0
-          ? `Focus corners: ${corners.map((c) => `T${c}`).join(', ')}`
-          : null,
       }
     }
 
@@ -83,39 +64,6 @@ function TabInsights({ report, tab, isSolo }: { report: AnalysisReport; tab: Tab
           severity: a.severity,
         })),
         hint: 'Red/orange zones on the heatmap mark low-speed areas. Cross-reference with the corners above.',
-      }
-    }
-
-    if (tab === 'sectors') {
-      const baseline = isSolo ? 'best lap' : 'reference'
-      const deltas = sectors.map((s) => s.ref_time_ms - s.user_time_ms)
-      const slowest = sectors
-        .map((s, i) => ({ sector: s.sector, delta: deltas[i] }))
-        .filter((s) => s.delta < 0)
-        .sort((a, b) => a.delta - b.delta)
-        .slice(0, 3)
-      const fastest = sectors
-        .map((s, i) => ({ sector: s.sector, delta: deltas[i] }))
-        .filter((s) => s.delta > 0)
-        .sort((a, b) => b.delta - a.delta)
-        .slice(0, 2)
-      const notes = report.sector_notes ?? []
-      if (!slowest.length && !notes.length) return null
-      return {
-        heading: 'Sector Analysis',
-        items: [
-          ...slowest.map((s) => ({
-            label: `Sector ${s.sector} — needs work`,
-            detail: `${Math.abs(s.delta).toFixed(0)}ms behind ${baseline}`,
-            severity: 'high' as const,
-          })),
-          ...fastest.map((s) => ({
-            label: `Sector ${s.sector} — strength`,
-            detail: `${s.delta.toFixed(0)}ms ahead of ${baseline}`,
-            severity: 'low' as const,
-          })),
-        ],
-        hint: notes.length > 0 ? notes[0] : null,
       }
     }
 
@@ -178,6 +126,43 @@ function formatLapTime(raw: number): string {
   return `${mins}:${secs}`
 }
 
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return '0 B'
+  if (value < 1024) return `${Math.round(value)} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`
+  return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`
+}
+
+function getReportPhase(status?: string | null): { state: string; phase: string; detail: string } {
+  switch (status) {
+    case 'enqueued':
+      return {
+        state: 'Queued',
+        phase: 'Waiting for worker',
+        detail: 'Your analysis is in the queue and will start as soon as a worker is free.',
+      }
+    case 'processing':
+      return {
+        state: 'Running',
+        phase: 'Telemetry + AI analysis',
+        detail: 'Fetching data, processing laps, and generating the coaching report.',
+      }
+    case 'failed':
+      return {
+        state: 'Failed',
+        phase: 'Stopped',
+        detail: 'The report did not complete successfully.',
+      }
+    case 'completed':
+    default:
+      return {
+        state: 'Complete',
+        phase: 'Ready',
+        detail: 'The report is ready to review.',
+      }
+  }
+}
+
 async function copyText(text: string): Promise<void> {
   if (window.isSecureContext && navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text)
@@ -237,6 +222,7 @@ function formatLapConditions(conditions?: LapConditions | null): string {
 
   const parts: string[] = []
   if (conditions.summary) parts.push(conditions.summary)
+  if (conditions.setup_type) parts.push(`Setup ${conditions.setup_type}`)
   if (conditions.weather) parts.push(conditions.weather)
   if (conditions.track_state) parts.push(`Track ${conditions.track_state}`)
   if (conditions.air_temp_c != null) parts.push(`Air ${conditions.air_temp_c.toFixed(1)}C`)
@@ -367,21 +353,27 @@ function LapMetaTable({ laps, userLapId, isSolo }: { laps: LapMeta[]; userLapId:
   )
 }
 
-type Tab = 'summary' | 'lines' | 'telemetry' | 'heatmap' | 'sectors'
+type Tab = 'summary' | 'focus' | 'telemetry' | 'heatmap'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'summary', label: 'Summary' },
-  { id: 'lines', label: 'Slow Sectors' },
+  { id: 'focus', label: 'Focus Areas' },
   { id: 'telemetry', label: 'Telemetry' },
   { id: 'heatmap', label: 'Heatmap' },
-  { id: 'sectors', label: 'Sectors' },
 ]
+
+function formatSectorDelta(deltaMs: number): string {
+  if (!Number.isFinite(deltaMs) || deltaMs === 0) return '0.00s'
+  const seconds = Math.abs(deltaMs) / 1000
+  return deltaMs > 0 ? `+${seconds.toFixed(2)}s` : `-${seconds.toFixed(2)}s`
+}
 
 export default function ReportPage({ readOnly = false }: { readOnly?: boolean }) {
   const { analysisId, shareToken } = useParams<{ analysisId?: string; shareToken?: string }>()
   const navigate = useNavigate()
   const location = useLocation()
   const queryClient = useQueryClient()
+  const { user } = useAuth()
   const [activeTab, setActiveTab] = useState<Tab>('summary')
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -404,7 +396,11 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteAnalysis(analysisId!),
-    onSuccess: () => goBack(),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['analysisHistory'] })
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'reports'] })
+      goBack()
+    },
   })
 
   const regenerateMutation = useMutation({
@@ -494,6 +490,17 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
     selectedSector != null && sectorDistRanges[selectedSector - 1]
       ? sectorDistRanges[selectedSector - 1]
       : null
+  const sectorDeltas = useMemo(
+    () => (displayReport?.telemetry?.sectors ?? []).map((s) => ({
+      sector: Number(s.sector),
+      deltaMs: s.ref_time_ms - s.user_time_ms,
+    })),
+    [displayReport],
+  )
+  const totalSectorDelta = useMemo(
+    () => sectorDeltas.reduce((sum, item) => sum + item.deltaMs, 0),
+    [sectorDeltas],
+  )
 
   const handleSectorClick = (sector: number | null) => {
     setSelectedSector(sector)
@@ -512,6 +519,8 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
   }
 
   const isSolo = displayReport?.analysis_mode === 'solo'
+  const isAdmin = user?.role === 'admin'
+  const reportPhase = getReportPhase(report?.status)
   const soloUserLap = isSolo ? displayReport?.laps_metadata?.find((l) => l.role === 'user') : undefined
   const soloTotalLaps = displayReport ? displayReport.reference_lap_ids.length + 1 : 0
   const hasGps = (displayReport?.telemetry?.user_lat?.length ?? 0) > 0
@@ -524,7 +533,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
     <div className="min-h-screen bg-slate-900 flex flex-col">
       {/* Header */}
       <header className="bg-slate-800 border-b border-slate-700 sticky top-0 z-10">
-        <div className="max-w-[80%] mx-auto px-4">
+        <div className="max-w-[90%] mx-auto px-4">
           <div className="h-14 flex items-center gap-3">
             {!readOnly && (
               <Link
@@ -566,7 +575,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
       </header>
 
       {/* Content */}
-      <main className="flex-1 max-w-[80%] w-full mx-auto px-4 py-6">
+      <main className="flex-1 max-w-[90%] w-full mx-auto px-4 py-6">
         {isLoading && (
           <div className="flex flex-col items-center justify-center py-24 gap-4">
             <div className="w-10 h-10 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
@@ -581,10 +590,15 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
               <p className="text-white font-medium mb-1">
                 {report.status === 'enqueued' ? 'Waiting in queue…' : 'Analysing telemetry…'}
               </p>
-              <p className="text-slate-500 text-sm">
-                {report.status === 'enqueued'
-                  ? 'Your analysis is queued and will start shortly.'
-                  : 'Fetching data, processing laps, and generating AI coaching report.'}
+              <div className="mt-3 inline-flex flex-wrap items-center justify-center gap-2 rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1.5 text-xs">
+                <span className="text-slate-400">State</span>
+                <span className="font-semibold text-amber-300">{reportPhase.state}</span>
+                <span className="text-slate-600">/</span>
+                <span className="text-slate-400">Phase</span>
+                <span className="font-semibold text-white">{reportPhase.phase}</span>
+              </div>
+              <p className="text-slate-500 text-sm mt-3">
+                {reportPhase.detail}
               </p>
               {elapsedLabel && (
                 <p className="text-amber-400 text-sm font-medium mt-3">
@@ -677,7 +691,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                     <span className="text-slate-500">{soloTotalLaps} {soloTotalLaps === 1 ? 'lap' : 'laps'} analyzed</span>
                   </span>
                   {/* Generation time + model */}
-                  {(displayReport.generation_time_s != null || displayReport.model_name || displayReport.llm_provider || displayReport.prompt_version) && (
+                  {(displayReport.generation_time_s != null || displayReport.model_name || displayReport.llm_provider || (isAdmin && displayReport.prompt_version) || (isAdmin && displayReport.llm_payload_bytes != null)) && (
                     <span className="flex items-center gap-1.5">
                       <RefreshCw className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                       <span className="text-slate-500">Generated{displayReport.generation_time_s != null ? ` in ${displayReport.generation_time_s}s` : ''}</span>
@@ -687,10 +701,16 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                           <span className="font-mono text-xs text-amber-400/80 bg-amber-400/10 px-1.5 py-0.5 rounded">{displayReport.model_name ?? displayReport.llm_provider}</span>
                         </>
                       )}
-                      {displayReport.prompt_version && (
+                      {isAdmin && displayReport.prompt_version && (
                         <>
                           <span className="text-slate-600">with</span>
                           <span className="font-mono text-xs text-sky-300/90 bg-sky-400/10 px-1.5 py-0.5 rounded">{displayReport.prompt_version}</span>
+                        </>
+                      )}
+                      {isAdmin && displayReport.llm_payload_bytes != null && (
+                        <>
+                          <span className="text-slate-600">payload</span>
+                          <span className="font-mono text-xs text-fuchsia-300/90 bg-fuchsia-400/10 px-1.5 py-0.5 rounded">{formatBytes(displayReport.llm_payload_bytes)}</span>
                         </>
                       )}
                     </span>
@@ -792,7 +812,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       </span>
                     </span>
                   )}
-                  {(displayReport.generation_time_s != null || displayReport.model_name || displayReport.llm_provider || displayReport.prompt_version) && (
+                  {(displayReport.generation_time_s != null || displayReport.model_name || displayReport.llm_provider || (isAdmin && displayReport.prompt_version) || (isAdmin && displayReport.llm_payload_bytes != null)) && (
                     <span className="flex items-center gap-1.5">
                       <RefreshCw className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                       <span className="text-slate-500">Generated{displayReport.generation_time_s != null ? ` in ${displayReport.generation_time_s}s` : ''}</span>
@@ -802,10 +822,16 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                           <span className="font-mono text-xs text-amber-400/80 bg-amber-400/10 px-1.5 py-0.5 rounded">{displayReport.model_name ?? displayReport.llm_provider}</span>
                         </>
                       )}
-                      {displayReport.prompt_version && (
+                      {isAdmin && displayReport.prompt_version && (
                         <>
                           <span className="text-slate-600">with</span>
                           <span className="font-mono text-xs text-sky-300/90 bg-sky-400/10 px-1.5 py-0.5 rounded">{displayReport.prompt_version}</span>
+                        </>
+                      )}
+                      {isAdmin && displayReport.llm_payload_bytes != null && (
+                        <>
+                          <span className="text-slate-600">payload</span>
+                          <span className="font-mono text-xs text-fuchsia-300/90 bg-fuchsia-400/10 px-1.5 py-0.5 rounded">{formatBytes(displayReport.llm_payload_bytes)}</span>
                         </>
                       )}
                     </span>
@@ -968,9 +994,20 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                         : 'bg-slate-700 text-slate-400 hover:text-white'
                     }`}
                   >
-                    All
+                    <span className="inline-flex items-center gap-1.5">
+                      <span>All</span>
+                      <span className="font-mono opacity-80">{formatSectorDelta(totalSectorDelta)}</span>
+                    </span>
                   </button>
-                  {displayReport.telemetry.sectors.map((s) => (
+                  {displayReport.telemetry.sectors.map((s, index) => {
+                    const deltaMs = sectorDeltas[index]?.deltaMs ?? 0
+                    const deltaTone =
+                      deltaMs > 0
+                        ? (selectedSector === Number(s.sector) ? 'text-slate-900/80' : 'text-emerald-400')
+                        : deltaMs < 0
+                          ? (selectedSector === Number(s.sector) ? 'text-slate-900/80' : 'text-red-400')
+                          : (selectedSector === Number(s.sector) ? 'text-slate-900/70' : 'text-slate-500')
+                    return (
                     <button
                       key={s.sector}
                       onClick={() => handleSectorClick(selectedSector === Number(s.sector) ? null : Number(s.sector))}
@@ -980,9 +1017,12 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                           : 'bg-slate-700 text-slate-400 hover:text-white'
                       }`}
                     >
-                      S{s.sector}
+                      <span className="inline-flex items-center gap-1.5">
+                        <span>S{s.sector}</span>
+                        <span className={`font-mono ${deltaTone}`}>{formatSectorDelta(deltaMs)}</span>
+                      </span>
                     </button>
-                  ))}
+                  )})}
                   <span className="w-px h-4 bg-slate-700 mx-1 flex-shrink-0" />
                 </div>
               )}
@@ -1028,15 +1068,63 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
 
               {/* Tab content */}
               <div>
-                <TabInsights report={displayReport} tab={activeTab} isSolo={isSolo} />
+                <TabInsights report={displayReport} tab={activeTab} />
 
                 {activeTab === 'summary' && (
+                  <div className="space-y-4">
+                    <div className="card">
+                      <div className="flex items-start justify-between gap-4 mb-3">
+                        <h2 className="text-white font-semibold">Overall Assessment</h2>
+                        {displayReport.estimated_time_gain_seconds > 0 && (
+                          <div className="flex-shrink-0 bg-amber-500/20 border border-amber-500/30 text-amber-400 font-semibold text-sm px-3 py-1.5 rounded-full flex items-center gap-1.5">
+                            <Zap className="w-3.5 h-3.5" />
+                            +{displayReport.estimated_time_gain_seconds.toFixed(1)}s available
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-slate-300 text-sm leading-relaxed">{displayReport.summary}</p>
+                    </div>
+
+                    {displayReport.strengths.length > 0 && (
+                      <div>
+                        <h2 className="text-white font-semibold mb-3">Strengths</h2>
+                        <div className="space-y-2">
+                          {displayReport.strengths.map((strength, index) => (
+                            <div
+                              key={index}
+                              className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-3 text-sm text-slate-300"
+                            >
+                              {strength}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {displayReport.sector_notes.length > 0 && (
+                      <div>
+                        <h2 className="text-white font-semibold mb-3 flex items-center gap-2">
+                          <FileText className="w-4 h-4 text-slate-400" />
+                          Sector Notes
+                        </h2>
+                        <div className="card space-y-2.5">
+                          {displayReport.sector_notes.map((note, index) => (
+                            <div key={index} className="flex items-start gap-2">
+                              <span className="flex-shrink-0 text-xs text-slate-500 font-mono mt-0.5">
+                                {String(index + 1).padStart(2, '0')}
+                              </span>
+                              <p className="text-sm text-slate-300 leading-relaxed">{note}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {activeTab === 'focus' && (
                   <AnalysisCards
                     improvement_areas={displayReport.improvement_areas}
-                    strengths={displayReport.strengths}
-                    summary={displayReport.summary}
-                    estimated_time_gain={displayReport.estimated_time_gain_seconds}
-                    sector_notes={displayReport.sector_notes}
                     telemetry={{
                       distances: displayReport.telemetry.distances,
                       userLat: displayReport.telemetry.user_lat,
@@ -1054,46 +1142,6 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                     onActiveCorners={setActiveCornerNums}
                     onHoverIndex={setHoverIdx}
                   />
-                )}
-
-                {activeTab === 'lines' && (
-                  <div className="w-full space-y-3">
-                    {hasGps && (
-                      <TrackMap
-                        userLat={displayReport.telemetry.user_lat ?? []}
-                        userLon={displayReport.telemetry.user_lon ?? []}
-                        refLat={displayReport.telemetry.ref_lat ?? []}
-                        refLon={displayReport.telemetry.ref_lon ?? []}
-                        userSpeed={displayReport.telemetry.user_speed}
-                        refSpeed={displayReport.telemetry.ref_speed}
-                        corners={displayReport.telemetry.corners}
-                        hoverIndex={hoverIdx}
-                        height={400}
-                        trackLength={trackLength}
-                        highlightRange={activeSectorRange}
-                        highlightCornerNums={activeCornerNums}
-                      />
-                    )}
-                    <div className="card p-0 overflow-hidden">
-                      <div className="px-4 py-3 border-b border-slate-700/50">
-                        <h3 className="text-white font-medium text-sm">Time Delta</h3>
-                        <p className="text-slate-500 text-xs mt-0.5">
-                          Green = you ahead · Red = you behind · Left-drag to zoom · scroll to zoom
-                        </p>
-                      </div>
-                      <SingleChart
-                        title=""
-                        yLabel="s"
-                        distances={displayReport.telemetry.distances}
-                        userValues={displayReport.telemetry.delta_ms}
-                        corners={displayReport.telemetry.corners}
-                        isDelta
-                        height={200}
-                        xRange={activeSectorRange}
-                        onHoverIndex={setHoverIdx}
-                      />
-                    </div>
-                  </div>
                 )}
 
                 {activeTab === 'telemetry' && (
@@ -1164,14 +1212,6 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       isSolo={isSolo}
                     />
                   </div>
-                )}
-
-                {activeTab === 'sectors' && (
-                  <SectorDelta
-                    sectors={displayReport.telemetry.sectors}
-                    selectedSector={selectedSector}
-                    onSectorClick={handleSectorClick}
-                  />
                 )}
               </div>
             </div>
