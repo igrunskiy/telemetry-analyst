@@ -74,6 +74,7 @@ interface SingleChartProps {
   onHoverIndex?: (idx: number | null) => void
   xRange?: [number, number] | null
   onRangeChange?: (range: [number, number] | null) => void
+  deltaMode?: 'ahead' | 'lost'
 }
 
 export function SingleChart({
@@ -89,6 +90,7 @@ export function SingleChart({
   onHoverIndex,
   xRange,
   onRangeChange,
+  deltaMode = 'ahead',
 }: SingleChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const panState = useRef<{ startX: number; startRange: [number, number]; ppu: number } | null>(null)
@@ -158,8 +160,12 @@ export function SingleChart({
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
     }
   }, [onRangeChange])
-  // When isDelta the displayed values are negated and converted to seconds, so range must match
-  const displayValues = isDelta ? userValues.map((v) => -v / 1000) : userValues
+  // When isDelta the displayed values are converted to seconds. "ahead" flips the
+  // backend sign so positive means user ahead; "lost" preserves backend sign so
+  // positive means user behind / time lost.
+  const displayValues = isDelta
+    ? userValues.map((v) => (deltaMode === 'ahead' ? -v : v) / 1000)
+    : userValues
   const yMin = useMemo(
     () =>
       Math.min(
@@ -191,11 +197,17 @@ export function SingleChart({
 
   const traces: Plotly.Data[] = useMemo(() => {
     if (isDelta) {
-      // Backend delta_ms: positive = user slower (behind). Negate so that + = user ahead (conventional motorsport display).
-      // Convert ms → s for display (hundredths precision).
-      const corrected = userValues.map((v) => -v / 1000)
+      // Backend delta_ms: positive = user slower (behind). "ahead" flips so + = user ahead.
+      // "lost" preserves the sign so + = time lost / behind.
+      const corrected = userValues.map((v) => (deltaMode === 'ahead' ? -v : v) / 1000)
       const posY = corrected.map((v) => (v >= 0 ? v : 0))
       const negY = corrected.map((v) => (v < 0 ? v : 0))
+      const positiveLabel = deltaMode === 'ahead' ? 'You ahead' : 'Time lost'
+      const negativeLabel = deltaMode === 'ahead' ? 'You behind' : 'Time gained'
+      const positiveFill = deltaMode === 'ahead' ? 'rgba(34,197,94,0.25)' : 'rgba(239,68,68,0.25)'
+      const positiveLine = deltaMode === 'ahead' ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.6)'
+      const negativeFill = deltaMode === 'ahead' ? 'rgba(239,68,68,0.25)' : 'rgba(34,197,94,0.25)'
+      const negativeLine = deltaMode === 'ahead' ? 'rgba(239,68,68,0.6)' : 'rgba(34,197,94,0.6)'
 
       return [
         {
@@ -204,11 +216,11 @@ export function SingleChart({
           x: distances,
           y: posY,
           fill: 'tozeroy',
-          fillcolor: 'rgba(34,197,94,0.25)',
-          line: { color: 'rgba(34,197,94,0.6)', width: 1 },
-          name: 'You ahead',
+          fillcolor: positiveFill,
+          line: { color: positiveLine, width: 1 },
+          name: positiveLabel,
           showlegend: false,
-          hovertemplate: '%{y:.2f} s<extra>You ahead</extra>',
+          hovertemplate: `%{y:.2f} s<extra>${positiveLabel}</extra>`,
         },
         {
           type: 'scatter',
@@ -216,11 +228,11 @@ export function SingleChart({
           x: distances,
           y: negY,
           fill: 'tozeroy',
-          fillcolor: 'rgba(239,68,68,0.25)',
-          line: { color: 'rgba(239,68,68,0.6)', width: 1 },
-          name: 'You behind',
+          fillcolor: negativeFill,
+          line: { color: negativeLine, width: 1 },
+          name: negativeLabel,
           showlegend: false,
-          hovertemplate: '%{y:.2f} s<extra>You behind</extra>',
+          hovertemplate: `%{y:.2f} s<extra>${negativeLabel}</extra>`,
         },
         {
           type: 'scatter',
@@ -260,7 +272,7 @@ export function SingleChart({
     }
 
     return result
-  }, [distances, userValues, refValues, isDelta, isStep])
+  }, [distances, userValues, refValues, isDelta, isStep, deltaMode])
 
   return (
     <div ref={containerRef}>
@@ -492,6 +504,17 @@ export default function TelemetryChart({
         yLabel="s"
         userValues={deltaMs}
         isDelta
+        deltaMode="ahead"
+        height={165}
+        {...sharedProps}
+      />
+
+      <SingleChart
+        title="Time Lost (+ = you behind)"
+        yLabel="s"
+        userValues={deltaMs}
+        isDelta
+        deltaMode="lost"
         height={165}
         {...sharedProps}
       />

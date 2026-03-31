@@ -30,6 +30,8 @@ async def _get_db_dep() -> AsyncSession:
 
 
 logger = logging.getLogger(__name__)
+_ME_STATISTICS_TTL_SECONDS = 60
+_me_statistics_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 class Garage61Client:
@@ -286,8 +288,19 @@ class Garage61Client:
 
     async def get_me_statistics(self) -> dict:
         """GET /me/statistics — return aggregate stats for the current user."""
+        cached = _me_statistics_cache.get(self._user_id)
+        now = time.monotonic()
+        if cached and now - cached[0] < _ME_STATISTICS_TTL_SECONDS:
+            logger.info(
+                "Garage61 /me/statistics cache hit for user=%s age_s=%.1f",
+                self._user_id,
+                now - cached[0],
+            )
+            return cached[1]
+
         data = await self._request("GET", "/me/statistics")
         if isinstance(data, dict):
+            _me_statistics_cache[self._user_id] = (now, data)
             logger.info(f"Garage61 /me/statistics keys: {list(data.keys())}")
             driving_stats = data.get("drivingStatistics")
             if isinstance(driving_stats, dict):
