@@ -86,6 +86,8 @@ async def execute_analysis(
     user_csv = csv_results[0]
     if isinstance(user_csv, Exception):
         raise ValueError(f"Failed to fetch user lap CSV: {user_csv}")
+    if not str(user_csv).lstrip("\ufeff").strip():
+        raise ValueError(f"Failed to fetch user lap CSV for lap {lap_id}: empty CSV body")
 
     reference_csvs = [r for r in csv_results[1:] if not isinstance(r, Exception) and r]
     logger.info(

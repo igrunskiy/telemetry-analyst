@@ -101,9 +101,10 @@ export async function getRecentLaps(
     source?: 'all' | 'garage61' | 'upload'
   },
 ): Promise<RecentActivity[]> {
+  const safeLimit = Math.min(limit, 50)
   const { data } = await api.get<RecentActivity[]>('/api/laps/recent', {
     params: {
-      limit,
+      limit: safeLimit,
       car_id: filters?.carId ?? undefined,
       track_id: filters?.trackId ?? undefined,
       source: filters?.source && filters.source !== 'all' ? filters.source : undefined,
