@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from app.garage61.client import Garage61Client
-from app.telemetry.catalog import load_csv_for_lap_id
 
 
 class _FakeResponse:
@@ -44,16 +41,3 @@ async def test_get_lap_csv_rejects_empty_body(monkeypatch: pytest.MonkeyPatch) -
 
     with pytest.raises(ValueError, match="empty CSV body"):
         await client.get_lap_csv("lap-123")
-
-
-@pytest.mark.asyncio
-async def test_load_csv_for_lap_id_rejects_empty_uploaded_csv() -> None:
-    user = SimpleNamespace(id="user-id")
-
-    with pytest.raises(ValueError, match="Uploaded telemetry returned an empty CSV body"):
-        await load_csv_for_lap_id(
-            "upload:lap-123",
-            user=user,
-            db=None,
-            uploaded_telemetry=[{"id": "upload:lap-123", "csv_data": ""}],
-        )

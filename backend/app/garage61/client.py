@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import logging
 
 import httpx
@@ -7,11 +7,25 @@ from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.crypto import decrypt, encrypt
-from app.auth.jwt import get_current_user
 from app.auth.oauth import refresh_access_token
 from app.config import settings
-from app.database import get_db
-from app.models.user import User
+
+if TYPE_CHECKING:
+    from app.models.user import User
+
+
+async def _get_current_user_dep() -> "User":
+    from app.auth.jwt import get_current_user
+
+    return await get_current_user()
+
+
+async def _get_db_dep() -> AsyncSession:
+    from app.database import get_db
+
+    async for session in get_db():
+        return session
+    raise RuntimeError("Database dependency did not yield a session")
 
 
 logger = logging.getLogger(__name__)
@@ -300,8 +314,8 @@ class Garage61Client:
 
 
 async def get_garage61_client(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    current_user: "User" = Depends(_get_current_user_dep),
+    db: AsyncSession = Depends(_get_db_dep),
 ) -> Garage61Client:
     """Dependency that decrypts the user's Garage61 tokens and returns a client."""
     if not current_user.access_token_enc:
