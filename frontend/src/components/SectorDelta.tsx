@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../lib/plotly'
 import type * as Plotly from 'plotly.js'
 import type { SectorData } from '../types'
 

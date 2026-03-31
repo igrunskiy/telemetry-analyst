@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     GOOGLE_APPLICATION_CREDENTIALS: str = ""
     ANALYSIS_WORKER_POOL_SIZE: int = 5
     ANALYSIS_WORKER_TIMEOUT: int = 120  # seconds before watchdog kills a job
+    DEFAULT_SHARED_REPORTS_PER_DAY: int = 6
     CLAUDE_MAX_TOKENS: int = 20000
     GEMINI_MAX_TOKENS: int = 20000
 
@@ -39,3 +40,15 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def reload_settings() -> Settings:
+    """
+    Re-read configuration from the current process environment and `.env`,
+    mutating the shared `settings` object in place so existing imports pick up
+    the latest values without a process restart.
+    """
+    fresh = Settings()
+    for field_name in fresh.model_fields:
+        setattr(settings, field_name, getattr(fresh, field_name))
+    return settings

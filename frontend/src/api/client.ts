@@ -15,6 +15,7 @@ import type {
   DbHealth,
   PromptMeta,
   PromptsDefaults,
+  SharedReportLimitSettings,
   UploadedTelemetryInput,
   UploadInspection,
   ImportedTelemetry,
@@ -298,6 +299,18 @@ export async function adminGetConfig(): Promise<string> {
 
 export async function adminSaveConfig(content: string): Promise<void> {
   await api.put('/admin/config', { content })
+}
+
+export async function adminGetSharedReportLimit(): Promise<SharedReportLimitSettings> {
+  const { data } = await api.get<SharedReportLimitSettings>('/admin/llm/shared-report-limit')
+  return data
+}
+
+export async function adminSetSharedReportLimit(reportsPerDay: number): Promise<SharedReportLimitSettings> {
+  const { data } = await api.put<SharedReportLimitSettings>('/admin/llm/shared-report-limit', {
+    reports_per_day: reportsPerDay,
+  })
+  return data
 }
 
 export async function adminListPrompts(): Promise<PromptMeta[]> {

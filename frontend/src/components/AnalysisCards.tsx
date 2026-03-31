@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronUp, AlertTriangle, Info, Zap, CheckCircle, TrendingDown, FileText } from 'lucide-react'
+import { ChevronDown, ChevronUp, AlertTriangle, Info, Zap, TrendingDown } from 'lucide-react'
 import type { ImprovementArea, Corner } from '../types'
 import CornerSnippet from './CornerSnippet'
 
@@ -20,10 +20,6 @@ interface Telemetry {
 
 interface AnalysisCardsProps {
   improvement_areas: ImprovementArea[]
-  strengths: string[]
-  summary: string
-  estimated_time_gain: number
-  sector_notes: string[]
   telemetry: Telemetry
   onActiveCorners?: (corners: number[]) => void
   onHoverIndex?: (idx: number | null) => void
@@ -188,30 +184,12 @@ function ImprovementCard({ area, telemetry, onActiveCorners, onHoverIndex }: Imp
 
 export default function AnalysisCards({
   improvement_areas,
-  strengths,
-  summary,
-  estimated_time_gain,
-  sector_notes,
   telemetry,
   onActiveCorners,
   onHoverIndex,
 }: AnalysisCardsProps) {
   return (
     <div className="space-y-6">
-      {/* Overall Assessment */}
-      <div className="card">
-        <div className="flex items-start justify-between gap-4 mb-3">
-          <h2 className="text-white font-semibold">Overall Assessment</h2>
-          {estimated_time_gain > 0 && (
-            <div className="flex-shrink-0 bg-amber-500/20 border border-amber-500/30 text-amber-400 font-semibold text-sm px-3 py-1.5 rounded-full flex items-center gap-1.5">
-              <Zap className="w-3.5 h-3.5" />
-              +{estimated_time_gain.toFixed(1)}s available
-            </div>
-          )}
-        </div>
-        <p className="text-slate-300 text-sm leading-relaxed">{summary}</p>
-      </div>
-
       {/* Improvement Areas */}
       {improvement_areas.length > 0 && (
         <div>
@@ -230,52 +208,8 @@ export default function AnalysisCards({
         </div>
       )}
 
-      {/* Strengths */}
-      {strengths.length > 0 && (
-        <div>
-          <h2 className="text-white font-semibold mb-3 flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-emerald-400" />
-            Your Strengths
-            <span className="text-slate-500 text-sm font-normal">
-              ({strengths.length})
-            </span>
-          </h2>
-          <div className="space-y-2">
-            {strengths.map((s, i) => (
-              <div
-                key={i}
-                className="flex items-start gap-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-3.5"
-              >
-                <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
-                <p className="text-sm text-slate-300 leading-relaxed">{s}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Sector Notes */}
-      {sector_notes.length > 0 && (
-        <div>
-          <h2 className="text-white font-semibold mb-3 flex items-center gap-2">
-            <FileText className="w-4 h-4 text-slate-400" />
-            Sector Notes
-          </h2>
-          <div className="card space-y-2.5">
-            {sector_notes.map((note, i) => (
-              <div key={i} className="flex items-start gap-2">
-                <span className="flex-shrink-0 text-xs text-slate-500 font-mono mt-0.5">
-                  {String(i + 1).padStart(2, '0')}
-                </span>
-                <p className="text-sm text-slate-300 leading-relaxed">{note}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Empty state */}
-      {improvement_areas.length === 0 && strengths.length === 0 && (
+      {improvement_areas.length === 0 && (
         <div className="card py-12 text-center">
           <p className="text-slate-400">No detailed analysis data available.</p>
         </div>

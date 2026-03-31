@@ -17,10 +17,13 @@ from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import require_admin
+from app.config import reload_settings, settings
 from app.database import get_db, AsyncSessionLocal
 from app.models.user import User
 from app.models.analysis import AnalysisResult
 from app.analysis import prompts_manager
+from app.analysis.worker import get_pool
+from app.llm_access import get_shared_report_limit
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,8 @@ class AdminUserItem(BaseModel):
     is_suspended: bool
     garage61_user_id: str | None
     discord_user_id: str | None
+    has_custom_claude_key: bool
+    has_custom_gemini_key: bool
     created_at: str
     last_login_at: str
 
@@ -84,6 +89,10 @@ class PoolSizeRequest(BaseModel):
     pool_size: int
 
 
+class SharedReportLimitRequest(BaseModel):
+    reports_per_day: int
+
+
 # ---------------------------------------------------------------------------
 # User management
 # ---------------------------------------------------------------------------
@@ -106,6 +115,8 @@ async def list_users(
             is_suspended=u.is_suspended,
             garage61_user_id=u.garage61_user_id,
             discord_user_id=u.discord_user_id,
+            has_custom_claude_key=bool(u.claude_api_key_enc),
+            has_custom_gemini_key=bool(u.gemini_api_key_enc),
             created_at=u.created_at.isoformat(),
             last_login_at=u.last_login_at.isoformat(),
         )
@@ -182,6 +193,8 @@ async def create_user(
         is_suspended=user.is_suspended,
         garage61_user_id=user.garage61_user_id,
         discord_user_id=user.discord_user_id,
+        has_custom_claude_key=bool(user.claude_api_key_enc),
+        has_custom_gemini_key=bool(user.gemini_api_key_enc),
         created_at=user.created_at.isoformat(),
         last_login_at=user.last_login_at.isoformat(),
     )
@@ -433,6 +446,47 @@ def _merge_env(submitted: str, original: str) -> str:
     return "".join(lines)
 
 
+def _upsert_env_key(key: str, value: str) -> None:
+    content = _ENV_PATH.read_text(encoding="utf-8") if _ENV_PATH.exists() else ""
+    lines = content.splitlines()
+    updated = False
+    for idx, line in enumerate(lines):
+        if line.strip().startswith(f"{key}="):
+            lines[idx] = f"{key}={value}"
+            updated = True
+            break
+    if not updated:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(f"{key}={value}")
+    _ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _parse_env_content(content: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        values[key.strip()] = value
+    return values
+
+
+def _sync_process_env_from_content(content: str) -> None:
+    """
+    Keep os.environ aligned with the saved `.env` so the running process can
+    re-read updated values immediately.
+    """
+    parsed = _parse_env_content(content)
+    setting_keys = set(settings.model_fields)
+    for key in setting_keys:
+        if key in parsed:
+            os.environ[key] = parsed[key]
+        else:
+            os.environ.pop(key, None)
+
+
 @router.get("/config")
 async def get_config(_admin=Depends(require_admin)):
     """Return the .env file content with sensitive values redacted."""
@@ -447,11 +501,35 @@ async def update_config(
     _admin=Depends(require_admin),
 ):
     """Overwrite the .env file, restoring any redacted (***) values from the original."""
+    previous_pool_size = settings.ANALYSIS_WORKER_POOL_SIZE
     original = _ENV_PATH.read_text(encoding="utf-8") if _ENV_PATH.exists() else ""
     merged = _merge_env(body.content, original)
     _ENV_PATH.write_text(merged, encoding="utf-8")
+    _sync_process_env_from_content(merged)
+    reload_settings()
+    if settings.ANALYSIS_WORKER_POOL_SIZE != previous_pool_size:
+        pool = get_pool()
+        if pool is not None:
+            await pool.resize(settings.ANALYSIS_WORKER_POOL_SIZE)
     logger.info("Admin updated .env config")
     return {"ok": True}
+
+
+@router.get("/llm/shared-report-limit")
+async def get_shared_report_limit_settings(_admin=Depends(require_admin)):
+    return {"reports_per_day": get_shared_report_limit()}
+
+
+@router.put("/llm/shared-report-limit")
+async def update_shared_report_limit_settings(
+    body: SharedReportLimitRequest,
+    _admin=Depends(require_admin),
+):
+    reports_per_day = max(0, body.reports_per_day)
+    os.environ["DEFAULT_SHARED_REPORTS_PER_DAY"] = str(reports_per_day)
+    _upsert_env_key("DEFAULT_SHARED_REPORTS_PER_DAY", str(reports_per_day))
+    reload_settings()
+    return {"reports_per_day": reports_per_day}
 
 
 # ---------------------------------------------------------------------------

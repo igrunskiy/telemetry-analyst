@@ -20,6 +20,7 @@ from app.auth.discord import (
     get_discord_avatar_url,
 )
 from app.database import get_db
+from app.llm_access import build_llm_access_state
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,7 @@ class UserMeResponse(BaseModel):
     has_custom_gemini_key: bool
     has_garage61: bool
     role: str
+    llm_access: dict
 
 
 class LocalLoginRequest(BaseModel):
@@ -524,7 +526,10 @@ async def discord_callback(
 
 
 @router.get("/me", response_model=UserMeResponse)
-async def me(current_user: User = Depends(get_current_user)) -> UserMeResponse:
+async def me(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserMeResponse:
     """Return the current user's public profile info."""
     return UserMeResponse(
         id=str(current_user.id),
@@ -534,4 +539,5 @@ async def me(current_user: User = Depends(get_current_user)) -> UserMeResponse:
         has_custom_gemini_key=bool(current_user.gemini_api_key_enc),
         has_garage61=bool(current_user.access_token_enc),
         role=current_user.role,
+        llm_access=await build_llm_access_state(current_user, db),
     )

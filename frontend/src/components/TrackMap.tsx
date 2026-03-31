@@ -27,7 +27,8 @@ function TilePaneFader({ mapStyle }: { mapStyle: MapStyle }) {
   const map = useMap()
   useEffect(() => {
     const pane = map.getPane('tilePane')
-    if (pane) pane.style.filter = mapStyle === 'none' ? '' : 'brightness(0.38) saturate(0.45)'
+    const isDarkMode = document.documentElement.classList.contains('dark')
+    if (pane) pane.style.filter = mapStyle === 'none' || !isDarkMode ? '' : 'brightness(0.38) saturate(0.45)'
   }, [map, mapStyle])
   return null
 }

@@ -34,53 +34,103 @@
    the .dark class is absent from <html>.
    ───────────────────────────────────────────────────────────────────────── */
 html:not(.dark) body {
-  background-color: #f8fafc;
-  color: #0f172a;
+  background:
+    radial-gradient(circle at top right, rgba(125, 156, 191, 0.12), transparent 28%),
+    radial-gradient(circle at top left, rgba(171, 191, 215, 0.18), transparent 24%),
+    #f3f5f8;
+  color: #1c2430;
 }
 
 /* Backgrounds */
-html:not(.dark) .bg-slate-900  { background-color: #f8fafc !important; }
-html:not(.dark) .bg-slate-800  { background-color: #f1f5f9 !important; }
-html:not(.dark) .bg-slate-700  { background-color: #e2e8f0 !important; }
-html:not(.dark) .bg-slate-600  { background-color: #cbd5e1 !important; }
-html:not(.dark) .bg-slate-500  { background-color: #94a3b8 !important; }
+html:not(.dark) .bg-slate-900  { background-color: #edf2f7 !important; }
+html:not(.dark) .bg-slate-800  { background-color: #fbfdff !important; }
+html:not(.dark) .bg-slate-700  { background-color: #e4ebf3 !important; }
+html:not(.dark) .bg-slate-600  { background-color: #c8d4e1 !important; }
+html:not(.dark) .bg-slate-500  { background-color: #9fafc2 !important; }
 
 /* Opacity-modified backgrounds (backdrop/overlay variants) */
-html:not(.dark) .bg-slate-900\/95 { background-color: rgba(248,250,252,0.95) !important; }
-html:not(.dark) .bg-slate-900\/80 { background-color: rgba(248,250,252,0.80) !important; }
-html:not(.dark) .bg-slate-800\/50 { background-color: rgba(241,245,249,0.50) !important; }
-html:not(.dark) .bg-slate-700\/50 { background-color: rgba(226,232,240,0.50) !important; }
-html:not(.dark) .bg-slate-700\/30 { background-color: rgba(226,232,240,0.30) !important; }
+html:not(.dark) .bg-slate-900\/95 { background-color: rgba(237,242,247,0.95) !important; }
+html:not(.dark) .bg-slate-900\/80 { background-color: rgba(237,242,247,0.82) !important; }
+html:not(.dark) .bg-slate-800\/50 { background-color: rgba(251,253,255,0.78) !important; }
+html:not(.dark) .bg-slate-800\/60 { background-color: rgba(251,253,255,0.88) !important; }
+html:not(.dark) .bg-slate-700\/50 { background-color: rgba(228,235,243,0.72) !important; }
+html:not(.dark) .bg-slate-700\/40 { background-color: rgba(228,235,243,0.58) !important; }
+html:not(.dark) .bg-slate-700\/30 { background-color: rgba(228,235,243,0.44) !important; }
 
 /* Text */
-html:not(.dark) .text-white    { color: #0f172a !important; }
-html:not(.dark) .text-slate-100 { color: #1e293b !important; }
-html:not(.dark) .text-slate-200 { color: #334155 !important; }
-html:not(.dark) .text-slate-300 { color: #475569 !important; }
-html:not(.dark) .text-slate-400 { color: #64748b !important; }
-html:not(.dark) .text-slate-500 { color: #94a3b8 !important; }
+html:not(.dark) .text-white    { color: #1c2430 !important; }
+html:not(.dark) .text-slate-100 { color: #1c2430 !important; }
+html:not(.dark) .text-slate-200 { color: #2f3a49 !important; }
+html:not(.dark) .text-slate-300 { color: #465467 !important; }
+html:not(.dark) .text-slate-400 { color: #617286 !important; }
+html:not(.dark) .text-slate-500 { color: #7b8b9d !important; }
+html:not(.dark) .text-slate-600 { color: #7b8b9d !important; }
+
+/* Accent text */
+html:not(.dark) .text-amber-400 { color: #a06a18 !important; }
+html:not(.dark) .text-orange-400 { color: #b35f1d !important; }
+html:not(.dark) .text-blue-400 { color: #356ca8 !important; }
+html:not(.dark) .text-emerald-400 { color: #2f7f6a !important; }
+html:not(.dark) .text-red-400 { color: #a24a4a !important; }
+html:not(.dark) .text-violet-300 { color: #6f63b0 !important; }
+html:not(.dark) .text-orange-300 { color: #b35f1d !important; }
+html:not(.dark) .text-amber-300 { color: #a06a18 !important; }
+html:not(.dark) .text-blue-300 { color: #356ca8 !important; }
+html:not(.dark) .text-emerald-300 { color: #2f7f6a !important; }
+html:not(.dark) .text-red-300 { color: #a24a4a !important; }
+html:not(.dark) .text-fuchsia-300 { color: #8a5a98 !important; }
+html:not(.dark) .text-sky-300 { color: #3e7397 !important; }
 
 /* Borders */
-html:not(.dark) .border-slate-700 { border-color: #e2e8f0 !important; }
-html:not(.dark) .border-slate-700\/50 { border-color: rgba(226,232,240,0.5) !important; }
-html:not(.dark) .border-slate-600 { border-color: #cbd5e1 !important; }
-html:not(.dark) .border-slate-500 { border-color: #94a3b8 !important; }
+html:not(.dark) .border-slate-700 { border-color: #cdd8e4 !important; }
+html:not(.dark) .border-slate-700\/50 { border-color: rgba(205,216,228,0.78) !important; }
+html:not(.dark) .border-slate-700\/30 { border-color: rgba(205,216,228,0.58) !important; }
+html:not(.dark) .border-slate-700\/80 { border-color: rgba(191,204,219,0.92) !important; }
+html:not(.dark) .border-slate-600 { border-color: #b9c8d8 !important; }
+html:not(.dark) .border-slate-500 { border-color: #9fafc2 !important; }
 
 /* Hover states */
-html:not(.dark) .hover\:bg-slate-700:hover { background-color: #e2e8f0 !important; }
-html:not(.dark) .hover\:bg-slate-600:hover { background-color: #cbd5e1 !important; }
-html:not(.dark) .hover\:text-white:hover   { color: #0f172a !important; }
+html:not(.dark) .hover\:bg-slate-700:hover { background-color: #dbe6f1 !important; }
+html:not(.dark) .hover\:bg-slate-600:hover { background-color: #c1d0df !important; }
+html:not(.dark) .hover\:bg-slate-800:hover { background-color: #f1f6fb !important; }
+html:not(.dark) .hover\:text-white:hover   { color: #1c2430 !important; }
 
 /* Divide / ring colours */
-html:not(.dark) .divide-slate-700 > * + * { border-color: #e2e8f0 !important; }
+html:not(.dark) .divide-slate-700 > * + * { border-color: #cdd8e4 !important; }
 
 /* Scrollbar */
-html:not(.dark) ::-webkit-scrollbar-track { background-color: #f1f5f9; }
-html:not(.dark) ::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 3px; }
-html:not(.dark) ::-webkit-scrollbar-thumb:hover { background-color: #94a3b8; }
+html:not(.dark) ::-webkit-scrollbar-track { background-color: #e4ebf3; }
+html:not(.dark) ::-webkit-scrollbar-thumb { background-color: #b1c1d1; border-radius: 3px; }
+html:not(.dark) ::-webkit-scrollbar-thumb:hover { background-color: #8ca0b5; }
 
 /* ThemeToggle: invert icon colour in light mode so it reads well */
-html:not(.dark) .text-slate-400.hover\:text-white { color: #475569 !important; }
+html:not(.dark) .text-slate-400.hover\:text-white { color: #617286 !important; }
+
+/* Accent surfaces */
+html:not(.dark) .bg-amber-500\/10 { background-color: rgba(181, 126, 46, 0.11) !important; }
+html:not(.dark) .bg-amber-500\/15 { background-color: rgba(181, 126, 46, 0.15) !important; }
+html:not(.dark) .bg-amber-500\/20 { background-color: rgba(181, 126, 46, 0.18) !important; }
+html:not(.dark) .bg-orange-500\/10 { background-color: rgba(186, 117, 62, 0.12) !important; }
+html:not(.dark) .bg-orange-500\/20 { background-color: rgba(186, 117, 62, 0.18) !important; }
+html:not(.dark) .bg-red-500\/10 { background-color: rgba(183, 108, 108, 0.10) !important; }
+html:not(.dark) .bg-red-500\/20 { background-color: rgba(183, 108, 108, 0.16) !important; }
+html:not(.dark) .bg-emerald-500\/10 { background-color: rgba(93, 145, 123, 0.12) !important; }
+html:not(.dark) .bg-emerald-500\/20 { background-color: rgba(93, 145, 123, 0.18) !important; }
+html:not(.dark) .bg-blue-500\/10 { background-color: rgba(79, 125, 181, 0.13) !important; }
+html:not(.dark) .bg-blue-500\/20 { background-color: rgba(79, 125, 181, 0.20) !important; }
+html:not(.dark) .bg-violet-500\/15 { background-color: rgba(126, 102, 163, 0.14) !important; }
+html:not(.dark) .bg-sky-400\/10 { background-color: rgba(93, 146, 181, 0.12) !important; }
+html:not(.dark) .bg-fuchsia-400\/10 { background-color: rgba(151, 104, 144, 0.12) !important; }
+
+/* Core amber surfaces */
+html:not(.dark) .bg-amber-500 { background-color: #c48a33 !important; }
+html:not(.dark) .hover\:bg-amber-400:hover { background-color: #b17722 !important; }
+html:not(.dark) .hover\:bg-amber-500:hover { background-color: #b17722 !important; }
+html:not(.dark) .shadow-amber-500\/25 { box-shadow: 0 10px 30px rgba(160, 118, 51, 0.16) !important; }
+
+/* Tabs and buttons */
+html:not(.dark) .tab-btn-inactive { color: #617286 !important; }
+html:not(.dark) .tab-btn-inactive:hover { color: #1c2430 !important; background-color: #e8f0f8 !important; }
 
 @layer components {
   .btn-primary {

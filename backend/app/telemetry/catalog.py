@@ -156,8 +156,40 @@ def extract_lap_conditions(payload: dict[str, Any]) -> dict[str, Any] | None:
                 return value
         return None
 
+    def normalize_setup_type(value: Any) -> str | None:
+        if value in (None, "", {}):
+            return None
+        if isinstance(value, bool):
+            return "Fixed" if value else "Custom"
+        text = str(value).strip()
+        if not text:
+            return None
+        lowered = text.casefold()
+        if lowered in {"fixed", "fixed setup", "fixedsetup", "default fixed"}:
+            return "Fixed"
+        if lowered in {"custom", "open", "open setup", "opensetup", "custom setup"}:
+            return "Custom"
+        return text
+
+    setup_type = normalize_setup_type(
+        lookup(
+            "setupType",
+            "setup_type",
+            "setup",
+            "carSetup",
+            "car_setup",
+            "setupMode",
+            "setup_mode",
+            "fixedSetup",
+            "fixed_setup",
+            "isFixedSetup",
+            "is_fixed_setup",
+        )
+    )
+
     conditions = {
         "summary": lookup("conditionSummary", "conditionsSummary", "conditions", "condition", "weatherSummary"),
+        "setup_type": setup_type,
         "weather": lookup("weather", "weatherType", "weather_type", "sky", "skyCondition"),
         "track_state": lookup("trackState", "track_state", "surfaceState", "surface_state"),
         "air_temp_c": _coerce_float(lookup("airTemp", "airTemperature", "ambientTemp", "ambientTemperature")),

@@ -1,3 +1,22 @@
+export interface LlmProviderAccess {
+  provider: 'claude' | 'gemini'
+  label: string
+  has_custom_key: boolean
+  has_shared_key: boolean
+  key_source: 'custom' | 'shared' | 'none'
+  uses_shared_quota: boolean
+  can_generate: boolean
+  disabled_reason?: 'no_key_configured' | 'shared_quota_exhausted' | null
+  shared_reports_remaining_today: number
+}
+
+export interface LlmAccessState {
+  shared_reports_per_day: number
+  shared_reports_used_today: number
+  shared_reports_remaining_today: number
+  providers: Record<'claude' | 'gemini', LlmProviderAccess>
+}
+
 export interface User {
   id: string
   display_name: string
@@ -6,6 +25,7 @@ export interface User {
   has_custom_gemini_key: boolean
   has_garage61: boolean
   role: 'admin' | 'user'
+  llm_access: LlmAccessState
 }
 
 export interface AdminUser {
@@ -17,6 +37,8 @@ export interface AdminUser {
   is_suspended: boolean
   garage61_user_id: string | null
   discord_user_id: string | null
+  has_custom_claude_key: boolean
+  has_custom_gemini_key: boolean
   created_at: string
   last_login_at: string
 }
@@ -154,6 +176,7 @@ export interface LapMeta {
 
 export interface LapConditions {
   summary?: string
+  setup_type?: string
   weather?: string
   track_state?: string
   air_temp_c?: number
@@ -232,6 +255,7 @@ export interface AnalysisReport {
   llm_provider?: 'claude' | 'gemini'
   model_name?: string
   prompt_version?: string
+  llm_payload_bytes?: number
   created_at: string
   enqueued_at?: string | null
   status?: 'enqueued' | 'processing' | 'completed' | 'failed'
@@ -315,6 +339,10 @@ export interface PromptMeta {
 export interface PromptsDefaults {
   claude: string
   gemini: string
+}
+
+export interface SharedReportLimitSettings {
+  reports_per_day: number
 }
 
 export interface AnalysisHistoryItem {

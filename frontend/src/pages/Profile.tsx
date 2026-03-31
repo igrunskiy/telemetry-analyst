@@ -4,6 +4,31 @@ import { ArrowLeft, Save, Key, User, CheckCircle, AlertCircle, Link2, Link2Off }
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../hooks/useAuth'
 import { updateClaudeKey, updateGeminiKey, connectGarage61 } from '../api/client'
+import type { LlmProviderAccess } from '../types'
+
+function providerStatusSummary(access?: LlmProviderAccess) {
+  if (!access) {
+    return { label: 'Unknown', tone: 'text-slate-300 bg-slate-500/10 border-slate-500/20', detail: 'Provider status is unavailable right now.' }
+  }
+  if (access.has_custom_key) {
+    return { label: 'Configured', tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20', detail: `Your personal ${access.label} API key is configured.` }
+  }
+  if (access.has_shared_key && access.can_generate) {
+    return {
+      label: 'Shared Access',
+      tone: 'text-amber-200 bg-amber-500/10 border-amber-500/20',
+      detail: `You can use the shared free ${access.label} quota for now. Add your own key to avoid quota limits.`,
+    }
+  }
+  if (access.has_shared_key && access.disabled_reason === 'shared_quota_exhausted') {
+    return {
+      label: 'Quota Reached',
+      tone: 'text-red-300 bg-red-500/10 border-red-500/20',
+      detail: `The shared free ${access.label} quota was used up in the last 24 hours. Add your own key or wait for quota to refresh.`,
+    }
+  }
+  return { label: 'Required', tone: 'text-red-300 bg-red-500/10 border-red-500/20', detail: `${access.label} requires your personal API key before you can use it.` }
+}
 
 export default function ProfilePage() {
   const { user } = useAuth()
@@ -14,6 +39,17 @@ export default function ProfilePage() {
   const [geminiKey, setGeminiKey] = useState('')
   const [geminiSaveSuccess, setGeminiSaveSuccess] = useState(false)
   const garage61JustConnected = searchParams.get('garage61') === 'connected'
+  const claudeAccess = user?.llm_access?.providers?.claude
+  const geminiAccess = user?.llm_access?.providers?.gemini
+  const claudeStatus = providerStatusSummary(claudeAccess)
+  const geminiStatus = providerStatusSummary(geminiAccess)
+  const hasAnyAvailableProvider = Boolean(
+    user?.llm_access?.providers?.claude?.can_generate || user?.llm_access?.providers?.gemini?.can_generate,
+  )
+  const hasSharedFallback = Boolean(
+    (!user?.has_custom_claude_key && user?.llm_access?.providers?.claude?.has_shared_key) ||
+    (!user?.has_custom_gemini_key && user?.llm_access?.providers?.gemini?.has_shared_key),
+  )
 
   useEffect(() => {
     if (garage61JustConnected) {
@@ -59,6 +95,36 @@ export default function ProfilePage() {
         {/* User info card */}
         <div className="card">
           <h2 className="text-sm font-medium text-slate-400 uppercase tracking-wide mb-4">
+            LLM Access
+          </h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-white font-medium">Claude</p>
+                  <p className="text-slate-400 text-sm mt-1">{claudeStatus.detail}</p>
+                </div>
+                <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${claudeStatus.tone}`}>
+                  {claudeStatus.label}
+                </span>
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-white font-medium">Gemini</p>
+                  <p className="text-slate-400 text-sm mt-1">{geminiStatus.detail}</p>
+                </div>
+                <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${geminiStatus.tone}`}>
+                  {geminiStatus.label}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <h2 className="text-sm font-medium text-slate-400 uppercase tracking-wide mb-4">
             Account
           </h2>
           <div className="flex items-center gap-4">
@@ -94,6 +160,23 @@ export default function ProfilePage() {
             </div>
           </div>
         </div>
+
+        {user && !hasAnyAvailableProvider && (
+          <div className="flex items-start gap-3 text-red-300 text-sm bg-red-500/10 border border-red-500/20 rounded-lg p-4">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <span>
+              Report generation is unavailable right now. Add your personal Claude or Gemini API key below, or wait for the shared free-report quota to refresh.
+            </span>
+          </div>
+        )}
+        {user && !user.has_custom_claude_key && !user.has_custom_gemini_key && hasSharedFallback && hasAnyAvailableProvider && (
+          <div className="flex items-start gap-3 text-amber-200 text-sm bg-amber-500/10 border border-amber-500/20 rounded-lg p-4">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <span>
+              Personal LLM API keys are not configured. You can still use the shared free-report quota for the last 24 hours, or add your own key below for uninterrupted access.
+            </span>
+          </div>
+        )}
 
         {/* Garage61 connection card */}
         <div className="card">
@@ -149,9 +232,26 @@ export default function ProfilePage() {
             <h2 className="text-white font-medium">Claude API Key</h2>
           </div>
           <p className="text-slate-500 text-sm mb-4">
-            Optionally provide your own Anthropic Claude API key to use for AI analysis.
-            Leave empty to use the shared API key.
+            Provide your Anthropic Claude API key to enable Claude-powered analysis for your account.
           </p>
+          {claudeAccess && (
+            <div className={`mb-4 rounded-lg border px-3 py-2 text-sm ${
+              claudeAccess.can_generate
+                ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+                : 'border-red-500/20 bg-red-500/10 text-red-300'
+            }`}>
+              <div className="font-medium mb-1">Claude status: {claudeStatus.label}</div>
+              <div>
+                {claudeAccess.has_custom_key
+                  ? 'Your personal Claude API key is configured and will be used for reports.'
+                  : claudeAccess.has_shared_key
+                    ? claudeAccess.can_generate
+                      ? `Claude can use the shared free-report quota. ${claudeAccess.shared_reports_remaining_today} shared report${claudeAccess.shared_reports_remaining_today === 1 ? '' : 's'} remaining in the last 24 hours.`
+                      : 'Claude shared free-report quota is exhausted for the last 24 hours. Add your own Claude API key below to keep generating reports.'
+                    : 'Claude is not configured. Add your own Claude API key below to enable it.'}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-3">
             <div>
@@ -226,9 +326,26 @@ export default function ProfilePage() {
             <h2 className="text-white font-medium">Gemini API Key</h2>
           </div>
           <p className="text-slate-500 text-sm mb-4">
-            Optionally provide your own Google AI (Gemini) API key to use Gemini for analysis.
-            Leave empty to use the shared API key.
+            Provide your Google AI Gemini API key to enable Gemini-powered analysis for your account.
           </p>
+          {geminiAccess && (
+            <div className={`mb-4 rounded-lg border px-3 py-2 text-sm ${
+              geminiAccess.can_generate
+                ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+                : 'border-red-500/20 bg-red-500/10 text-red-300'
+            }`}>
+              <div className="font-medium mb-1">Gemini status: {geminiStatus.label}</div>
+              <div>
+                {geminiAccess.has_custom_key
+                  ? 'Your personal Gemini API key is configured and will be used for reports.'
+                  : geminiAccess.has_shared_key
+                    ? geminiAccess.can_generate
+                      ? `Gemini can use the shared free-report quota. ${geminiAccess.shared_reports_remaining_today} shared report${geminiAccess.shared_reports_remaining_today === 1 ? '' : 's'} remaining in the last 24 hours.`
+                      : 'Gemini shared free-report quota is exhausted for the last 24 hours. Add your own Gemini API key below to keep generating reports.'
+                    : 'Gemini is not configured. Add your own Gemini API key below to enable it.'}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-3">
             <div>

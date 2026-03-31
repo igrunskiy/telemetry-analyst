@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { LogOut, User, ChevronRight, Clock, Calendar, Loader2, Car, MapPin, BarChart2, Trash2, Zap, PlusCircle, Activity, History, Shield, Upload, FileText, Pencil, Save, X } from 'lucide-react'
+import { LogOut, User, ChevronRight, Clock, Calendar, Loader2, Car, MapPin, BarChart2, Trash2, Zap, Activity, History, Shield, Upload, FileText, Pencil, Save, X } from 'lucide-react'
 import { ThemeToggle } from '../components/ThemeToggle'
 import { useAuth } from '../hooks/useAuth'
 import { adminListPrompts } from '../api/client'
@@ -144,6 +144,7 @@ function formatLapConditionsCompact(lap: Lap): string {
   }
 
   const parts: string[] = []
+  if (conditions.setup_type) parts.push(`Setup ${conditions.setup_type}`)
   if (conditions.weather) parts.push(conditions.weather)
   if (conditions.track_temp_c != null) parts.push(`Track ${conditions.track_temp_c.toFixed(0)}C`)
   if (conditions.air_temp_c != null) parts.push(`Air ${conditions.air_temp_c.toFixed(0)}C`)
@@ -178,6 +179,76 @@ function buildDriverKey(value: string): string | undefined {
 
 function getLapSourceLabel(lapId: string): 'csv' | 'g61' {
   return lapId.startsWith('upload:') ? 'csv' : 'g61'
+}
+
+function sortSessionLapsChronologically(laps: Lap[]): Lap[] {
+  return [...laps].sort((a, b) => {
+    const aTime = parseDate(a.recorded_at)?.getTime()
+    const bTime = parseDate(b.recorded_at)?.getTime()
+    if (aTime != null && bTime != null) {
+      return aTime - bTime
+    }
+    if (aTime != null) return -1
+    if (bTime != null) return 1
+    return 0
+  })
+}
+
+function pickSessionConsecutiveWindow(laps: Lap[], windowSize = 5): Lap[] {
+  const ordered = sortSessionLapsChronologically(laps)
+  if (ordered.length <= windowSize) {
+    return ordered
+  }
+
+  const fastestIndex = ordered.reduce((bestIdx, lap, idx, arr) => (
+    parseLapTime(lap.lap_time) < parseLapTime(arr[bestIdx].lap_time) ? idx : bestIdx
+  ), 0)
+
+  let bestStart = 0
+  let bestSpan = Number.POSITIVE_INFINITY
+  let bestDistanceToFastest = Number.POSITIVE_INFINITY
+
+  for (let start = 0; start <= ordered.length - windowSize; start += 1) {
+    const window = ordered.slice(start, start + windowSize)
+    const firstTime = parseDate(window[0].recorded_at)?.getTime()
+    const lastTime = parseDate(window[window.length - 1].recorded_at)?.getTime()
+    const span = firstTime != null && lastTime != null ? lastTime - firstTime : windowSize
+    const distanceToFastest = fastestIndex < start
+      ? start - fastestIndex
+      : fastestIndex >= start + windowSize
+        ? fastestIndex - (start + windowSize - 1)
+        : 0
+
+    if (
+      span < bestSpan
+      || (span === bestSpan && distanceToFastest < bestDistanceToFastest)
+      || (span === bestSpan && distanceToFastest === bestDistanceToFastest && start < bestStart)
+    ) {
+      bestStart = start
+      bestSpan = span
+      bestDistanceToFastest = distanceToFastest
+    }
+  }
+
+  return ordered.slice(bestStart, bestStart + windowSize)
+}
+
+function buildSessionAnalysisLaps(laps: Lap[], windowSize = 5): { consecutiveLaps: Lap[], analysisLaps: Lap[], fastestLap: Lap | null } {
+  const ordered = sortSessionLapsChronologically(laps)
+  if (ordered.length === 0) {
+    return { consecutiveLaps: [], analysisLaps: [], fastestLap: null }
+  }
+  const consecutiveLaps = pickSessionConsecutiveWindow(ordered, windowSize)
+  const fastestLap = ordered.reduce((best, lap) => (
+    parseLapTime(lap.lap_time) < parseLapTime(best.lap_time) ? lap : best
+  ), ordered[0])
+
+  const included = new Set(consecutiveLaps.map((lap) => lap.id))
+  const analysisLaps = included.has(fastestLap.id)
+    ? consecutiveLaps
+    : [...consecutiveLaps, fastestLap]
+
+  return { consecutiveLaps, analysisLaps, fastestLap }
 }
 
 type UploadTab = 'files' | 'metadata'
@@ -244,6 +315,10 @@ export default function LapSelectorPage() {
   const [promptVersion, setPromptVersion] = useState<string>('default')
   const [uploadCarName, setUploadCarName] = useState('')
   const [uploadTrackName, setUploadTrackName] = useState('')
+  const [carQuery, setCarQuery] = useState('')
+  const [trackQuery, setTrackQuery] = useState('')
+  const [showCarSuggestions, setShowCarSuggestions] = useState(false)
+  const [showTrackSuggestions, setShowTrackSuggestions] = useState(false)
   const [uploadedLaps, setUploadedLaps] = useState<UploadedLapDraft[]>([])
   const [isInspectingUploads, setIsInspectingUploads] = useState(false)
   const [editingImportedId, setEditingImportedId] = useState<string | null>(null)
@@ -365,11 +440,45 @@ export default function LapSelectorPage() {
   })
   const historyTotalPages = Math.ceil(filteredHistory.length / HISTORY_PAGE_SIZE)
   const pagedHistory = filteredHistory.slice(historyPage * HISTORY_PAGE_SIZE, (historyPage + 1) * HISTORY_PAGE_SIZE)
+  const recentCars = cars.filter((c) => recentCarIds.has(c.id))
+  const otherCars = cars.filter((c) => !recentCarIds.has(c.id))
+  const recentTracks = tracks.filter((t) => recentTrackIds.has(t.id))
+  const otherTracks = tracks.filter((t) => !recentTrackIds.has(t.id))
+  const filteredRecentCars = useMemo(() => {
+    const query = carQuery.trim().toLowerCase()
+    if (!query) return recentCars
+    return recentCars.filter((car) => car.name.toLowerCase().includes(query))
+  }, [carQuery, recentCars])
+  const filteredOtherCars = useMemo(() => {
+    const query = carQuery.trim().toLowerCase()
+    if (!query) return otherCars
+    return otherCars.filter((car) => car.name.toLowerCase().includes(query))
+  }, [carQuery, otherCars])
+  const filteredRecentTracks = useMemo(() => {
+    const query = trackQuery.trim().toLowerCase()
+    if (!query) return recentTracks
+    return recentTracks.filter((track) => formatTrackName(track).toLowerCase().includes(query))
+  }, [trackQuery, recentTracks])
+  const filteredOtherTracks = useMemo(() => {
+    const query = trackQuery.trim().toLowerCase()
+    if (!query) return otherTracks
+    return otherTracks.filter((track) => formatTrackName(track).toLowerCase().includes(query))
+  }, [trackQuery, otherTracks])
 
   // Clear reference lap selection when new ref laps load
   useEffect(() => {
     setSelectedRefIds(new Set())
   }, [refLaps])
+
+  useEffect(() => {
+    const selectedCar = cars.find((car) => car.id === selectedCarId)
+    setCarQuery(selectedCar ? selectedCar.name : '')
+  }, [cars, selectedCarId])
+
+  useEffect(() => {
+    const selectedTrack = tracks.find((track) => track.id === selectedTrackId)
+    setTrackQuery(selectedTrack ? formatTrackName(selectedTrack) : '')
+  }, [tracks, selectedTrackId])
 
   // Reset lap/session selection when car/track change
   function handleCarChange(carId: string | number | null) {
@@ -394,6 +503,52 @@ export default function LapSelectorPage() {
     setMySessionsPage(0)
     setRecentPage(0)
     setHistoryPage(0)
+  }
+
+  function handleCarInputChange(value: string) {
+    setCarQuery(value)
+    const trimmed = value.trim()
+    if (!trimmed) {
+      handleCarChange(null)
+      return
+    }
+    const matchedCar = cars.find((car) => car.name.toLowerCase() === trimmed.toLowerCase())
+    if (matchedCar) {
+      handleCarChange(matchedCar.id)
+      return
+    }
+    if (selectedCarId !== null) {
+      handleCarChange(null)
+    }
+  }
+
+  function handleTrackInputChange(value: string) {
+    setTrackQuery(value)
+    const trimmed = value.trim()
+    if (!trimmed) {
+      handleTrackChange(null)
+      return
+    }
+    const matchedTrack = tracks.find((track) => formatTrackName(track).toLowerCase() === trimmed.toLowerCase())
+    if (matchedTrack) {
+      handleTrackChange(matchedTrack.id)
+      return
+    }
+    if (selectedTrackId !== null) {
+      handleTrackChange(null)
+    }
+  }
+
+  function selectCarOption(car: CarType) {
+    setCarQuery(car.name)
+    handleCarChange(car.id)
+    setShowCarSuggestions(false)
+  }
+
+  function selectTrackOption(track: Track) {
+    setTrackQuery(formatTrackName(track))
+    handleTrackChange(track.id)
+    setShowTrackSuggestions(false)
   }
 
   function applyRecentFilters(carId: string | number | null, trackId: string | number | null) {
@@ -651,7 +806,9 @@ export default function LapSelectorPage() {
       if (analysisMode === 'sessions') {
         const session = mySessions.find((s: Session) => s.id === selectedSessionId)
         if (!session) throw new Error('Selected session not found')
-        const sorted = [...session.laps].sort(
+        const { analysisLaps } = buildSessionAnalysisLaps(session.laps, 5)
+        if (analysisLaps.length === 0) throw new Error('Selected session has no laps')
+        const sorted = [...analysisLaps].sort(
           (a, b) => parseLapTime(a.lap_time) - parseLapTime(b.lap_time)
         )
         const primary = sorted[0]
@@ -713,15 +870,42 @@ export default function LapSelectorPage() {
   }
 
   const selectedSession = mySessions.find((s: Session) => s.id === selectedSessionId)
-  const canAnalyse = analysisMode === 'sessions'
+  const llmAccess = user?.llm_access
+  const selectedProviderAccess = llmAccess?.providers?.[llmModel]
+  const alternateProvider = llmModel === 'claude' ? 'gemini' : 'claude'
+  const alternateProviderAccess = llmAccess?.providers?.[alternateProvider]
+  const hasPersonalLlmKey = Boolean(user?.has_custom_claude_key || user?.has_custom_gemini_key)
+  const personalProviderOptions = (['claude', 'gemini'] as const).filter(
+    (provider) => llmAccess?.providers?.[provider]?.has_custom_key,
+  )
+  const hasSharedFreeReports = Boolean(
+    llmAccess?.providers?.claude?.has_shared_key || llmAccess?.providers?.gemini?.has_shared_key,
+  )
+  const baseCanAnalyse = analysisMode === 'sessions'
     ? selectedSessionId !== null && (selectedSession?.laps?.length ?? 0) >= 2 && !analysisMutation.isPending
     : selectedLapId !== null && selectedRefIds.size > 0 && !analysisMutation.isPending
+  const canAnalyse = baseCanAnalyse && Boolean(selectedProviderAccess?.can_generate)
+
+  useEffect(() => {
+    if (!selectedProviderAccess?.can_generate && alternateProviderAccess?.can_generate) {
+      setLlmModel(alternateProvider)
+    }
+  }, [alternateProvider, alternateProviderAccess?.can_generate, selectedProviderAccess?.can_generate])
+
+  useEffect(() => {
+    if (!hasPersonalLlmKey) {
+      return
+    }
+    if (!selectedProviderAccess?.has_custom_key && personalProviderOptions.length > 0) {
+      setLlmModel(personalProviderOptions[0])
+    }
+  }, [hasPersonalLlmKey, personalProviderOptions, selectedProviderAccess?.has_custom_key])
 
   return (
     <div className="min-h-screen bg-slate-900">
       {/* Header */}
       <header className="bg-slate-800 border-b border-slate-700 sticky top-0 z-10">
-        <div className="max-w-[80%] mx-auto px-4 h-14 flex items-center justify-between">
+        <div className="max-w-[90%] mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 bg-amber-500 rounded-lg flex items-center justify-center">
               <BarChart2 className="w-4 h-4 text-slate-900" />
@@ -773,14 +957,14 @@ export default function LapSelectorPage() {
       </header>
 
       {user && !user.has_garage61 && (
-        <div className="bg-slate-800/60 border-b border-slate-700">
-          <div className="max-w-[80%] mx-auto px-4 py-2 flex items-center justify-between gap-4">
-            <p className="text-slate-400 text-xs">
+        <div className="border-b border-red-500/20 bg-red-500/10">
+          <div className="max-w-[90%] mx-auto px-4 py-2 flex items-center justify-between gap-4">
+            <p className="text-red-200 text-xs">
               Garage61 not connected — you can still upload and analyse CSV telemetry files.
             </p>
             <Link
               to="/profile"
-              className="flex-shrink-0 text-xs font-medium text-slate-400 hover:text-slate-300 underline underline-offset-2"
+              className="flex-shrink-0 text-xs font-medium text-red-200 hover:text-white underline underline-offset-2"
             >
               Connect Garage61
             </Link>
@@ -788,37 +972,86 @@ export default function LapSelectorPage() {
         </div>
       )}
 
-      <main className="max-w-[80%] mx-auto px-4 py-6">
+      {user && !hasPersonalLlmKey && hasSharedFreeReports && (
+        <div className="border-b border-amber-500/20 bg-amber-500/10">
+          <div className="max-w-[90%] mx-auto px-4 py-2 flex items-center justify-between gap-4">
+            <p className="text-amber-100 text-xs">
+              Personal LLM API keys not connected — you can still use shared free reports in the rolling 24-hour window.
+              {typeof llmAccess?.shared_reports_remaining_today === 'number' ? ` ${llmAccess.shared_reports_remaining_today} remaining.` : ''}
+            </p>
+            <Link
+              to="/profile"
+              className="flex-shrink-0 text-xs font-medium text-amber-100 hover:text-white underline underline-offset-2"
+              >
+              Add API key
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {user && !hasPersonalLlmKey && !hasSharedFreeReports && (
+        <div className="border-b border-red-500/20 bg-red-500/10">
+          <div className="max-w-[90%] mx-auto px-4 py-2 flex items-center justify-between gap-4">
+            <p className="text-red-200 text-xs">
+              Personal LLM API keys not connected, and no shared free-report keys are available right now.
+            </p>
+            <Link
+              to="/profile"
+              className="flex-shrink-0 text-xs font-medium text-red-200 hover:text-white underline underline-offset-2"
+            >
+              Add API key
+            </Link>
+          </div>
+        </div>
+      )}
+
+      <div className="border-b border-slate-800/80 bg-slate-900/95">
+        <div className="max-w-[90%] mx-auto px-4">
+          <div className="flex items-center gap-6 py-3">
+            <button
+              type="button"
+              onClick={() => setPageTab('analysis')}
+              className={`relative pb-2 text-sm font-medium transition-colors ${
+                pageTab === 'analysis'
+                  ? 'text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Analysis
+              <span
+                className={`absolute inset-x-0 bottom-0 h-0.5 rounded-full transition-colors ${
+                  pageTab === 'analysis' ? 'bg-amber-400' : 'bg-transparent'
+                }`}
+              />
+            </button>
+            <button
+              type="button"
+              onClick={() => setPageTab('import')}
+              className={`relative pb-2 text-sm font-medium transition-colors ${
+                pageTab === 'import'
+                  ? 'text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Data Import
+              <span
+                className={`absolute inset-x-0 bottom-0 h-0.5 rounded-full transition-colors ${
+                  pageTab === 'import' ? 'bg-amber-400' : 'bg-transparent'
+                }`}
+              />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <main className="max-w-[90%] mx-auto px-4 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left column: Steps 1-4 */}
           <div className="flex flex-col gap-5">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                <PlusCircle className="w-5 h-5 text-amber-500" />
+              <h2 className="text-lg font-semibold text-white">
                 {pageTab === 'analysis' ? 'Analysis' : 'Data Import'}
               </h2>
-              <div className="flex items-center bg-slate-800 border border-slate-700 rounded-lg p-0.5 text-xs font-medium">
-                <button
-                  onClick={() => setPageTab('analysis')}
-                  className={`px-3 py-1.5 rounded-md transition-colors ${
-                    pageTab === 'analysis'
-                      ? 'bg-slate-200 text-slate-900'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Analysis
-                </button>
-                <button
-                  onClick={() => setPageTab('import')}
-                  className={`px-3 py-1.5 rounded-md transition-colors ${
-                    pageTab === 'import'
-                      ? 'bg-slate-200 text-slate-900'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Data Import
-                </button>
-              </div>
             </div>
 
             {pageTab === 'analysis' && (
@@ -874,26 +1107,65 @@ export default function LapSelectorPage() {
               {carsLoading ? (
                 <div className="h-10 bg-slate-700 rounded-lg animate-pulse" />
               ) : (
-                <select
-                  className="select"
-                  value={selectedCarId ?? ''}
-                  onChange={(e) => handleCarChange(e.target.value || null)}
-                  data-testid="car-select"
-                >
-                  <option value="">-- Choose a car --</option>
-                  {cars.filter((c) => recentCarIds.has(c.id)).length > 0 && (
-                    <optgroup label="Recent">
-                      {cars.filter((c) => recentCarIds.has(c.id)).map((car) => (
-                        <option key={car.id} value={car.id}>{car.name}</option>
-                      ))}
-                    </optgroup>
+                <div className="relative">
+                  <input
+                    className="select"
+                    value={carQuery}
+                    onChange={(e) => handleCarInputChange(e.target.value)}
+                    onFocus={() => setShowCarSuggestions(true)}
+                    onBlur={() => window.setTimeout(() => setShowCarSuggestions(false), 120)}
+                    placeholder="Start typing a car name"
+                    autoComplete="off"
+                    data-testid="car-select"
+                  />
+                  {showCarSuggestions && (filteredRecentCars.length > 0 || filteredOtherCars.length > 0) && (
+                    <div className="absolute z-20 mt-2 w-full overflow-hidden rounded-xl border border-slate-700 bg-slate-800 shadow-2xl">
+                      {filteredRecentCars.length > 0 && (
+                        <div>
+                          <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-800/90 border-b border-slate-700/60">
+                            Recent
+                          </div>
+                          {filteredRecentCars.map((car) => (
+                            <button
+                              key={`recent-${car.id}`}
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                selectCarOption(car)
+                              }}
+                              className="w-full px-3 py-2.5 text-left text-sm text-slate-200 hover:bg-slate-700 transition-colors"
+                            >
+                              {car.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {filteredOtherCars.length > 0 && (
+                        <div>
+                          <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-800/90 border-y border-slate-700/60">
+                            All
+                          </div>
+                          {filteredOtherCars.map((car) => (
+                            <button
+                              key={`all-${car.id}`}
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                selectCarOption(car)
+                              }}
+                              className="w-full px-3 py-2.5 text-left text-sm text-slate-200 hover:bg-slate-700 transition-colors"
+                            >
+                              {car.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
-                  <optgroup label={cars.some((c) => recentCarIds.has(c.id)) ? 'All' : ''}>
-                    {cars.filter((c) => !recentCarIds.has(c.id)).map((car) => (
-                      <option key={car.id} value={car.id}>{car.name}</option>
-                    ))}
-                  </optgroup>
-                </select>
+                  <p className="mt-2 text-[11px] text-slate-500">
+                    Type to search, then pick a matching car from the suggestions.
+                  </p>
+                </div>
               )}
             </div>
 
@@ -919,26 +1191,65 @@ export default function LapSelectorPage() {
               {tracksLoading ? (
                 <div className="h-10 bg-slate-700 rounded-lg animate-pulse" />
               ) : (
-                <select
-                  className="select"
-                  value={selectedTrackId ?? ''}
-                  onChange={(e) => handleTrackChange(e.target.value || null)}
-                  data-testid="track-select"
-                >
-                  <option value="">-- Choose a track --</option>
-                  {tracks.filter((t) => recentTrackIds.has(t.id)).length > 0 && (
-                    <optgroup label="Recent">
-                      {tracks.filter((t) => recentTrackIds.has(t.id)).map((track) => (
-                        <option key={track.id} value={track.id}>{formatTrackName(track)}</option>
-                      ))}
-                    </optgroup>
+                <div className="relative">
+                  <input
+                    className="select"
+                    value={trackQuery}
+                    onChange={(e) => handleTrackInputChange(e.target.value)}
+                    onFocus={() => setShowTrackSuggestions(true)}
+                    onBlur={() => window.setTimeout(() => setShowTrackSuggestions(false), 120)}
+                    placeholder="Start typing a track name"
+                    autoComplete="off"
+                    data-testid="track-select"
+                  />
+                  {showTrackSuggestions && (filteredRecentTracks.length > 0 || filteredOtherTracks.length > 0) && (
+                    <div className="absolute z-20 mt-2 w-full overflow-hidden rounded-xl border border-slate-700 bg-slate-800 shadow-2xl">
+                      {filteredRecentTracks.length > 0 && (
+                        <div>
+                          <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-800/90 border-b border-slate-700/60">
+                            Recent
+                          </div>
+                          {filteredRecentTracks.map((track) => (
+                            <button
+                              key={`recent-${track.id}`}
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                selectTrackOption(track)
+                              }}
+                              className="w-full px-3 py-2.5 text-left text-sm text-slate-200 hover:bg-slate-700 transition-colors"
+                            >
+                              {formatTrackName(track)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {filteredOtherTracks.length > 0 && (
+                        <div>
+                          <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-800/90 border-y border-slate-700/60">
+                            All
+                          </div>
+                          {filteredOtherTracks.map((track) => (
+                            <button
+                              key={`all-${track.id}`}
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                selectTrackOption(track)
+                              }}
+                              className="w-full px-3 py-2.5 text-left text-sm text-slate-200 hover:bg-slate-700 transition-colors"
+                            >
+                              {formatTrackName(track)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
-                  <optgroup label={tracks.some((t) => recentTrackIds.has(t.id)) ? 'All' : ''}>
-                    {tracks.filter((t) => !recentTrackIds.has(t.id)).map((track) => (
-                      <option key={track.id} value={track.id}>{formatTrackName(track)}</option>
-                    ))}
-                  </optgroup>
-                </select>
+                  <p className="mt-2 text-[11px] text-slate-500">
+                    Type to search, then pick a matching track from the suggestions.
+                  </p>
+                </div>
               )}
             </div>
 
@@ -995,6 +1306,8 @@ export default function LapSelectorPage() {
                           const isSelected = selectedSessionId === session.id
                           const isExpanded = expandedSessionId === session.id
                           const hasEnoughLaps = session.laps.length >= 2
+                          const { consecutiveLaps, analysisLaps, fastestLap } = buildSessionAnalysisLaps(session.laps, 5)
+                          const fastestOutsideWindow = fastestLap != null && !consecutiveLaps.some((lap) => lap.id === fastestLap.id)
                           return (
                             <div key={session.id}>
                               <div
@@ -1022,6 +1335,11 @@ export default function LapSelectorPage() {
                                     {session.lap_count} lap{session.lap_count !== 1 ? 's' : ''}
                                     {!hasEnoughLaps && ' (need ≥ 2)'}
                                   </span>
+                                  {session.laps.length > 5 && (
+                                    <span className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">
+                                      {fastestOutsideWindow ? 'uses 5 consecutive laps + fastest lap' : 'uses 5 consecutive laps'}
+                                    </span>
+                                  )}
                                   <span className="text-slate-500 text-xs flex items-center gap-1">
                                     <Calendar className="w-3 h-3" />
                                     {formatDate(session.date)}
@@ -1048,19 +1366,48 @@ export default function LapSelectorPage() {
                               {/* Expanded laps within session */}
                               {isExpanded && session.laps.length > 0 && (
                                 <div className="ml-4 mt-1 mb-1 border-l border-slate-700 pl-3 space-y-0.5">
-                                  {[...session.laps]
-                                    .sort((a, b) => parseLapTime(a.lap_time) - parseLapTime(b.lap_time))
-                                    .map((lap, idx) => (
-                                      <div key={lap.id} className="flex items-center gap-3 py-1 text-xs">
-                                        <span className="text-slate-600 w-4 text-right flex-shrink-0">{idx + 1}</span>
-                                        <span className={`font-mono flex-shrink-0 ${idx === 0 ? 'text-amber-400' : 'text-slate-300'}`}>
-                                          {formatLapTime(lap.lap_time)}
+                                  {consecutiveLaps.map((lap, idx) => (
+                                    <div key={lap.id} className="flex items-center gap-3 py-1 text-xs">
+                                      <span className="text-slate-600 w-4 text-right flex-shrink-0">{idx + 1}</span>
+                                      <span className={`font-mono flex-shrink-0 ${lap.id === fastestLap?.id ? 'text-amber-400' : 'text-slate-300'}`}>
+                                        {formatLapTime(lap.lap_time)}
+                                      </span>
+                                      <span className="text-slate-500">
+                                        {formatDateTime(lap.recorded_at)}
+                                      </span>
+                                      {lap.id === fastestLap?.id && (
+                                        <span className="text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300">
+                                          fastest
+                                        </span>
+                                      )}
+                                    </div>
+                                  ))}
+                                  {fastestOutsideWindow && fastestLap && (
+                                    <div className="pt-1">
+                                      <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">
+                                        Added fastest lap
+                                      </div>
+                                      <div className="flex items-center gap-3 py-1 text-xs">
+                                        <span className="text-slate-600 w-4 text-right flex-shrink-0">{analysisLaps.length}</span>
+                                        <span className="font-mono flex-shrink-0 text-amber-400">
+                                          {formatLapTime(fastestLap.lap_time)}
                                         </span>
                                         <span className="text-slate-500">
-                                          {formatDateTime(lap.recorded_at)}
+                                          {formatDateTime(fastestLap.recorded_at)}
+                                        </span>
+                                        <span className="text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300">
+                                          fastest
                                         </span>
                                       </div>
-                                    ))}
+                                    </div>
+                                  )}
+                                  {session.laps.length > 5 && (
+                                    <div className="pt-1 text-[11px] text-slate-500">
+                                      {fastestOutsideWindow
+                                        ? 'Showing the 5-lap consecutive run plus the session fastest lap used for analysis.'
+                                        : 'Showing the 5-lap consecutive run used for analysis.'}
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -1523,37 +1870,33 @@ export default function LapSelectorPage() {
 
             {/* Model Selector */}
             {pageTab === 'analysis' && selectedCarId && selectedTrackId && (
-              <div className="flex rounded-xl overflow-hidden border border-slate-600">
-                <button
-                  onClick={() => setLlmModel('claude')}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium transition-colors ${
-                    llmModel === 'claude'
-                      ? 'bg-amber-500 text-slate-900'
-                      : 'bg-slate-700 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  {/* Anthropic diamond icon */}
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M13.827 3.52h3.603L12 20.48 6.57 3.52h3.602l1.828 6.318z"/>
-                    <path d="M6.396 3.52H2.793L8.222 20.48h3.603z" opacity=".6"/>
-                  </svg>
-                  Claude
-                </button>
-                <button
-                  onClick={() => setLlmModel('gemini')}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium transition-colors ${
-                    llmModel === 'gemini'
-                      ? 'bg-blue-500 text-white'
-                      : 'bg-slate-700 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  {/* Gemini star icon */}
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
-                    <path d="M12 2a10 10 0 0 0 0 20A10 10 0 0 0 12 2zm0 2c.89 0 1.73.16 2.5.45L12 12 9.5 4.45C10.27 4.16 11.11 4 12 4zm-4.24 1.28L12 12 4.45 9.5A7.95 7.95 0 0 1 7.76 5.28zm-3.31 4.22L12 12 4 12a8 8 0 0 1 .45-2.5zM4 12h8l-7.55 2.5A7.95 7.95 0 0 1 4 12zm3.76 6.72L12 12l-4.24 6.72A7.95 7.95 0 0 1 7.76 18.72zM12 20c-.89 0-1.73-.16-2.5-.45L12 12l2.5 7.55C13.73 19.84 12.89 20 12 20zm4.24-1.28L12 12l7.55 2.5a7.95 7.95 0 0 1-3.31 4.22zm3.31-4.22L12 12h8c0 .89-.16 1.73-.45 2.5zM20 12h-8l7.55-2.5c.29.77.45 1.61.45 2.5zm-3.76-6.72L12 12l4.24-6.72a7.95 7.95 0 0 1 3.31 4.22z" opacity=".4"/>
-                  </svg>
-                  Gemini
-                </button>
+              <div className="space-y-3">
+                {llmAccess && !selectedProviderAccess?.can_generate && (
+                  <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-300 text-sm">
+                    {selectedProviderAccess?.disabled_reason === 'shared_quota_exhausted'
+                      ? `The free shared ${selectedProviderAccess?.label ?? 'selected model'} quota has been reached for the last 24 hours. Add your personal API key in Profile or wait for quota to refresh.`
+                      : `${selectedProviderAccess?.label ?? 'Selected model'} is not available. Add your personal API key in Profile before generating reports.`}
+                  </div>
+                )}
+                {hasPersonalLlmKey && personalProviderOptions.length > 0 && (
+                  <div className="space-y-1">
+                    <label htmlFor="llm-model" className="block text-xs text-slate-500">
+                      Model
+                    </label>
+                    <select
+                      id="llm-model"
+                      value={llmModel}
+                      onChange={(e) => setLlmModel(e.target.value as 'claude' | 'gemini')}
+                      className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-amber-500"
+                    >
+                      {personalProviderOptions.map((provider) => (
+                        <option key={provider} value={provider}>
+                          {llmAccess?.providers?.[provider]?.label ?? provider}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1695,14 +2038,14 @@ export default function LapSelectorPage() {
                               type="button"
                               onClick={() => canApply && applyRecentFilters(carId, trackId)}
                               disabled={!canApply}
-                              className="text-[11px] px-2.5 py-1 rounded-md border border-slate-700 bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                              className="text-[11px] px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/15 text-amber-200 font-semibold hover:bg-amber-500 hover:text-slate-950 hover:border-amber-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-amber-500/15 disabled:hover:text-amber-200 transition-colors"
                               title={
                                 canApply
-                                  ? 'Filter by this car and track'
-                                  : 'Car or track not available for filtering'
+                                  ? 'Select this car and track'
+                                  : 'Car or track not available for selection'
                               }
                             >
-                              Filter
+                              Select
                             </button>
                           </div>
                         </div>

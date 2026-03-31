@@ -24,6 +24,7 @@ from app.auth.crypto import decrypt
 from app.auth.jwt import get_current_user
 from app.config import settings
 from app.database import get_db
+from app.llm_access import require_llm_provider_access
 from app.models.analysis import AnalysisResult
 from app.models.telemetry_car import TelemetryCar
 from app.models.telemetry_track import TelemetryTrack
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 class LapMetaInput(BaseModel):
     class LapConditionsInput(BaseModel):
         summary: str | None = None
+        setup_type: str | None = None
         weather: str | None = None
         track_state: str | None = None
         air_temp_c: float | None = None
@@ -241,6 +243,13 @@ async def run_analysis(
                     enriched["laps_metadata"] = [_normalize_lap_meta_dict(m.model_dump()) for m in body.laps_metadata]
                 return enriched
 
+    try:
+        provider_access = await require_llm_provider_access(current_user, body.llm_provider, db)
+    except PermissionError as exc:
+        detail = str(exc)
+        status_code = status.HTTP_429_TOO_MANY_REQUESTS if "quota" in detail.lower() else status.HTTP_403_FORBIDDEN
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
     # ----- Queue size check -----
     active_count = await get_active_job_count(db)
     if active_count >= settings.ANALYSIS_WORKER_POOL_SIZE:
@@ -274,6 +283,8 @@ async def run_analysis(
             "laps_metadata": laps_metadata,
             "llm_provider": body.llm_provider,
             "prompt_version": body.prompt_version,
+            "llm_key_source": provider_access["key_source"],
+            "used_shared_provider": provider_access["key_source"] == "shared",
             "uploaded_telemetry": uploaded_telemetry,
         },
         created_at=now,
@@ -300,8 +311,14 @@ async def inspect_uploaded_telemetry(
     )
     car_candidates = [name for name in car_result.scalars().all() if name]
     track_candidates = [name for name in track_result.scalars().all() if name]
-    claude_key = decrypt(current_user.claude_api_key_enc) if current_user.claude_api_key_enc else settings.CLAUDE_API_KEY
-    gemini_key = decrypt(current_user.gemini_api_key_enc) if current_user.gemini_api_key_enc else settings.GEMINI_API_KEY
+    claude_key = decrypt(current_user.claude_api_key_enc) if current_user.claude_api_key_enc else ""
+    gemini_key = decrypt(current_user.gemini_api_key_enc) if current_user.gemini_api_key_enc else ""
+
+    if not claude_key and not gemini_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="A personal Claude or Gemini API key is required in Profile before using telemetry inspection.",
+        )
 
     results: list[dict[str, Any]] = []
     for file in files:
@@ -357,6 +374,22 @@ async def regenerate_analysis(
             detail=f"Analysis queue is full ({active_count}/{settings.ANALYSIS_WORKER_POOL_SIZE} active jobs).",
         )
 
+    owner = current_user
+    if str(record.user_id) != str(current_user.id):
+        owner_result = await db.execute(select(User).where(User.id == record.user_id))
+        owner = owner_result.scalar_one_or_none()
+        if owner is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis owner not found")
+
+    input_data = record.input_json or {}
+    llm_provider = input_data.get("llm_provider") or (record.result_json or {}).get("llm_provider") or "claude"
+    try:
+        provider_access = await require_llm_provider_access(owner, llm_provider, db)
+    except PermissionError as exc:
+        detail = str(exc)
+        status_code = status.HTTP_429_TOO_MANY_REQUESTS if "quota" in detail.lower() else status.HTTP_403_FORBIDDEN
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
     # Preserve input_json (analysis_mode + laps_metadata); backfill from result_json for old records
     existing_rj = record.result_json or {}
     if not record.input_json:
@@ -364,6 +397,12 @@ async def regenerate_analysis(
             "analysis_mode": existing_rj.get("analysis_mode", "vs_reference"),
             "laps_metadata": existing_rj.get("laps_metadata"),
         }
+    record.input_json = {
+        **(record.input_json or {}),
+        "llm_provider": llm_provider,
+        "llm_key_source": provider_access["key_source"],
+        "used_shared_provider": provider_access["key_source"] == "shared",
+    }
 
     record.status = "enqueued"
     record.result_json = {}
@@ -451,10 +490,12 @@ async def delete_analysis(
     result = await db.execute(
         select(AnalysisResult).where(
             AnalysisResult.id == uid,
-            AnalysisResult.user_id == current_user.id,
         )
     )
     record = result.scalar_one_or_none()
+
+    if record is not None and not (current_user.role == "admin" or record.user_id == current_user.id):
+        record = None
 
     if record is None:
         raise HTTPException(
@@ -463,6 +504,7 @@ async def delete_analysis(
         )
 
     await db.delete(record)
+    await db.commit()
 
 
 @router.get("/{analysis_id}")
