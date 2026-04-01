@@ -10,20 +10,104 @@ import logging
 import time
 from typing import Any
 
+from sqlalchemy import select
+
 from app.analysis.llm import analyze_with_claude, CLAUDE_MODEL
 from app.analysis.gemini import analyze_with_gemini, GEMINI_MODEL
 from app.analysis.prompts_manager import resolve_prompt_name
 from app.analysis.processor import TelemetryProcessor
 from app.analysis.zones import detect_weak_zones
 from app.auth.crypto import decrypt
+from app.models.analysis_telemetry_file import AnalysisTelemetryFile
 from app.models.user import User
-from app.telemetry.catalog import load_csv_for_lap_id
+from app.telemetry.catalog import compress_csv, decompress_csv, load_csv_for_lap_id
 
 logger = logging.getLogger(__name__)
+_MAX_REFERENCE_LAPS = 5
+
+
+def _guess_report_telemetry_filename(lap_id: str, meta: dict[str, Any] | None) -> str:
+    if meta and meta.get("file_name"):
+        return str(meta["file_name"])
+    suffix = lap_id.split(":", 1)[-1].replace("/", "_")
+    role = str(meta.get("role") or "lap") if meta else "lap"
+    driver = str(meta.get("driver_name") or "").strip().replace(" ", "_")
+    driver_part = f"-{driver}" if driver else ""
+    return f"{role}{driver_part}-{suffix}.csv"
+
+
+async def _load_stored_report_csvs(
+    analysis_id,
+    db,
+) -> dict[str, str]:
+    result = await db.execute(
+        select(AnalysisTelemetryFile).where(AnalysisTelemetryFile.analysis_result_id == analysis_id)
+    )
+    files = result.scalars().all()
+    return {
+        row.lap_id: decompress_csv(row.csv_blob, row.compression)
+        for row in files
+    }
+
+
+async def _store_report_csvs(
+    *,
+    analysis_id,
+    all_lap_ids: list[str],
+    csv_results: list[Any],
+    laps_metadata: list[dict[str, Any]] | None,
+    db,
+) -> None:
+    meta_by_id = {str(item.get("id")): item for item in (laps_metadata or []) if item.get("id")}
+    existing = await db.execute(
+        select(AnalysisTelemetryFile).where(AnalysisTelemetryFile.analysis_result_id == analysis_id)
+    )
+    existing_by_lap = {row.lap_id: row for row in existing.scalars().all()}
+
+    for lap_id, csv_value in zip(all_lap_ids, csv_results):
+        if isinstance(csv_value, Exception):
+            continue
+        csv_text = str(csv_value or "")
+        if not csv_text.lstrip("\ufeff").strip():
+            continue
+        meta = meta_by_id.get(lap_id)
+        file_name = _guess_report_telemetry_filename(lap_id, meta)
+        row = existing_by_lap.get(lap_id)
+        if row is None:
+            db.add(AnalysisTelemetryFile(
+                analysis_result_id=analysis_id,
+                lap_id=lap_id,
+                file_name=file_name,
+                compression="gzip",
+                csv_blob=compress_csv(csv_text),
+            ))
+            continue
+        row.file_name = file_name
+        row.compression = "gzip"
+        row.csv_blob = compress_csv(csv_text)
+
+
+def _enrich_laps_metadata_with_report_links(
+    laps_metadata: list[dict[str, Any]] | None,
+    analysis_id,
+) -> list[dict[str, Any]] | None:
+    if not laps_metadata:
+        return laps_metadata
+    enriched: list[dict[str, Any]] = []
+    for item in laps_metadata:
+        lap_id = str(item.get("id") or "")
+        next_item = dict(item)
+        next_item["download_path"] = f"/api/analysis/{analysis_id}/telemetry/{lap_id}"
+        if lap_id.startswith("garage61:"):
+            raw_id = lap_id.split(":", 1)[1]
+            next_item["garage61_url"] = f"https://garage61.net/app/analyze;t={raw_id}"
+        enriched.append(next_item)
+    return enriched
 
 
 async def execute_analysis(
     *,
+    analysis_id,
     lap_id: str,
     reference_lap_ids: list[str],
     car_name: str,
@@ -42,35 +126,59 @@ async def execute_analysis(
     """
     model_name = GEMINI_MODEL if llm_provider == "gemini" else CLAUDE_MODEL
     effective_prompt_version = resolve_prompt_name(prompt_version, llm_provider)
-    all_lap_ids = [lap_id] + list(reference_lap_ids)
+    unique_reference_lap_ids: list[str] = []
+    seen_lap_ids = {lap_id}
+    for ref_id in reference_lap_ids:
+        if ref_id in seen_lap_ids:
+            continue
+        unique_reference_lap_ids.append(ref_id)
+        seen_lap_ids.add(ref_id)
+        if len(unique_reference_lap_ids) >= _MAX_REFERENCE_LAPS:
+            break
+    all_lap_ids = [lap_id] + unique_reference_lap_ids
 
     logger.info(
         "Starting analysis: lap=%s refs=%s car=%r track=%r mode=%s provider=%s model=%s",
-        lap_id, reference_lap_ids, car_name, track_name, analysis_mode, llm_provider, model_name,
+        lap_id, unique_reference_lap_ids, car_name, track_name, analysis_mode, llm_provider, model_name,
     )
 
-    upload_ids = {item["id"] for item in (uploaded_telemetry or [])}
+    upload_ids = {item["id"] for item in (uploaded_telemetry or []) if item.get("id") in all_lap_ids}
     logger.debug("Fetching %d lap CSVs from telemetry sources", len(all_lap_ids))
     t0 = time.monotonic()
-    csv_results = await asyncio.gather(
-        *[
-            load_csv_for_lap_id(
-                lid,
-                user=user,
-                db=db,
-                uploaded_telemetry=uploaded_telemetry,
-            )
-            for lid in all_lap_ids
-        ],
-        return_exceptions=True,
-    )
+    stored_csvs = await _load_stored_report_csvs(analysis_id, db)
+    missing_lap_ids = [lid for lid in all_lap_ids if lid not in stored_csvs]
+    fetched_results: dict[str, Any] = {}
+    if missing_lap_ids:
+        fetched_values = await asyncio.gather(
+            *[
+                load_csv_for_lap_id(
+                    lid,
+                    user=user,
+                    db=db,
+                    uploaded_telemetry=uploaded_telemetry,
+                )
+                for lid in missing_lap_ids
+            ],
+            return_exceptions=True,
+        )
+        fetched_results = dict(zip(missing_lap_ids, fetched_values))
+    csv_results = [stored_csvs.get(lid, fetched_results.get(lid)) for lid in all_lap_ids]
     logger.info("CSV fetch complete in %.2fs", time.monotonic() - t0)
+    await _store_report_csvs(
+        analysis_id=analysis_id,
+        all_lap_ids=all_lap_ids,
+        csv_results=csv_results,
+        laps_metadata=laps_metadata,
+        db=db,
+    )
 
     failed_csvs = [lid for lid, r in zip(all_lap_ids, csv_results) if isinstance(r, Exception)]
     if failed_csvs:
         logger.warning("Failed to fetch CSVs for laps: %s", failed_csvs)
 
     # Build laps_metadata if not supplied
+    if laps_metadata:
+        laps_metadata = [item for item in laps_metadata if str(item.get("id")) in set(all_lap_ids)]
     if not laps_metadata:
         laps_metadata = [
             {
@@ -82,6 +190,7 @@ async def execute_analysis(
             }
             for i, lid in enumerate(all_lap_ids)
         ]
+    laps_metadata = _enrich_laps_metadata_with_report_links(laps_metadata, analysis_id)
 
     user_csv = csv_results[0]
     if isinstance(user_csv, Exception):
@@ -92,7 +201,7 @@ async def execute_analysis(
     reference_csvs = [r for r in csv_results[1:] if not isinstance(r, Exception) and r]
     logger.info(
         "CSV summary: user lap OK, %d/%d reference laps OK",
-        len(reference_csvs), len(reference_lap_ids),
+        len(reference_csvs), len(unique_reference_lap_ids),
     )
 
     # Telemetry processing
@@ -191,7 +300,7 @@ async def execute_analysis(
 
     return {
         "lap_id": lap_id,
-        "reference_lap_ids": reference_lap_ids,
+        "reference_lap_ids": unique_reference_lap_ids,
         "car_name": car_name,
         "track_name": track_name,
         "analysis_mode": analysis_mode,

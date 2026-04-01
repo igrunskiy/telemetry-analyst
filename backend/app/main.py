@@ -109,6 +109,14 @@ async def lifespan(app: FastAPI):
                 "CREATE INDEX IF NOT EXISTS ix_analysis_results_status "
                 "ON analysis_results (status)"
             ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_analysis_telemetry_files_analysis_result_id "
+                "ON analysis_telemetry_files (analysis_result_id)"
+            ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_analysis_telemetry_files_lap_id "
+                "ON analysis_telemetry_files (lap_id)"
+            ))
             # New user auth columns
             await conn.execute(text(
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR UNIQUE"

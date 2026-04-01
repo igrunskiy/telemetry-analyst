@@ -317,6 +317,7 @@ async def _process_job(job_id: uuid.UUID) -> None:
             uploaded_telemetry = input_data.get("uploaded_telemetry")
 
             result_json = await execute_analysis(
+                analysis_id=job.id,
                 lap_id=job.lap_id,
                 reference_lap_ids=job.reference_lap_ids,
                 car_name=job.car_name,

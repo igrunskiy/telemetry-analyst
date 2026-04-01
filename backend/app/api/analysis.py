@@ -26,13 +26,15 @@ from app.config import settings
 from app.database import get_db
 from app.llm_access import require_llm_provider_access
 from app.models.analysis import AnalysisResult
+from app.models.analysis_telemetry_file import AnalysisTelemetryFile
 from app.models.telemetry_car import TelemetryCar
 from app.models.telemetry_track import TelemetryTrack
 from app.models.user import User
-from app.telemetry.catalog import resolve_or_create_car, resolve_or_create_track
+from app.telemetry.catalog import decompress_csv, resolve_or_create_car, resolve_or_create_track
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 logger = logging.getLogger(__name__)
+_MAX_REFERENCE_LAPS = 5
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +170,44 @@ def _record_response(record: AnalysisResult) -> dict[str, Any]:
         return _failed_response(record)
     return _enqueued_response(record)
 
+
+@router.get("/{analysis_id}/telemetry/{lap_id}")
+async def download_analysis_telemetry(
+    analysis_id: str,
+    lap_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        uid = uuid.UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID format")
+
+    query = select(AnalysisResult).where(AnalysisResult.id == uid)
+    if current_user.role != "admin":
+        query = query.where(AnalysisResult.user_id == current_user.id)
+
+    result = await db.execute(query)
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not found")
+
+    file_result = await db.execute(
+        select(AnalysisTelemetryFile).where(
+            AnalysisTelemetryFile.analysis_result_id == record.id,
+            AnalysisTelemetryFile.lap_id == lap_id,
+        )
+    )
+    telemetry_file = file_result.scalar_one_or_none()
+    if telemetry_file is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stored telemetry not found")
+
+    csv_text = decompress_csv(telemetry_file.csv_blob, telemetry_file.compression)
+    headers = {
+        "Content-Disposition": f'attachment; filename="{telemetry_file.file_name}"'
+    }
+    return Response(content=csv_text, media_type="text/csv; charset=utf-8", headers=headers)
+
 def _resolve_uploaded_context(body: RunAnalysisRequest) -> tuple[str, str, list[dict[str, Any]] | None]:
     uploaded = [_normalize_lap_meta_dict(item.model_dump()) for item in (body.uploaded_telemetry or [])]
     if not uploaded:
@@ -190,6 +230,38 @@ def _resolve_uploaded_context(body: RunAnalysisRequest) -> tuple[str, str, list[
         )
 
     return car_name, track_name, uploaded
+
+
+def _normalize_requested_laps(
+    lap_id: str,
+    reference_lap_ids: list[str],
+    analysis_mode: str,
+    laps_metadata: list[dict[str, Any]] | None,
+    uploaded_telemetry: list[dict[str, Any]] | None,
+) -> tuple[list[str], list[dict[str, Any]] | None, list[dict[str, Any]] | None]:
+    seen: set[str] = {lap_id}
+    normalized_refs: list[str] = []
+    for ref_id in reference_lap_ids:
+        if ref_id in seen:
+            continue
+        normalized_refs.append(ref_id)
+        seen.add(ref_id)
+        if len(normalized_refs) >= _MAX_REFERENCE_LAPS:
+            break
+
+    if len(reference_lap_ids) > len(normalized_refs):
+        logger.warning(
+            "Trimming analysis lap set: mode=%s primary=%s requested_refs=%d kept_refs=%d",
+            analysis_mode,
+            lap_id,
+            len(reference_lap_ids),
+            len(normalized_refs),
+        )
+
+    allowed_ids = {lap_id, *normalized_refs}
+    filtered_meta = [item for item in (laps_metadata or []) if str(item.get("id")) in allowed_ids] or None
+    filtered_uploads = [item for item in (uploaded_telemetry or []) if str(item.get("id")) in allowed_ids] or None
+    return normalized_refs, filtered_meta, filtered_uploads
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +297,16 @@ async def run_analysis(
         )
 
     car_name, track_name, uploaded_telemetry = _resolve_uploaded_context(body)
+    laps_metadata = (
+        [_normalize_lap_meta_dict(m.model_dump()) for m in body.laps_metadata] if body.laps_metadata else None
+    )
+    normalized_refs, laps_metadata, uploaded_telemetry = _normalize_requested_laps(
+        body.lap_id,
+        body.reference_lap_ids,
+        body.analysis_mode,
+        laps_metadata,
+        uploaded_telemetry,
+    )
 
     # ----- Cache lookup (only match completed records) -----
     if not uploaded_telemetry:
@@ -236,11 +318,11 @@ async def run_analysis(
             )
         )
         for record in cache_hit.scalars().all():
-            if set(record.reference_lap_ids) == set(body.reference_lap_ids):
+            if set(record.reference_lap_ids) == set(normalized_refs):
                 response.status_code = status.HTTP_200_OK
                 enriched = _completed_response(record)
-                if body.laps_metadata:
-                    enriched["laps_metadata"] = [_normalize_lap_meta_dict(m.model_dump()) for m in body.laps_metadata]
+                if laps_metadata:
+                    enriched["laps_metadata"] = laps_metadata
                 return enriched
 
     try:
@@ -262,16 +344,13 @@ async def run_analysis(
         )
 
     # ----- Create enqueued record -----
-    laps_metadata = (
-        [_normalize_lap_meta_dict(m.model_dump()) for m in body.laps_metadata] if body.laps_metadata else None
-    )
     now = datetime.now(timezone.utc)
     car = await resolve_or_create_car(db, car_name)
     track = await resolve_or_create_track(db, track_name)
     record = AnalysisResult(
         user_id=current_user.id,
         lap_id=body.lap_id,
-        reference_lap_ids=body.reference_lap_ids,
+        reference_lap_ids=normalized_refs,
         car_id=car.id,
         track_id=track.id,
         car_name=car_name,

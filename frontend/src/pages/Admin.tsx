@@ -222,76 +222,74 @@ function UserRow({
   if (user.has_custom_gemini_key) llmProviders.push('Gemini')
 
   return (
-    <div className={`bg-slate-800 border rounded-xl px-4 py-3 flex items-center gap-4 ${
+    <div className={`bg-slate-800 border rounded-xl px-3 py-2.5 flex items-center gap-3 ${
       user.is_suspended ? 'border-red-500/30 opacity-70' : 'border-slate-700'
     }`}>
       {/* Avatar placeholder */}
-      <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center flex-shrink-0 text-sm font-semibold text-slate-300">
+      <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center flex-shrink-0 text-xs font-semibold text-slate-300">
         {user.display_name?.charAt(0).toUpperCase() ?? '?'}
       </div>
 
       {/* Info */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
+      <div className="flex-1 min-w-0 space-y-1">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="font-medium text-sm">{user.display_name ?? 'No name'}</span>
           {user.username && (
             <span className="text-slate-500 text-xs">@{user.username}</span>
           )}
           {user.is_suspended && (
-            <span className="text-xs text-red-400 bg-red-400/10 px-2 py-0.5 rounded-full">suspended</span>
+            <span className="text-[11px] text-red-400 bg-red-400/10 px-1.5 py-0.5 rounded-full">suspended</span>
           )}
-        </div>
-        <div className="flex items-center gap-2 mt-0.5">
-          {user.email && <span className="text-slate-400 text-xs">{user.email}</span>}
-          <span className="text-slate-600 text-xs">{authMethods.join(', ')}</span>
-          <span className="text-slate-600 text-xs">·</span>
-          <span className="text-slate-600 text-xs">
-            last seen {user.last_login_at ? new Date(user.last_login_at).toLocaleDateString() : 'never'}
-          </span>
-        </div>
-        <div className="flex items-center gap-2 mt-2 flex-wrap">
-          <span className="text-[11px] uppercase tracking-wide text-slate-500">LLM Keys</span>
           {llmProviders.length > 0 ? (
             llmProviders.map((provider) => (
               <span
                 key={provider}
-                className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400"
+                className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400"
               >
                 {provider}
               </span>
             ))
           ) : (
-            <span className="text-xs text-slate-500">none connected</span>
+            <span className="text-[10px] text-slate-500 uppercase tracking-wide">no llm key</span>
           )}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap text-xs">
+          {user.email && <span className="text-slate-400 truncate max-w-[18rem]">{user.email}</span>}
+          {user.email && <span className="text-slate-700">·</span>}
+          <span className="text-slate-500">{authMethods.join(', ')}</span>
+          <span className="text-slate-700">·</span>
+          <span className="text-slate-600 text-xs">
+            last seen {user.last_login_at ? new Date(user.last_login_at).toLocaleDateString() : 'never'}
+          </span>
         </div>
       </div>
 
-      {/* Role selector */}
-      <select
-        value={user.role}
-        onChange={e => onRoleChange(e.target.value as 'admin' | 'user')}
-        className="bg-slate-900 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-amber-500"
-      >
-        <option value="user">user</option>
-        <option value="admin">admin</option>
-      </select>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <select
+          value={user.role}
+          onChange={e => onRoleChange(e.target.value as 'admin' | 'user')}
+          className="bg-slate-900 border border-slate-700 text-slate-300 text-[11px] rounded-lg px-2 py-1.5 focus:outline-none focus:border-amber-500"
+        >
+          <option value="user">user</option>
+          <option value="admin">admin</option>
+        </select>
 
-      {/* Suspend toggle */}
-      <button
-        onClick={() => onSuspend(!user.is_suspended)}
-        title={user.is_suspended ? 'Unsuspend account' : 'Suspend account'}
-        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-          user.is_suspended
-            ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
-            : 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
-        }`}
-      >
-        {user.is_suspended ? (
-          <><Check className="w-3 h-3" /> Reinstate</>
-        ) : (
-          <><X className="w-3 h-3" /> Suspend</>
-        )}
-      </button>
+        <button
+          onClick={() => onSuspend(!user.is_suspended)}
+          title={user.is_suspended ? 'Unsuspend account' : 'Suspend account'}
+          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
+            user.is_suspended
+              ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+              : 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
+          }`}
+        >
+          {user.is_suspended ? (
+            <><Check className="w-3 h-3" /> Reinstate</>
+          ) : (
+            <><X className="w-3 h-3" /> Suspend</>
+          )}
+        </button>
+      </div>
     </div>
   )
 }

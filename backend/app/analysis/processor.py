@@ -87,6 +87,92 @@ DEFAULT_TRACK_LENGTH_M = 3000.0
 
 
 class TelemetryProcessor:
+    def _majority_filter_gears(self, values: list[float], radius: int = 4) -> list[float]:
+        """Apply a short-window majority filter to suppress brief gear blips."""
+        if len(values) < 3:
+            return values
+
+        filtered = list(values)
+        n = len(values)
+        for i in range(n):
+            lo = max(0, i - radius)
+            hi = min(n, i + radius + 1)
+            window = [int(v) for v in values[lo:hi] if v is not None]
+            if not window:
+                continue
+            counts: dict[int, int] = {}
+            for gear in window:
+                counts[gear] = counts.get(gear, 0) + 1
+            filtered[i] = float(max(counts.items(), key=lambda item: (item[1], item[0]))[0])
+        return filtered
+
+    def _enforce_single_step_shifts(self, values: list[float]) -> list[float]:
+        """Clamp impossible gear jumps so adjacent samples never skip more than one gear."""
+        if len(values) < 2:
+            return values
+
+        adjusted = list(values)
+        for i in range(1, len(adjusted)):
+            prev = adjusted[i - 1]
+            current = adjusted[i]
+            if prev is None or current is None:
+                continue
+            jump = current - prev
+            if abs(jump) > 1:
+                adjusted[i] = prev + (1 if jump > 0 else -1)
+        return adjusted
+
+    def _clean_gear_series(self, series: pd.Series) -> pd.Series:
+        """
+        Clean interpolated gear data for charting.
+
+        Gear is discrete, but interpolation produces fractional values and
+        occasional tiny one-sample drops between two stable gears. Snap to the
+        nearest integer gear and collapse very short runs that are surrounded by
+        the same neighbouring gear.
+        """
+        if series.empty:
+            return series
+
+        cleaned = pd.to_numeric(series, errors="coerce")
+        cleaned = cleaned.ffill().bfill()
+        if cleaned.isna().all():
+            return cleaned
+
+        cleaned = cleaned.round()
+
+        values = cleaned.tolist()
+        n = len(values)
+        if n < 3:
+            return pd.Series(self._enforce_single_step_shifts(values), index=series.index, dtype="float64")
+
+        run_start = 0
+        while run_start < n:
+            run_end = run_start
+            while run_end + 1 < n and values[run_end + 1] == values[run_start]:
+                run_end += 1
+
+            run_length = run_end - run_start + 1
+            prev_value = values[run_start - 1] if run_start > 0 else None
+            next_value = values[run_end + 1] if run_end + 1 < n else None
+
+            if (
+                run_length <= 2
+                and prev_value is not None
+                and next_value is not None
+                and prev_value == next_value
+                and values[run_start] != prev_value
+            ):
+                for idx in range(run_start, run_end + 1):
+                    values[idx] = prev_value
+
+            run_start = run_end + 1
+
+        values = self._enforce_single_step_shifts(values)
+        values = self._majority_filter_gears(values)
+        values = self._enforce_single_step_shifts(values)
+        return pd.Series(values, index=series.index, dtype="float64")
+
     # ------------------------------------------------------------------
     # Parsing
     # ------------------------------------------------------------------
@@ -185,12 +271,24 @@ class TelemetryProcessor:
             valid = df[["LapDistPct", col]].dropna()
             if len(valid) < 2:
                 interpolated[col] = np.full(INTERP_POINTS, np.nan)
+            elif col == "Gear":
+                source_dist = valid["LapDistPct"].values
+                source_values = valid[col].values
+                nearest_idx = np.searchsorted(source_dist, target_dist, side="left")
+                nearest_idx = np.clip(nearest_idx, 0, len(source_dist) - 1)
+                prev_idx = np.clip(nearest_idx - 1, 0, len(source_dist) - 1)
+                choose_prev = np.abs(target_dist - source_dist[prev_idx]) <= np.abs(source_dist[nearest_idx] - target_dist)
+                picked_idx = np.where(choose_prev, prev_idx, nearest_idx)
+                interpolated[col] = source_values[picked_idx]
             else:
                 interpolated[col] = np.interp(
                     target_dist,
                     valid["LapDistPct"].values,
                     valid[col].values,
                 )
+
+        if "Gear" in interpolated:
+            interpolated["Gear"] = self._clean_gear_series(pd.Series(interpolated["Gear"])).values
 
         return pd.DataFrame(interpolated)
 

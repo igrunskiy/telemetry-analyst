@@ -60,8 +60,7 @@ async def exchange_code(code: str, code_verifier: str | None) -> dict:
             payload["client_secret"] = settings.GARAGE61_CLIENT_SECRET
             logger.info("Confidential client: sending client_secret")
         elif _is_public_local_client():
-            payload["client_secret"] = ""
-            logger.info("Public localhost client: sending empty client_secret")
+            logger.info("Public localhost client: omitting empty client_secret")
         else:
             raise RuntimeError(
                 "GARAGE61_CLIENT_SECRET is required for non-localhost Garage61 OAuth token exchange"
@@ -103,8 +102,7 @@ async def refresh_access_token(refresh_token: str) -> dict:
             payload["client_secret"] = settings.GARAGE61_CLIENT_SECRET
             logger.info("Confidential client: sending client_secret for refresh")
         elif _is_public_local_client():
-            payload["client_secret"] = ""
-            logger.info("Public localhost client: sending empty client_secret for refresh")
+            logger.info("Public localhost client: omitting empty client_secret for refresh")
         else:
             raise RuntimeError(
                 "GARAGE61_CLIENT_SECRET is required for non-localhost Garage61 OAuth token refresh"

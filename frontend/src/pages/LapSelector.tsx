@@ -346,12 +346,14 @@ export default function LapSelectorPage() {
     queryKey: ['cars'],
     queryFn: getCars,
     enabled: true,
+    staleTime: 5 * 60 * 1000,
   })
 
   const { data: tracks = [], isLoading: tracksLoading } = useQuery({
     queryKey: ['tracks'],
     queryFn: getTracks,
     enabled: true,
+    staleTime: 5 * 60 * 1000,
   })
 
   const { data: myLaps = [], isLoading: myLapsLoading } = useQuery({
@@ -377,6 +379,7 @@ export default function LapSelectorPage() {
   const { data: history = [], isLoading: historyLoading } = useQuery({
     queryKey: ['analysisHistory'],
     queryFn: getAnalysisHistory,
+    staleTime: 30 * 1000,
   })
 
   const isAdmin = user?.role === 'admin'
@@ -394,19 +397,23 @@ export default function LapSelectorPage() {
         trackId: selectedTrackId,
         source: recentSourceFilter,
       }),
+    staleTime: 60 * 1000,
   })
 
   const { data: importedTelemetry = [] } = useQuery({
     queryKey: ['importedTelemetry'],
     queryFn: getImportedTelemetry,
+    staleTime: 60 * 1000,
   })
   const { data: garage61CarDictionary = [] } = useQuery({
     queryKey: ['garage61Dictionary', 'car'],
     queryFn: () => getGarage61Dictionary('car'),
+    staleTime: 10 * 60 * 1000,
   })
   const { data: garage61TrackDictionary = [] } = useQuery({
     queryKey: ['garage61Dictionary', 'track'],
     queryFn: () => getGarage61Dictionary('track'),
+    staleTime: 10 * 60 * 1000,
   })
   const garage61CarNames = new Set(garage61CarDictionary.map((entry) => entry.name))
   const garage61TrackNames = new Set(garage61TrackDictionary.map((entry) => entry.display_name))
