@@ -32,6 +32,91 @@ const DARK = {
 const USER_COLOR = '#3b82f6' // blue-500
 const REF_COLOR = '#f97316' // orange-500
 
+function cleanGearSeries(values?: number[]): number[] {
+  if (!values || values.length === 0) return []
+
+  const cleaned = values.map((value, idx, arr) => {
+    if (!Number.isFinite(value)) {
+      return idx > 0 ? arr[idx - 1] : 0
+    }
+    return Math.round(value)
+  })
+
+  const clampSingleStepShifts = (input: number[]) => {
+    const output = [...input]
+    for (let i = 1; i < output.length; i += 1) {
+      const jump = output[i] - output[i - 1]
+      if (Math.abs(jump) > 1) {
+        output[i] = output[i - 1] + (jump > 0 ? 1 : -1)
+      }
+    }
+    return output
+  }
+
+  const majorityFilter = (input: number[], radius = 4) => {
+    if (input.length < 3) return input
+    return input.map((_, idx) => {
+      const lo = Math.max(0, idx - radius)
+      const hi = Math.min(input.length, idx + radius + 1)
+      const counts = new Map<number, number>()
+      for (const gear of input.slice(lo, hi)) {
+        counts.set(gear, (counts.get(gear) ?? 0) + 1)
+      }
+      return [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0][0]
+    })
+  }
+
+  if (cleaned.length < 3) return clampSingleStepShifts(cleaned)
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    let runStart = 0
+    while (runStart < cleaned.length) {
+      let runEnd = runStart
+      while (runEnd + 1 < cleaned.length && cleaned[runEnd + 1] === cleaned[runStart]) {
+        runEnd += 1
+      }
+
+      const runLength = runEnd - runStart + 1
+      const prevValue = runStart > 0 ? cleaned[runStart - 1] : null
+      const nextValue = runEnd + 1 < cleaned.length ? cleaned[runEnd + 1] : null
+      const runValue = cleaned[runStart]
+
+      const isShortNoiseRun = runLength <= 4 && prevValue !== null && nextValue !== null
+      const surroundingGear = prevValue !== null && nextValue !== null
+        ? Math.max(prevValue, nextValue)
+        : null
+      const neighboursAgree = prevValue !== null && nextValue !== null && Math.abs(prevValue - nextValue) <= 1
+      const impossibleLowBlip = (
+        isShortNoiseRun
+        && surroundingGear !== null
+        && surroundingGear >= 3
+        && runValue <= Math.min(prevValue!, nextValue!, 1)
+        && surroundingGear - runValue >= 2
+      )
+
+      if (
+        isShortNoiseRun
+        && (
+          (prevValue === nextValue && runValue !== prevValue)
+          || (neighboursAgree && runValue < Math.min(prevValue!, nextValue!) && Math.min(prevValue!, nextValue!) - runValue >= 2)
+          || impossibleLowBlip
+        )
+      ) {
+        const replacement = prevValue === nextValue
+          ? prevValue
+          : Math.round(((prevValue ?? 0) + (nextValue ?? 0)) / 2)
+        for (let i = runStart; i <= runEnd; i += 1) {
+          cleaned[i] = replacement
+        }
+      }
+
+      runStart = runEnd + 1
+    }
+  }
+
+  return clampSingleStepShifts(majorityFilter(clampSingleStepShifts(cleaned)))
+}
+
 function cornerShapes(corners: Corner[], yMin: number, yMax: number) {
   return corners.map((c) => ({
     type: 'line' as const,
@@ -365,6 +450,8 @@ export default function TelemetryChart({
   onHoverIndex,
   xRange,
 }: TelemetryChartProps) {
+  const cleanedUserGear = useMemo(() => cleanGearSeries(userGear), [userGear])
+  const cleanedRefGear = useMemo(() => cleanGearSeries(refGear), [refGear])
   const fullRange: [number, number] = distances.length > 0
     ? [distances[0], distances[distances.length - 1]]
     : [0, 1]
@@ -487,12 +574,12 @@ export default function TelemetryChart({
         {...sharedProps}
       />
 
-      {userGear && userGear.length > 0 && (
+      {cleanedUserGear.length > 0 && (
         <SingleChart
           title="Gear"
           yLabel="gear"
-          userValues={userGear}
-          refValues={refGear && refGear.length > 0 ? refGear : undefined}
+          userValues={cleanedUserGear}
+          refValues={cleanedRefGear.length > 0 ? cleanedRefGear : undefined}
           isStep
           height={132}
           {...sharedProps}

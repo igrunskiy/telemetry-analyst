@@ -172,6 +172,8 @@ export interface LapMeta {
   recorded_at?: string
   source?: 'garage61' | 'custom'
   conditions?: LapConditions | null
+  download_path?: string
+  garage61_url?: string
 }
 
 export interface LapConditions {

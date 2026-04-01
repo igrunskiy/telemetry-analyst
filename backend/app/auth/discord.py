@@ -25,15 +25,17 @@ def get_discord_authorization_url(state: str) -> str:
 
 async def exchange_discord_code(code: str) -> dict:
     async with httpx.AsyncClient() as client:
+        payload = {
+            "client_id": settings.DISCORD_CLIENT_ID,
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": settings.DISCORD_REDIRECT_URI,
+        }
+        if settings.DISCORD_CLIENT_SECRET:
+            payload["client_secret"] = settings.DISCORD_CLIENT_SECRET
         response = await client.post(
             DISCORD_TOKEN_URL,
-            data={
-                "client_id": settings.DISCORD_CLIENT_ID,
-                "client_secret": settings.DISCORD_CLIENT_SECRET,
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": settings.DISCORD_REDIRECT_URI,
-            },
+            data=payload,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=30,
         )

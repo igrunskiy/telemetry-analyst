@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User, RefreshCw, Share2, Check, Zap, FileText } from 'lucide-react'
+import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User, RefreshCw, Share2, Check, Zap, FileText, Download } from 'lucide-react'
 import { getAnalysis, deleteAnalysis, regenerateAnalysis, shareAnalysis, getSharedAnalysis } from '../api/client'
 import TrackMap from '../components/TrackMap'
 import TelemetryChart from '../components/TelemetryChart'
@@ -133,6 +133,13 @@ function formatBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`
 }
 
+function getGarage61AnalyzeUrl(lapId: string, explicitUrl?: string): string | null {
+  if (explicitUrl) return explicitUrl
+  if (!lapId.startsWith('garage61:')) return null
+  const rawId = lapId.split(':', 2)[1]
+  return rawId ? `https://garage61.net/app/analyze;t=${rawId}` : null
+}
+
 function getReportPhase(status?: string | null): { state: string; phase: string; detail: string } {
   switch (status) {
     case 'enqueued':
@@ -259,7 +266,7 @@ function formatElapsedLabel(startedAt?: string | null, nowMs?: number): string |
   return `${seconds}s`
 }
 
-function LapMetaTable({ laps, userLapId, isSolo }: { laps: LapMeta[]; userLapId: string; isSolo: boolean }) {
+function LapMetaTable({ laps, userLapId, isSolo, allowDownloads = true }: { laps: LapMeta[]; userLapId: string; isSolo: boolean; allowDownloads?: boolean }) {
   const userLap = laps.find((l) => l.id === userLapId || l.role === 'user')
   const userTimeMs = normalizeLapTimeMs(userLap?.lap_time ?? 0)
 
@@ -286,6 +293,7 @@ function LapMetaTable({ laps, userLapId, isSolo }: { laps: LapMeta[]; userLapId:
         </thead>
         <tbody className="divide-y divide-slate-700/30">
           {laps.map((lap) => {
+            const garage61Url = getGarage61AnalyzeUrl(lap.id, lap.garage61_url)
             const isUser = lap.role === 'user'
             const deltaMs = isUser ? null : normalizeLapTimeMs(lap.lap_time) - userTimeMs
             const deltaS = deltaMs != null ? deltaMs / 1000 : null
@@ -334,15 +342,28 @@ function LapMetaTable({ laps, userLapId, isSolo }: { laps: LapMeta[]; userLapId:
                   {formatLapConditions(lap.conditions)}
                 </td>
                 <td className="py-2 pl-3">
-                  <a
-                    href={`https://garage61.net/app/laps/${lap.id}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-slate-600 hover:text-slate-400 transition-colors"
-                    title="Open in Garage61"
-                  >
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
+                  <div className="flex items-center gap-2">
+                    {allowDownloads && lap.download_path && (
+                      <a
+                        href={lap.download_path}
+                        className="text-slate-600 hover:text-slate-300 transition-colors"
+                        title="Download stored telemetry CSV"
+                      >
+                        <Download className="w-3 h-3" />
+                      </a>
+                    )}
+                    {garage61Url && (
+                      <a
+                        href={garage61Url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-slate-600 hover:text-slate-400 transition-colors"
+                        title="Open in Garage61 Analyze"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
                 </td>
               </tr>
             )
@@ -902,6 +923,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                         laps={displayReport.laps_metadata}
                         userLapId={displayReport.lap_id}
                         isSolo={false}
+                        allowDownloads={!readOnly}
                       />
                     ) : (
                       /* Fallback: show raw IDs when metadata not stored (old analyses) */
