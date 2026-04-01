@@ -210,13 +210,13 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read
     steps:
       - name: Merge PR into main
         run: gh pr merge "${{ github.event.pull_request.number }}" --squash --repo "${{ github.repository }}"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ACTIONS_PAT }}
 
   deploy:
     needs: [build-backend, build-frontend, build-proxy, build-db]
