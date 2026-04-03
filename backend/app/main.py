@@ -106,8 +106,28 @@ async def lifespan(app: FastAPI):
                 "input_json JSONB"
             ))
             await conn.execute(text(
+                "ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS "
+                "version_group_id UUID"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS "
+                "version_number INTEGER NOT NULL DEFAULT 1"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS "
+                "is_default_version BOOLEAN NOT NULL DEFAULT true"
+            ))
+            await conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS ix_analysis_results_status "
                 "ON analysis_results (status)"
+            ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_analysis_results_version_group_id "
+                "ON analysis_results (version_group_id)"
+            ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_analysis_results_is_default_version "
+                "ON analysis_results (is_default_version)"
             ))
             await conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS ix_analysis_telemetry_files_analysis_result_id "
@@ -278,6 +298,9 @@ async def lifespan(app: FastAPI):
                 "FROM telemetry_tracks tt "
                 "WHERE ar.track_id IS NULL AND lower(regexp_replace(trim(ar.track_name), '\\s+', ' ', 'g')) = tt.normalized_name "
                 "AND (tt.source = 'garage61' OR tt.source = 'custom')"
+            ))
+            await conn.execute(text(
+                "UPDATE analysis_results SET version_group_id = id WHERE version_group_id IS NULL"
             ))
             # Seed default admin
             await _seed_default_admin(conn)

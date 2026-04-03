@@ -6,7 +6,7 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY . .
 # Run tests — build fails if any test fails
 RUN npm run test
-RUN VITE_APP_VERSION=$APP_VERSION npm run build
+RUN VITE_APP_VERSION=$APP_VERSION npm run build:fast
 
 FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html

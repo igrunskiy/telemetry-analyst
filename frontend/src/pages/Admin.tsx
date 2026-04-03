@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Shield, Users, Settings, ChevronLeft, Check, X, RefreshCw, Plus, Save, AlertTriangle, Activity, BarChart2, ChevronRight, Loader2, FileText, Trash2, Star } from 'lucide-react'
+import { Shield, Users, Settings, ChevronLeft, Check, X, RefreshCw, Plus, Save, AlertTriangle, Activity, BarChart2, ChevronRight, Loader2, FileText, Trash2, Star, Sparkles, Bell, MessageSquare } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   adminListUsers,
@@ -21,18 +21,28 @@ import {
   adminSetWorkerPoolSize,
   adminSetSharedReportLimit,
   adminListReports,
+  adminListReportFeedback,
+  adminMarkReportFeedbackReviewed,
+  adminDeleteReportFeedback,
   adminFailReport,
+  adminRetrospectReport,
   adminGetDbHealth,
   regenerateAnalysis,
 } from '../api/client'
-import type { AdminUser, AdminReport, PromptMeta, PromptsDefaults } from '../types'
+import type { AdminUser, AdminReport, AdminRetrospective, PromptMeta, PromptsDefaults, ReportFeedback } from '../types'
 
-type Section = 'users' | 'config' | 'prompt' | 'workers' | 'reports'
+type Section = 'users' | 'config' | 'prompt' | 'workers' | 'reports' | 'feedback'
 
 export default function AdminPage() {
   const location = useLocation()
   const initialSection = (location.state as { initialSection?: Section } | null)?.initialSection
   const [section, setSection] = useState<Section>(initialSection ?? 'users')
+  const { data: feedbackInbox } = useQuery({
+    queryKey: ['admin', 'report-feedback'],
+    queryFn: adminListReportFeedback,
+    refetchInterval: 30000,
+  })
+  const unreadFeedbackCount = feedbackInbox?.unread_count ?? 0
 
   return (
     <div className="min-h-screen bg-slate-900 text-white">
@@ -43,6 +53,19 @@ export default function AdminPage() {
         </Link>
         <Shield className="w-5 h-5 text-amber-500" />
         <h1 className="text-lg font-semibold">Admin Panel</h1>
+        <button
+          type="button"
+          onClick={() => setSection('feedback')}
+          className="ml-auto relative inline-flex items-center justify-center w-9 h-9 rounded-lg border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+          title={unreadFeedbackCount > 0 ? `${unreadFeedbackCount} unread feedback item(s)` : 'Feedback inbox'}
+        >
+          <Bell className="w-4 h-4" />
+          {unreadFeedbackCount > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold flex items-center justify-center">
+              {unreadFeedbackCount > 9 ? '9+' : unreadFeedbackCount}
+            </span>
+          )}
+        </button>
       </header>
 
       <div className="flex h-[calc(100vh-65px)]">
@@ -103,6 +126,24 @@ export default function AdminPage() {
             <BarChart2 className="w-4 h-4" />
             All Reports
           </button>
+          <button
+            onClick={() => setSection('feedback')}
+            className={`flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full text-left ${
+              section === 'feedback'
+                ? 'bg-amber-500/10 text-amber-500'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <span className="flex items-center gap-3">
+              <MessageSquare className="w-4 h-4" />
+              Feedback
+            </span>
+            {unreadFeedbackCount > 0 && (
+              <span className="min-w-5 h-5 px-1 rounded-full bg-red-500/90 text-white text-[10px] font-semibold flex items-center justify-center">
+                {unreadFeedbackCount > 9 ? '9+' : unreadFeedbackCount}
+              </span>
+            )}
+          </button>
         </nav>
 
         {/* Main content */}
@@ -112,6 +153,7 @@ export default function AdminPage() {
           {section === 'prompt' && <PromptsManager />}
           {section === 'workers' && <WorkerMonitor />}
           {section === 'reports' && <ReportsView />}
+          {section === 'feedback' && <FeedbackInbox />}
         </main>
       </div>
     </div>
@@ -1014,6 +1056,158 @@ function PromptsManager() {
 }
 
 // ---------------------------------------------------------------------------
+// Feedback section
+// ---------------------------------------------------------------------------
+
+function FeedbackInbox() {
+  const navigate = useNavigate()
+  const qc = useQueryClient()
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['admin', 'report-feedback'],
+    queryFn: adminListReportFeedback,
+  })
+
+  const reviewMutation = useMutation({
+    mutationFn: ({ analysisId, feedbackId }: { analysisId: string; feedbackId: string }) =>
+      adminMarkReportFeedbackReviewed(analysisId, feedbackId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'report-feedback'] })
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: ({ analysisId, feedbackId }: { analysisId: string; feedbackId: string }) =>
+      adminDeleteReportFeedback(analysisId, feedbackId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'report-feedback'] })
+    },
+  })
+
+  const items = data?.items ?? []
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-xl font-semibold">User Feedback</h2>
+          <p className="text-slate-400 text-sm mt-1">
+            {items.length} item(s){data ? ` · ${data.unread_count} unread` : ''}
+          </p>
+        </div>
+      </div>
+
+      {isLoading && (
+        <div className="flex items-center justify-center h-48">
+          <RefreshCw className="w-6 h-6 animate-spin text-slate-500" />
+        </div>
+      )}
+
+      {isError && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+          <div>
+            Failed to load feedback.
+            {' '}
+            {error instanceof Error ? error.message : 'Unexpected server response.'}
+          </div>
+        </div>
+      )}
+
+      {!isLoading && !isError && (
+        <div className="space-y-3">
+          {items.length === 0 ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-800/50 px-4 py-6 text-sm text-slate-400">
+              No user feedback yet.
+            </div>
+          ) : items.map((item: ReportFeedback) => (
+            <div
+              key={item.id}
+              className={`rounded-xl border px-4 py-4 space-y-3 ${
+                item.reviewed_at ? 'border-slate-800 bg-slate-800/40' : 'border-amber-500/30 bg-amber-500/5'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap text-sm">
+                    <span className="font-medium text-white">{item.report_user_display_name}</span>
+                    {item.car_name && item.track_name && (
+                      <>
+                        <span className="text-slate-500">·</span>
+                        <span className="text-slate-300">{item.car_name}</span>
+                        <span className="text-slate-500">@</span>
+                        <span className="text-slate-300">{item.track_name}</span>
+                      </>
+                    )}
+                    {item.version_number != null && (
+                      <>
+                        <span className="text-slate-500">·</span>
+                        <span className="text-amber-300">{`v${item.version_number}`}</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap text-xs text-slate-500">
+                    <span>{new Date(item.created_at).toLocaleString()}</span>
+                    <span>·</span>
+                    <span>Left by {item.user_display_name || 'Unknown user'}</span>
+                    {!item.reviewed_at && (
+                      <>
+                        <span>·</span>
+                        <span className="text-amber-300 font-semibold">New</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {!item.reviewed_at && (
+                    <button
+                      type="button"
+                      onClick={() => reviewMutation.mutate({ analysisId: item.analysis_id, feedbackId: item.id })}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-700 text-xs text-slate-300 hover:bg-slate-700/60 transition-colors"
+                    >
+                      Mark reviewed
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => deleteMutation.mutate({ analysisId: item.analysis_id, feedbackId: item.id })}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-red-500/30 text-xs text-red-300 hover:bg-red-500/10 transition-colors"
+                    title="Delete feedback"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/report/${item.analysis_id}`, {
+                      state: { backTo: { pathname: '/admin', state: { initialSection: 'feedback' satisfies Section } } },
+                    })}
+                    className="px-2.5 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-xs text-amber-300 hover:bg-amber-500/25 transition-colors"
+                  >
+                    Open report
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2">
+                <p className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Selected text</p>
+                <p className="text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">{item.selected_text}</p>
+              </div>
+
+              {item.comment && (
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Comment</p>
+                  <p className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">{item.comment}</p>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Reports section
 // ---------------------------------------------------------------------------
 
@@ -1038,11 +1232,15 @@ function ReportRow({ r }: { r: AdminReport }) {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [expanded, setExpanded] = useState(false)
+  const [showRetrospect, setShowRetrospect] = useState(false)
+  const [feedbackText, setFeedbackText] = useState('')
+  const [focusAreas, setFocusAreas] = useState('')
   const isSolo = r.analysis_mode === 'solo'
   const model = r.model_name ?? r.llm_provider
   const isFailed = r.status === 'failed'
   const isProcessing = r.status === 'processing'
   const elapsed = useElapsed(r.enqueued_at ?? r.created_at, isProcessing)
+  const latestRetrospective = r.latest_retrospective
 
   const isOngoing = r.status === 'enqueued' || r.status === 'processing'
 
@@ -1054,6 +1252,17 @@ function ReportRow({ r }: { r: AdminReport }) {
   const failMutation = useMutation({
     mutationFn: () => adminFailReport(r.id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'reports'] }),
+  })
+
+  const retrospectMutation = useMutation({
+    mutationFn: () => adminRetrospectReport(r.id, {
+      feedback_text: feedbackText,
+      focus_areas: focusAreas,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'reports'] })
+      setShowRetrospect(true)
+    },
   })
 
   return (
@@ -1071,7 +1280,7 @@ function ReportRow({ r }: { r: AdminReport }) {
                 <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${
                   isSolo ? 'bg-violet-500/15 text-violet-400' : 'bg-orange-500/15 text-orange-400'
                 }`}>
-                  {isSolo ? 'Session' : 'Reference'}
+                  {isSolo ? 'Patterns' : 'Reference'}
                 </span>
                 {r.status === 'enqueued' && (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-slate-600/40 text-slate-400 flex-shrink-0">
@@ -1119,6 +1328,19 @@ function ReportRow({ r }: { r: AdminReport }) {
                 Fail
               </button>
             )}
+            {!isOngoing && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setShowRetrospect((prev) => !prev)
+                }}
+                className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-sky-500/10 border border-sky-500/30 text-sky-300 hover:bg-sky-500/20 transition-colors"
+                title="Run retrospective on this report"
+              >
+                <Sparkles className="w-3 h-3" />
+                Retrospect
+              </button>
+            )}
             {!isFailed && !isOngoing && (
               <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-amber-500 flex-shrink-0 transition-colors" />
             )}
@@ -1143,7 +1365,128 @@ function ReportRow({ r }: { r: AdminReport }) {
             }
           </div>
         )}
+        {showRetrospect && (
+          <div className="border-t border-sky-500/20 bg-sky-950/10 px-4 py-4 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-sky-300">LLM Retrospective</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Sends the original analysis payload, generated report, and your feedback back to the LLM to diagnose mistakes and propose prompt changes.
+                </p>
+              </div>
+              {latestRetrospective?.created_at && (
+                <span className="text-xs text-slate-500">
+                  Last run {new Date(latestRetrospective.created_at).toLocaleString()}
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 gap-3">
+              <div>
+                <label className="text-xs text-slate-400 mb-1 block">Feedback / comments</label>
+                <textarea
+                  value={feedbackText}
+                  onChange={(e) => setFeedbackText(e.target.value)}
+                  disabled={retrospectMutation.isPending}
+                  rows={3}
+                  placeholder="What was wrong with the analysis? What did it miss or misread?"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-400 resize-y disabled:opacity-60 disabled:cursor-wait"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 mb-1 block">Specific areas to analyze</label>
+                <textarea
+                  value={focusAreas}
+                  onChange={(e) => setFocusAreas(e.target.value)}
+                  rows={2}
+                  placeholder="Examples: braking diagnosis in T4, overconfident throttle advice, missed wet-track context"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-400 resize-y"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => retrospectMutation.mutate()}
+                disabled={retrospectMutation.isPending}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-sky-500/15 border border-sky-500/30 text-sky-300 hover:bg-sky-500/20 disabled:opacity-50 transition-colors"
+              >
+                <Sparkles className={`w-4 h-4 ${retrospectMutation.isPending ? 'animate-pulse' : ''}`} />
+                {retrospectMutation.isPending ? 'Running…' : 'Run retrospective'}
+              </button>
+              {retrospectMutation.isPending && (
+                <span className="text-xs text-sky-300">
+                  Status: sending report payload to the LLM and waiting for feedback...
+                </span>
+              )}
+              {!retrospectMutation.isPending && !retrospectMutation.isError && latestRetrospective && (
+                <span className="text-xs text-slate-500">Status: ready</span>
+              )}
+              {retrospectMutation.isError && (
+                <span className="text-xs text-red-400">Retrospective failed. Check API key availability and try again.</span>
+              )}
+            </div>
+
+            {latestRetrospective && (
+              <RetrospectiveView retrospective={latestRetrospective} />
+            )}
+          </div>
+        )}
       </div>
+    </div>
+  )
+}
+
+function RetrospectiveView({ retrospective }: { retrospective: AdminRetrospective }) {
+  return (
+    <div className="rounded-xl border border-sky-500/20 bg-slate-900/40 px-4 py-3 space-y-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap text-xs">
+        <div className="flex items-center gap-2 flex-wrap">
+          {retrospective.version_number != null && (
+            <span className="text-amber-300">{`Report v${retrospective.version_number}`}</span>
+          )}
+          <span className="text-slate-500">{new Date(retrospective.created_at).toLocaleString()}</span>
+        </div>
+        {retrospective._meta?.model_name && (
+          <span className="text-sky-300">{retrospective._meta.model_name}</span>
+        )}
+      </div>
+
+      {retrospective.summary && (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Summary</p>
+          <p className="text-sm text-slate-200 leading-relaxed">{retrospective.summary}</p>
+        </div>
+      )}
+
+      {retrospective.root_causes && retrospective.root_causes.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Root Causes</p>
+          <div className="space-y-1">
+            {retrospective.root_causes.map((item, idx) => (
+              <p key={idx} className="text-sm text-slate-300">• {item}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {retrospective.feedback_alignment && retrospective.feedback_alignment.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Feedback Alignment</p>
+          <div className="space-y-1">
+            {retrospective.feedback_alignment.map((item, idx) => (
+              <p key={idx} className="text-sm text-slate-300">• {item}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {retrospective.suggested_prompt_patch && (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Suggested Prompt Patch</p>
+          <pre className="text-xs text-slate-200 whitespace-pre-wrap break-words font-mono bg-slate-950/70 rounded p-2">{retrospective.suggested_prompt_patch}</pre>
+        </div>
+      )}
     </div>
   )
 }
@@ -1162,6 +1505,8 @@ function ReportsView() {
   const [tab, setTab] = useState<ReportTab>('completed')
   const [page, setPage] = useState(0)
   const [userFilter, setUserFilter] = useState('')
+  const [selectedUserId, setSelectedUserId] = useState<'all' | string>('all')
+  const [sortBy, setSortBy] = useState<'latest_regenerated' | 'original_created'>('latest_regenerated')
 
   const { data: reports = [], isLoading } = useQuery({
     queryKey: ['admin', 'reports'],
@@ -1169,12 +1514,33 @@ function ReportsView() {
     refetchInterval: 10000,
   })
 
-  const filtered = userFilter.trim()
-    ? reports.filter((r: AdminReport) =>
-        (r.username ?? r.display_name).toLowerCase().includes(userFilter.trim().toLowerCase())
-      )
-    : reports
-  const allReports = filtered.filter((r: AdminReport) => r.status === tab)
+  const userOptions = Array.from(
+    new Map(
+      reports.map((r: AdminReport) => [
+        r.user_id,
+        {
+          user_id: r.user_id,
+          label: r.display_name || r.username || 'Unknown user',
+        },
+      ]),
+    ).values(),
+  ).sort((a, b) => a.label.localeCompare(b.label))
+
+  const filtered = reports.filter((r: AdminReport) => {
+    if (selectedUserId !== 'all' && r.user_id !== selectedUserId) {
+      return false
+    }
+    if (userFilter.trim()) {
+      return (r.username ?? r.display_name).toLowerCase().includes(userFilter.trim().toLowerCase())
+    }
+    return true
+  })
+  const sorted = [...filtered].sort((a: AdminReport, b: AdminReport) => {
+    const aTime = new Date(sortBy === 'latest_regenerated' ? a.latest_regenerated_at : a.original_created_at).getTime()
+    const bTime = new Date(sortBy === 'latest_regenerated' ? b.latest_regenerated_at : b.original_created_at).getTime()
+    return bTime - aTime
+  })
+  const allReports = sorted.filter((r: AdminReport) => r.status === tab)
   const totalPages = Math.ceil(allReports.length / PAGE_SIZE)
   const paged = allReports.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
   const countByStatus = (s: ReportTab) => filtered.filter((r: AdminReport) => r.status === s).length
@@ -1182,6 +1548,8 @@ function ReportsView() {
   // Reset page when switching tabs or filter changes
   const handleTab = (t: ReportTab) => { setTab(t); setPage(0) }
   const handleUserFilter = (v: string) => { setUserFilter(v); setPage(0) }
+  const handleSelectedUser = (v: 'all' | string) => { setSelectedUserId(v); setPage(0) }
+  const handleSortBy = (v: 'latest_regenerated' | 'original_created') => { setSortBy(v); setPage(0) }
 
   if (isLoading) {
     return (
@@ -1196,15 +1564,40 @@ function ReportsView() {
       <div className="flex items-center justify-between mb-4 gap-4">
         <div>
           <h2 className="text-xl font-semibold">All Reports</h2>
-          <p className="text-slate-400 text-sm mt-1">{filtered.length}{filtered.length !== reports.length ? ` of ${reports.length}` : ''} total (newest first)</p>
+          <p className="text-slate-400 text-sm mt-1">
+            {filtered.length}{filtered.length !== reports.length ? ` of ${reports.length}` : ''} total
+            {' '}(
+            {sortBy === 'latest_regenerated' ? 'latest regeneration first' : 'original creation first'}
+            )
+          </p>
         </div>
-        <input
-          type="text"
-          value={userFilter}
-          onChange={e => handleUserFilter(e.target.value)}
-          placeholder="Filter by username…"
-          className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-amber-500 w-52"
-        />
+        <div className="flex items-center gap-2">
+          <select
+            value={selectedUserId}
+            onChange={e => handleSelectedUser(e.target.value)}
+            className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-300 focus:outline-none focus:border-amber-500"
+          >
+            <option value="all">All users</option>
+            {userOptions.map((option) => (
+              <option key={option.user_id} value={option.user_id}>{option.label}</option>
+            ))}
+          </select>
+          <input
+            type="text"
+            value={userFilter}
+            onChange={e => handleUserFilter(e.target.value)}
+            placeholder="Search user…"
+            className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-amber-500 w-44"
+          />
+          <select
+            value={sortBy}
+            onChange={e => handleSortBy(e.target.value as 'latest_regenerated' | 'original_created')}
+            className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-300 focus:outline-none focus:border-amber-500"
+          >
+            <option value="latest_regenerated">Latest re-generation</option>
+            <option value="original_created">Original creation</option>
+          </select>
+        </div>
       </div>
 
       {/* Tabs */}

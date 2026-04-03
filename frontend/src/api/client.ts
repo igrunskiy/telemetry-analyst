@@ -3,6 +3,7 @@ import type {
   User,
   AdminUser,
   AdminReport,
+  AdminRetrospective,
   Car,
   Track,
   Lap,
@@ -15,6 +16,8 @@ import type {
   DbHealth,
   PromptMeta,
   PromptsDefaults,
+  ReportFeedback,
+  AdminReportFeedbackInbox,
   SharedReportLimitSettings,
   UploadedTelemetryInput,
   UploadInspection,
@@ -88,8 +91,9 @@ export async function getMySessions(
   limit = 20,
   offset = 0,
 ): Promise<Session[]> {
+  const safeLimit = Math.min(limit, 50)
   const { data } = await api.get<Session[]>('/api/laps/my-sessions', {
-    params: { car_id: carId, track_id: trackId, limit, offset },
+    params: { car_id: carId, track_id: trackId, limit: safeLimit, offset },
   })
   return data
 }
@@ -211,6 +215,23 @@ export async function deleteAnalysis(id: string): Promise<void> {
 
 export async function regenerateAnalysis(id: string): Promise<AnalysisReport> {
   const { data } = await api.post<AnalysisReport>(`/api/analysis/${id}/regenerate`)
+  return data
+}
+
+export async function submitAnalysisFeedback(
+  id: string,
+  payload: { selected_text: string; comment: string },
+): Promise<ReportFeedback> {
+  const { data } = await api.post<{ feedback: ReportFeedback }>(`/api/analysis/${id}/feedback`, payload)
+  return data.feedback
+}
+
+export async function deleteAnalysisFeedback(id: string, feedbackId: string): Promise<void> {
+  await api.delete(`/api/analysis/${id}/feedback/${feedbackId}`)
+}
+
+export async function setDefaultAnalysisVersion(id: string): Promise<AnalysisReport> {
+  const { data } = await api.post<AnalysisReport>(`/api/analysis/${id}/set-default`)
   return data
 }
 
@@ -368,6 +389,27 @@ export async function adminListReports(): Promise<AdminReport[]> {
 
 export async function adminFailReport(id: string): Promise<void> {
   await api.post(`/admin/reports/${id}/fail`)
+}
+
+export async function adminRetrospectReport(
+  id: string,
+  payload: { feedback_text: string; focus_areas: string },
+): Promise<AdminRetrospective> {
+  const { data } = await api.post<{ retrospective: AdminRetrospective }>(`/admin/reports/${id}/retrospect`, payload)
+  return data.retrospective
+}
+
+export async function adminListReportFeedback(): Promise<AdminReportFeedbackInbox> {
+  const { data } = await api.get<AdminReportFeedbackInbox>('/admin/report-feedback')
+  return data
+}
+
+export async function adminMarkReportFeedbackReviewed(analysisId: string, feedbackId: string): Promise<void> {
+  await api.post(`/admin/report-feedback/${analysisId}/${feedbackId}/review`)
+}
+
+export async function adminDeleteReportFeedback(analysisId: string, feedbackId: string): Promise<void> {
+  await api.delete(`/admin/report-feedback/${analysisId}/${feedbackId}`)
 }
 
 export async function adminGetDbHealth(): Promise<DbHealth> {

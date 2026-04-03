@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { ChevronDown, ChevronUp, AlertTriangle, Info, Zap, TrendingDown } from 'lucide-react'
 import type { ImprovementArea, Corner } from '../types'
 import CornerSnippet from './CornerSnippet'
+import { renderHighlightedText } from '../utils/feedbackHighlights'
+import type { FeedbackGroup } from '../utils/feedbackHighlights'
 
 interface Telemetry {
   distances: number[]
@@ -15,6 +17,8 @@ interface Telemetry {
   refBrake: number[]
   userThrottle: number[]
   refThrottle: number[]
+  userGear?: number[]
+  refGear?: number[]
   corners: Corner[]
 }
 
@@ -23,6 +27,8 @@ interface AnalysisCardsProps {
   telemetry: Telemetry
   onActiveCorners?: (corners: number[]) => void
   onHoverIndex?: (idx: number | null) => void
+  feedbackHighlights?: FeedbackGroup[]
+  onFeedbackClick?: (group: FeedbackGroup, target: HTMLElement) => void
 }
 
 const SEVERITY_CONFIG = {
@@ -54,9 +60,11 @@ interface ImprovementCardProps {
   telemetry: Telemetry
   onActiveCorners?: (corners: number[]) => void
   onHoverIndex?: (idx: number | null) => void
+  feedbackHighlights?: FeedbackGroup[]
+  onFeedbackClick?: (group: FeedbackGroup, target: HTMLElement) => void
 }
 
-function ImprovementCard({ area, telemetry, onActiveCorners, onHoverIndex }: ImprovementCardProps) {
+function ImprovementCard({ area, telemetry, onActiveCorners, onHoverIndex, feedbackHighlights = [], onFeedbackClick }: ImprovementCardProps) {
   const [expanded, setExpanded] = useState(false)
   const sev = SEVERITY_CONFIG[area.severity]
 
@@ -143,7 +151,10 @@ function ImprovementCard({ area, telemetry, onActiveCorners, onHoverIndex }: Imp
                   refBrake={telemetry.refBrake}
                   userThrottle={telemetry.userThrottle}
                   refThrottle={telemetry.refThrottle}
+                  userGear={telemetry.userGear}
+                  refGear={telemetry.refGear}
                   issueType={area.issue_type}
+                  issueText={[area.title, area.description, area.technique, area.telemetry_evidence].filter(Boolean).join(' ')}
                   onHoverIndex={onHoverIndex}
                 />
               ))}
@@ -154,7 +165,7 @@ function ImprovementCard({ area, telemetry, onActiveCorners, onHoverIndex }: Imp
             <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
               Description
             </p>
-            <p className="text-sm text-slate-300 leading-relaxed">{area.description}</p>
+            <p className="text-sm text-slate-300 leading-relaxed">{renderHighlightedText(area.description, feedbackHighlights, onFeedbackClick)}</p>
           </div>
 
           {area.technique && (
@@ -162,7 +173,7 @@ function ImprovementCard({ area, telemetry, onActiveCorners, onHoverIndex }: Imp
               <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
                 Technique
               </p>
-              <p className="text-sm text-slate-300 leading-relaxed">{area.technique}</p>
+              <p className="text-sm text-slate-300 leading-relaxed">{renderHighlightedText(area.technique, feedbackHighlights, onFeedbackClick)}</p>
             </div>
           )}
 
@@ -172,7 +183,7 @@ function ImprovementCard({ area, telemetry, onActiveCorners, onHoverIndex }: Imp
                 Telemetry Evidence
               </p>
               <p className="text-xs text-slate-400 leading-relaxed font-mono">
-                {area.telemetry_evidence}
+                {renderHighlightedText(area.telemetry_evidence, feedbackHighlights, onFeedbackClick)}
               </p>
             </div>
           )}
@@ -187,6 +198,8 @@ export default function AnalysisCards({
   telemetry,
   onActiveCorners,
   onHoverIndex,
+  feedbackHighlights = [],
+  onFeedbackClick,
 }: AnalysisCardsProps) {
   return (
     <div className="space-y-6">
@@ -202,7 +215,7 @@ export default function AnalysisCards({
           </h2>
           <div className="space-y-3">
             {improvement_areas.map((area) => (
-              <ImprovementCard key={area.rank} area={area} telemetry={telemetry} onActiveCorners={onActiveCorners} onHoverIndex={onHoverIndex} />
+              <ImprovementCard key={area.rank} area={area} telemetry={telemetry} onActiveCorners={onActiveCorners} onHoverIndex={onHoverIndex} feedbackHighlights={feedbackHighlights} onFeedbackClick={onFeedbackClick} />
             ))}
           </div>
         </div>

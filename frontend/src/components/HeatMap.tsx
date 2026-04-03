@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { Globe, Map, EyeOff } from 'lucide-react'
-import { MapContainer, TileLayer, Polyline, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, Polyline, CircleMarker, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import {
   buildSegments,
@@ -19,6 +19,8 @@ interface HeatMapProps {
   distances?: number[]
   xRange?: [number, number] | null
   isSolo?: boolean
+  hoverIndex?: number | null
+  onHoverIndex?: (idx: number | null) => void
 }
 
 type Metric = 'speedDelta' | 'brakeDelta' | 'throttleDelta'
@@ -77,7 +79,7 @@ const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 
 export default function HeatMap({
   lat, lon, speed, refSpeed, brake, refBrake, throttle, refThrottle,
-  distances, xRange, isSolo,
+  distances, xRange, isSolo, hoverIndex, onHoverIndex,
 }: HeatMapProps) {
   const [metric, setMetric] = useState<Metric>('speedDelta')
   const [mapStyle, setMapStyle] = useState<MapStyle>('satellite')
@@ -140,6 +142,15 @@ export default function HeatMap({
     return [sLat / activeLat.length, sLon / activeLon.length]
   }, [hasGps, activeLat, activeLon])
 
+  const activeHoverIndex = useMemo(() => {
+    if (hoverIndex == null || hoverIndex < 0) return null
+    if (xRange && distances) {
+      const slicedIndex = hoverIndex - startIdx
+      return slicedIndex >= 0 && slicedIndex < activeLat.length ? slicedIndex : null
+    }
+    return hoverIndex < activeLat.length ? hoverIndex : null
+  }, [hoverIndex, xRange, distances, startIdx, activeLat.length])
+
   const gradientCss = config.reversed
     ? 'linear-gradient(to right, #22c55e, #f8fafc, #ef4444)'
     : 'linear-gradient(to right, #ef4444, #f8fafc, #22c55e)'
@@ -165,14 +176,14 @@ export default function HeatMap({
   return (
     <div className="card p-0 overflow-hidden">
       {/* Controls row */}
-      <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between flex-wrap gap-3 bg-slate-800/80">
+      <div className="px-2.5 py-1.5 border-b border-slate-700/50 flex items-center justify-between flex-wrap gap-1.5 bg-slate-800/80">
         {/* Metric selector */}
-        <div className="flex gap-1.5 flex-wrap">
+        <div className="flex gap-0.5 flex-wrap">
           {(Object.keys(METRIC_CONFIG) as Metric[]).map((m) => (
             <button
               key={m}
               onClick={() => setMetric(m)}
-              className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${
+              className={`text-[10px] px-2 py-0.5 rounded-lg font-medium transition-colors ${
                 metric === m
                   ? 'bg-amber-500 text-slate-900'
                   : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
@@ -183,7 +194,7 @@ export default function HeatMap({
           ))}
         </div>
         {/* Map style toggle — icon buttons */}
-        <div className="flex gap-1.5">
+        <div className="flex gap-0.5">
           {([
             ['satellite', 'Satellite',     <Globe  className="w-3.5 h-3.5" />],
             ['street',    'Street map',    <Map    className="w-3.5 h-3.5" />],
@@ -193,7 +204,7 @@ export default function HeatMap({
               key={s}
               title={title}
               onClick={() => setMapStyle(s)}
-              className={`px-2 py-1 rounded-lg font-medium transition-colors ${
+              className={`px-1.5 py-0.5 rounded-lg font-medium transition-colors ${
                 mapStyle === s
                   ? 'bg-slate-500 text-white'
                   : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
@@ -206,12 +217,12 @@ export default function HeatMap({
       </div>
 
       {/* Map */}
-      <MapContainer
+  <MapContainer
         key={xRange ? `${xRange[0]}-${xRange[1]}` : 'full'}
         center={center}
         zoom={15}
         maxZoom={22}
-        style={{ height: 624, background: '#0f172a' }}
+        style={{ height: 396, background: '#0f172a' }}
         zoomControl
         attributionControl={false}
       >
@@ -229,23 +240,30 @@ export default function HeatMap({
             pathOptions={{ color: seg.color, weight: 2, opacity: 0.95 }}
           />
         ))}
+        {activeHoverIndex != null && activeHoverIndex >= 0 && activeHoverIndex < activeLat.length && (
+          <CircleMarker
+            center={[activeLat[activeHoverIndex], activeLon[activeHoverIndex]]}
+            radius={6}
+            pathOptions={{ color: '#0f172a', fillColor: '#fbbf24', fillOpacity: 1, weight: 2 }}
+          />
+        )}
       </MapContainer>
 
       {/* Colorbar */}
-      <div className="px-4 py-2.5 bg-slate-800/80 border-t border-slate-700/50">
-        <div className="flex items-center gap-3">
+      <div className="px-2.5 py-1.5 bg-slate-800/80 border-t border-slate-700/50">
+        <div className="flex items-center gap-1.5">
           <span className="text-xs text-slate-400 font-mono flex-shrink-0 w-14 text-right">
             {config.reversed ? `+${(cmax * scale).toFixed(scale === 1 ? 0 : 0)}` : `−${(Math.abs(cmin) * scale).toFixed(scale === 1 ? 0 : 0)}`}
           </span>
-          <div className="flex-1 h-2.5 rounded-full" style={{ background: gradientCss }} />
+          <div className="flex-1 h-2 rounded-full" style={{ background: gradientCss }} />
           <span className="text-xs text-slate-400 font-mono flex-shrink-0 w-14">
             {config.reversed ? `−${(Math.abs(cmin) * scale).toFixed(scale === 1 ? 0 : 0)}` : `+${(cmax * scale).toFixed(scale === 1 ? 0 : 0)}`}
           </span>
-          <span className="text-xs text-slate-500 ml-2 flex-shrink-0">
+          <span className="text-[11px] text-slate-500 ml-1.5 flex-shrink-0">
             {activeLabel} ({config.unit})
           </span>
         </div>
-        <p className="mt-1.5 text-slate-400 text-xs italic">
+        <p className="mt-0.5 text-slate-400 text-[10px] italic">
           {metric === 'speedDelta' && isSolo
             ? 'Green = consistent with your best lap here. Red = highest variance — where your lap times diverge most.'
             : metric === 'speedDelta'

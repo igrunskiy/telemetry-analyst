@@ -47,6 +47,8 @@ export function percentileSymmetricRange(data: number[]): { cmin: number; cmax: 
 export interface ColorSegment {
   points: [number, number][]
   color: string
+  startIndex: number
+  endIndex: number
 }
 
 /**
@@ -66,6 +68,7 @@ export function buildSegments(
   const result: ColorSegment[] = []
   let curBin = -1
   let curSeg: [number, number][] = []
+  let curStartIndex = 0
 
   for (let i = 0; i < lat.length; i++) {
     const t = (values[i] - cmin) / range
@@ -76,16 +79,24 @@ export function buildSegments(
         result.push({
           points: curSeg,
           color: lerpColor((curBin + 0.5) / N_BINS, reversed),
+          startIndex: curStartIndex,
+          endIndex: i - 1,
         })
       }
       curSeg = curSeg.length > 0 ? [curSeg[curSeg.length - 1]] : []
       curBin = binIdx
+      curStartIndex = Math.max(0, i - 1)
     }
     curSeg.push([lat[i], lon[i]])
   }
 
   if (curSeg.length >= 2) {
-    result.push({ points: curSeg, color: lerpColor((curBin + 0.5) / N_BINS, reversed) })
+    result.push({
+      points: curSeg,
+      color: lerpColor((curBin + 0.5) / N_BINS, reversed),
+      startIndex: curStartIndex,
+      endIndex: lat.length - 1,
+    })
   }
   return result
 }

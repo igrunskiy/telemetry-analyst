@@ -1,8 +1,8 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User, RefreshCw, Share2, Check, Zap, FileText, Download } from 'lucide-react'
-import { getAnalysis, deleteAnalysis, regenerateAnalysis, shareAnalysis, getSharedAnalysis } from '../api/client'
+import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User, RefreshCw, Share2, Check, Zap, FileText, Download, Shield, Sparkles, MessageSquare, ThermometerSun, Waves, Wind } from 'lucide-react'
+import { getAnalysis, deleteAnalysis, regenerateAnalysis, shareAnalysis, getSharedAnalysis, setDefaultAnalysisVersion, adminRetrospectReport, submitAnalysisFeedback, deleteAnalysisFeedback } from '../api/client'
 import TrackMap from '../components/TrackMap'
 import TelemetryChart from '../components/TelemetryChart'
 import HeatMap from '../components/HeatMap'
@@ -11,9 +11,11 @@ import AnalysisCards from '../components/AnalysisCards'
 import { ThemeToggle } from '../components/ThemeToggle'
 import TelemetryInsights from '../components/TelemetryInsights'
 import { useAuth } from '../hooks/useAuth'
-import type { AnalysisReport, ImprovementArea, LapConditions, LapMeta, SectorData } from '../types'
+import type { AnalysisReport, ImprovementArea, LapConditions, LapMeta, SectorData, AdminRetrospective, ReportFeedback } from '../types'
+import { normalizeFeedbackSelections, renderHighlightedText } from '../utils/feedbackHighlights'
 
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 }
+import type { FeedbackGroup } from '../utils/feedbackHighlights'
 
 function TabInsights({ report, tab }: { report: AnalysisReport; tab: Tab }) {
   const areas = report.improvement_areas ?? []
@@ -112,6 +114,71 @@ function TabInsights({ report, tab }: { report: AnalysisReport; tab: Tab }) {
   )
 }
 
+function RetrospectiveView({ retrospective }: { retrospective: AdminRetrospective }) {
+  return (
+    <div className="rounded-xl border border-sky-500/20 bg-slate-900/40 px-4 py-3 space-y-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap text-xs">
+        <div className="flex items-center gap-2 flex-wrap">
+          {retrospective.version_number != null && (
+            <span className="text-amber-300">
+              {`Report v${retrospective.version_number}`}
+            </span>
+          )}
+          <span className="text-slate-500">
+            {new Date(retrospective.created_at).toLocaleString()}
+          </span>
+        </div>
+        {retrospective._meta?.model_name && (
+          <span className="text-sky-300">{retrospective._meta.model_name}</span>
+        )}
+      </div>
+
+      {retrospective.feedback_text && (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Feedback / Comments</p>
+          <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">{retrospective.feedback_text}</p>
+        </div>
+      )}
+
+      {retrospective.summary && (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Summary</p>
+          <p className="text-sm text-slate-200 leading-relaxed">{retrospective.summary}</p>
+        </div>
+      )}
+
+      {retrospective.root_causes && retrospective.root_causes.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Root Causes</p>
+          <div className="space-y-1">
+            {retrospective.root_causes.map((item, idx) => (
+              <p key={idx} className="text-sm text-slate-300">• {item}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {retrospective.feedback_alignment && retrospective.feedback_alignment.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Feedback Alignment</p>
+          <div className="space-y-1">
+            {retrospective.feedback_alignment.map((item, idx) => (
+              <p key={idx} className="text-sm text-slate-300">• {item}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {retrospective.suggested_prompt_patch && (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Suggested Prompt Patch</p>
+          <pre className="text-xs text-slate-200 whitespace-pre-wrap break-words font-mono bg-slate-950/70 rounded p-2">{retrospective.suggested_prompt_patch}</pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function normalizeLapTimeMs(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0
   return value < 1000 ? value * 1000 : value  // Garage61 may return seconds
@@ -170,6 +237,21 @@ function getReportPhase(status?: string | null): { state: string; phase: string;
   }
 }
 
+function getSelectedReportText(root: HTMLElement | null): string {
+  if (!root) return ''
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return ''
+  const text = selection.toString().trim()
+  if (!text) return ''
+  const range = selection.getRangeAt(0)
+  const container = range.commonAncestorContainer
+  const element = container.nodeType === Node.ELEMENT_NODE ? container as Element : container.parentElement
+  if (!element || !root.contains(element)) return ''
+  const active = document.activeElement
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return ''
+  return text.slice(0, 4000)
+}
+
 async function copyText(text: string): Promise<void> {
   if (window.isSecureContext && navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text)
@@ -214,37 +296,87 @@ function IRatingBadge({ value }: { value: number }) {
   )
 }
 
-function formatLapConditions(conditions?: LapConditions | null): string {
-  if (!conditions) return '—'
+function formatTemperature(value?: number | null): string | null {
+  if (value == null || !Number.isFinite(value)) return null
+  return `${Math.round(value)}°C`
+}
 
-  const formatWindDirection = (value?: string | number): string | null => {
-    if (value == null || value === '') return null
-    if (typeof value === 'string') return value
-    const degrees = Math.abs(value) <= Math.PI * 2 + 0.001 ? (value * 180) / Math.PI : value
-    const normalized = ((degrees % 360) + 360) % 360
-    const labels = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
-    const label = labels[Math.round(normalized / 45) % labels.length]
-    return `${label} ${normalized.toFixed(0)}deg`
+function normalizeWindDegrees(value?: string | number | null): number | null {
+  if (value == null) return null
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    const parsed = Number(trimmed)
+    if (!Number.isFinite(parsed)) return null
+    value = parsed
   }
-
-  const parts: string[] = []
-  if (conditions.summary) parts.push(conditions.summary)
-  if (conditions.setup_type) parts.push(`Setup ${conditions.setup_type}`)
-  if (conditions.weather) parts.push(conditions.weather)
-  if (conditions.track_state) parts.push(`Track ${conditions.track_state}`)
-  if (conditions.air_temp_c != null) parts.push(`Air ${conditions.air_temp_c.toFixed(1)}C`)
-  if (conditions.track_temp_c != null) parts.push(`Track ${conditions.track_temp_c.toFixed(1)}C`)
-  if (conditions.humidity_pct != null) parts.push(`Humidity ${conditions.humidity_pct.toFixed(0)}%`)
-  const windDirection = formatWindDirection(conditions.wind_direction)
-  if (conditions.wind_kph != null) {
-    const direction = windDirection ? ` ${windDirection}` : ''
-    parts.push(`Wind ${conditions.wind_kph.toFixed(1)} kph${direction}`)
-  } else if (windDirection) {
-    parts.push(`Wind ${windDirection}`)
+  if (!Number.isFinite(value)) return null
+  if (Math.abs(value) <= Math.PI * 2 + 0.001) {
+    const deg = (value * 180) / Math.PI
+    return ((deg % 360) + 360) % 360
   }
-  if (conditions.time_of_day) parts.push(conditions.time_of_day)
+  return ((value % 360) + 360) % 360
+}
 
-  return parts.length > 0 ? parts.join(' • ') : '—'
+function windDirectionLabel(value?: string | number | null): string | null {
+  const deg = normalizeWindDegrees(value)
+  if (deg == null) return null
+  const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+  const index = Math.round(deg / 45) % 8
+  return directions[index]
+}
+
+function formatWind(value?: string | number | null, speedKph?: number | null): string | null {
+  const direction = windDirectionLabel(value)
+  const speed = speedKph != null && Number.isFinite(speedKph) ? `${Math.round(speedKph)}` : null
+  if (direction && speed) return `${direction} ${speed} kph`
+  if (speed) return `${speed} kph`
+  return direction
+}
+
+function ConditionIconChip({ icon, label, title }: { icon: React.ReactNode, label: string, title?: string }) {
+  return (
+    <span
+      title={title ?? label}
+      className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300"
+    >
+      {icon}
+      <span>{label}</span>
+    </span>
+  )
+}
+
+function renderConditionChips(conditions?: LapConditions | null) {
+  if (!conditions) return <span className="text-slate-600">—</span>
+  const air = formatTemperature(conditions.air_temp_c)
+  const track = formatTemperature(conditions.track_temp_c)
+  const wind = formatWind(conditions.wind_direction, conditions.wind_kph)
+  if (!air && !track && !wind) return <span className="text-slate-600">—</span>
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {track ? (
+        <ConditionIconChip
+          icon={<Waves className="w-3 h-3 text-amber-300" />}
+          label={track}
+          title={`Track ${track}`}
+        />
+      ) : null}
+      {air ? (
+        <ConditionIconChip
+          icon={<ThermometerSun className="w-3 h-3 text-orange-300" />}
+          label={air}
+          title={`Air ${air}`}
+        />
+      ) : null}
+      {wind ? (
+        <ConditionIconChip
+          icon={<Wind className="w-3 h-3 text-sky-300" />}
+          label={wind}
+          title={`Wind ${wind}`}
+        />
+      ) : null}
+    </div>
+  )
 }
 
 function formatElapsedLabel(startedAt?: string | null, nowMs?: number): string | null {
@@ -266,6 +398,13 @@ function formatElapsedLabel(startedAt?: string | null, nowMs?: number): string |
   return `${seconds}s`
 }
 
+function getElapsedSeconds(startedAt?: string | null, nowMs?: number): number | null {
+  if (!startedAt) return null
+  const started = new Date(startedAt)
+  if (Number.isNaN(started.getTime())) return null
+  return Math.max(0, Math.floor(((nowMs ?? Date.now()) - started.getTime()) / 1000))
+}
+
 function LapMetaTable({ laps, userLapId, isSolo, allowDownloads = true }: { laps: LapMeta[]; userLapId: string; isSolo: boolean; allowDownloads?: boolean }) {
   const userLap = laps.find((l) => l.id === userLapId || l.role === 'user')
   const userTimeMs = normalizeLapTimeMs(userLap?.lap_time ?? 0)
@@ -274,102 +413,88 @@ function LapMetaTable({ laps, userLapId, isSolo, allowDownloads = true }: { laps
   let refLapIndex = 0
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-slate-500 border-b border-slate-700/50">
-            <th className="text-left pb-2 pr-4 font-medium">{isSolo ? 'Lap' : 'Role'}</th>
-            {!isSolo && (
-              <th className="text-left pb-2 pr-4 font-medium">
-                <span className="flex items-center gap-1"><User className="w-3 h-3" />Driver</span>
-              </th>
-            )}
-            {!isSolo && <th className="text-right pb-2 pr-4 font-medium">iRating</th>}
-            <th className="text-right pb-2 pr-4 font-medium">Lap Time</th>
-            <th className="text-right pb-2 font-medium">{isSolo ? 'Δ vs Best' : 'Δ vs You'}</th>
-            <th className="text-left pb-2 pl-4 font-medium">Conditions</th>
-            <th className="pb-2 pl-3"></th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-700/30">
-          {laps.map((lap) => {
-            const garage61Url = getGarage61AnalyzeUrl(lap.id, lap.garage61_url)
-            const isUser = lap.role === 'user'
-            const deltaMs = isUser ? null : normalizeLapTimeMs(lap.lap_time) - userTimeMs
-            const deltaS = deltaMs != null ? deltaMs / 1000 : null
-            // positive delta = this lap is slower than baseline (bad) → red
-            // negative delta = this lap is faster than baseline → shouldn't happen in solo (baseline is fastest)
-            const deltaColor = deltaS == null ? '' : deltaS > 0 ? 'text-red-400' : 'text-emerald-400'
-            const deltaLabel =
-              deltaS == null ? '—'
-              : deltaS > 0 ? `+${deltaS.toFixed(3)}s`
-              : `−${Math.abs(deltaS).toFixed(3)}s`
+    <div className="space-y-2.5">
+      {laps.map((lap) => {
+        const garage61Url = getGarage61AnalyzeUrl(lap.id, lap.garage61_url)
+        const isUser = lap.role === 'user'
+        const deltaMs = isUser ? null : normalizeLapTimeMs(lap.lap_time) - userTimeMs
+        const deltaS = deltaMs != null ? deltaMs / 1000 : null
+        const deltaColor = deltaS == null ? 'text-slate-500' : deltaS > 0 ? 'text-red-400' : 'text-emerald-400'
+        const deltaLabel =
+          deltaS == null ? '—'
+          : deltaS > 0 ? `+${deltaS.toFixed(3)}s`
+          : `−${Math.abs(deltaS).toFixed(3)}s`
 
-            let roleLabel: React.ReactNode
-            if (isSolo) {
-              if (isUser) {
-                roleLabel = <span className="text-amber-400 font-medium">Best</span>
-              } else {
-                refLapIndex++
-                roleLabel = <span className="text-slate-400">Lap {refLapIndex + 1}</span>
-              }
-            } else {
-              roleLabel = isUser
-                ? <span className="text-blue-400 font-medium">You</span>
-                : <span className="text-orange-400">Ref</span>
-            }
+        let roleLabel: React.ReactNode
+        if (isSolo) {
+          if (isUser) {
+            roleLabel = <span className="text-amber-400 font-medium">Best</span>
+          } else {
+            refLapIndex++
+            roleLabel = <span className="text-slate-400">Lap {refLapIndex + 1}</span>
+          }
+        } else {
+          roleLabel = isUser
+            ? <span className="text-blue-400 font-medium">You</span>
+            : <span className="text-orange-400">Ref</span>
+        }
 
-            return (
-              <tr key={lap.id} className="text-slate-300">
-                <td className="py-2 pr-4">{roleLabel}</td>
+        return (
+          <div key={lap.id} className="rounded-xl border border-slate-700/50 bg-slate-900/40 px-3 py-2">
+            <div className="flex items-center gap-3 text-xs">
+              <div className="min-w-0 flex flex-1 items-center gap-3 overflow-hidden">
+                <span className="inline-flex flex-shrink-0 items-center rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-[11px]">
+                  {roleLabel}
+                </span>
                 {!isSolo && (
-                  <td className="py-2 pr-4 text-slate-200">
+                  <span className="truncate text-sm text-slate-100">
                     {lap.driver_name || <span className="text-slate-600 italic">unknown</span>}
-                  </td>
+                  </span>
                 )}
-                {!isSolo && (
-                  <td className="py-2 pr-4 text-right">
-                    {lap.irating != null ? <IRatingBadge value={lap.irating} /> : <span className="text-slate-600 font-mono">—</span>}
-                  </td>
-                )}
-                <td className="py-2 pr-4 text-right font-mono">
-                  {lap.lap_time ? formatLapTime(lap.lap_time) : <span className="text-slate-600">—</span>}
-                </td>
-                <td className={`py-2 text-right font-mono ${deltaColor}`}>
-                  {deltaLabel}
-                </td>
-                <td className="py-2 pl-4 text-slate-400 max-w-[24rem]">
-                  {formatLapConditions(lap.conditions)}
-                </td>
-                <td className="py-2 pl-3">
-                  <div className="flex items-center gap-2">
-                    {allowDownloads && lap.download_path && (
-                      <a
-                        href={lap.download_path}
-                        className="text-slate-600 hover:text-slate-300 transition-colors"
-                        title="Download stored telemetry CSV"
-                      >
-                        <Download className="w-3 h-3" />
-                      </a>
-                    )}
-                    {garage61Url && (
-                      <a
-                        href={garage61Url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-slate-600 hover:text-slate-400 transition-colors"
-                        title="Open in Garage61 Analyze"
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    )}
+                {!isSolo && lap.irating != null && <IRatingBadge value={lap.irating} />}
+                <span className="inline-flex flex-shrink-0 items-center gap-1.5">
+                  <span className="text-slate-500">Lap</span>
+                  <span className="font-mono text-slate-200">
+                    {lap.lap_time ? formatLapTime(lap.lap_time) : <span className="text-slate-600">—</span>}
+                  </span>
+                </span>
+                <span className="inline-flex flex-shrink-0 items-center gap-1.5">
+                  <span className="text-slate-500">{isSolo ? 'Δ vs best' : 'Δ vs you'}</span>
+                  <span className={`font-mono ${deltaColor}`}>{deltaLabel}</span>
+                </span>
+                <div className="min-w-0 flex-1 overflow-hidden">
+                  <div className="flex flex-wrap items-center justify-end gap-1">
+                    {renderConditionChips(lap.conditions)}
                   </div>
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+                </div>
+              </div>
+
+              <div className="flex flex-shrink-0 items-center gap-1 text-slate-500">
+                {allowDownloads && lap.download_path && (
+                  <a
+                    href={lap.download_path}
+                    className="rounded-md p-1 text-slate-600 hover:bg-slate-800 hover:text-slate-300 transition-colors"
+                    title="Download stored telemetry CSV"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                  </a>
+                )}
+                {garage61Url && (
+                  <a
+                    href={garage61Url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-md p-1 text-slate-600 hover:bg-slate-800 hover:text-slate-300 transition-colors"
+                    title="Open in Garage61 Analyze"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -403,6 +528,24 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
   const [metaExpanded, setMetaExpanded] = useState(false)
   const [shareState, setShareState] = useState<'idle' | 'loading' | 'copied'>('idle')
   const [liveNowMs, setLiveNowMs] = useState(() => Date.now())
+  const [selectedVersionId, setSelectedVersionId] = useState<string>('')
+  const [showRetrospect, setShowRetrospect] = useState(false)
+  const [retrospectFeedback, setRetrospectFeedback] = useState('')
+  const [selectedFeedbackText, setSelectedFeedbackText] = useState('')
+  const [feedbackComment, setFeedbackComment] = useState('')
+  const [feedbackSuccess, setFeedbackSuccess] = useState('')
+  const [activeFeedbackBubble, setActiveFeedbackBubble] = useState<{
+    group: FeedbackGroup
+    top: number
+    left: number
+  } | null>(null)
+  const [optimisticRetrospective, setOptimisticRetrospective] = useState<{
+    reportId: string
+    data: AdminRetrospective
+  } | null>(null)
+  const reportContentRef = useRef<HTMLDivElement | null>(null)
+  const feedbackPanelRef = useRef<HTMLDivElement | null>(null)
+  const feedbackBubbleRef = useRef<HTMLDivElement | null>(null)
   // Snapshot of the report before regeneration starts — kept visible until the user dismisses
   const [savedReport, setSavedReport] = useState<typeof report | null>(null)
   const backTo = (location.state as { backTo?: { pathname: string; state?: unknown } } | null)?.backTo
@@ -426,8 +569,59 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
 
   const regenerateMutation = useMutation({
     mutationFn: () => regenerateAnalysis(analysisId!),
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['analysis', analysisId] })
+      if (data?.id && !readOnly) {
+        navigate(`/report/${data.id}`, { state: location.state })
+      }
+    },
+  })
+
+  const setDefaultVersionMutation = useMutation({
+    mutationFn: (id: string) => setDefaultAnalysisVersion(id),
+    onSuccess: async (_, versionId) => {
+      await queryClient.invalidateQueries({ queryKey: ['analysis', versionId] })
+      await queryClient.invalidateQueries({ queryKey: ['analysis', analysisId] })
+      await queryClient.invalidateQueries({ queryKey: ['analysisHistory'] })
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'reports'] })
+    },
+  })
+
+  const retrospectMutation = useMutation({
+    mutationFn: () => adminRetrospectReport(analysisId!, {
+      feedback_text: retrospectFeedback,
+      focus_areas: '',
+    }),
+    onSuccess: (data) => {
+      if (analysisId) {
+        setOptimisticRetrospective({ reportId: analysisId, data })
+      }
+      setShowRetrospect(true)
+      setRetrospectFeedback('')
+      queryClient.invalidateQueries({ queryKey: ['analysis', analysisId] })
+      queryClient.invalidateQueries({ queryKey: ['admin', 'reports'] })
+    },
+  })
+
+  const reportFeedbackMutation = useMutation({
+    mutationFn: () => submitAnalysisFeedback(analysisId!, {
+      selected_text: selectedFeedbackText,
+      comment: feedbackComment,
+    }),
+    onSuccess: async () => {
+      setFeedbackSuccess('Feedback sent to admin.')
+      setSelectedFeedbackText('')
+      setFeedbackComment('')
+      window.getSelection()?.removeAllRanges()
+      await queryClient.invalidateQueries({ queryKey: ['analysis', analysisId] })
+      window.setTimeout(() => setFeedbackSuccess(''), 2500)
+    },
+  })
+
+  const deleteFeedbackMutation = useMutation({
+    mutationFn: (feedbackId: string) => deleteAnalysisFeedback(analysisId!, feedbackId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['analysis', analysisId] })
     },
   })
 
@@ -487,12 +681,70 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
 
   const elapsedStartAt = report?.enqueued_at ?? report?.created_at
   const elapsedLabel = isRegenerating ? formatElapsedLabel(elapsedStartAt, liveNowMs) : null
+  const elapsedSeconds = isRegenerating ? getElapsedSeconds(elapsedStartAt, liveNowMs) : null
+  const projectedRuntimeSeconds = 120
+  const projectedProgress = elapsedSeconds == null
+    ? 0
+    : Math.min(97, Math.max(4, Math.round((elapsedSeconds / projectedRuntimeSeconds) * 100)))
+  const regenerationTargetId = savedReport?.id
 
   // The report to render — fall back to the saved snapshot while regeneration is in flight
   const displayReport = savedReport ?? report
 
-  // The new report has landed — show a "ready" banner so the user can switch to it
-  const newVersionReady = savedReport != null && report?.status === 'completed' && report.id === savedReport.id
+  useEffect(() => {
+    if (displayReport?.id) {
+      setSelectedVersionId(displayReport.id)
+    }
+  }, [displayReport?.id])
+
+  useEffect(() => {
+    if (readOnly || !displayReport || displayReport.status === 'enqueued' || displayReport.status === 'processing' || displayReport.status === 'failed') {
+      return
+    }
+
+    const syncSelection = () => {
+      if (reportFeedbackMutation.isPending) return
+      const text = getSelectedReportText(reportContentRef.current)
+      const active = document.activeElement
+      const focusInsideFeedback =
+        active instanceof HTMLElement &&
+        feedbackPanelRef.current?.contains(active)
+
+      if (!text && focusInsideFeedback) {
+        return
+      }
+
+      setSelectedFeedbackText((prev) => (prev === text ? prev : text))
+      if (!text) {
+        setFeedbackComment((prev) => (prev ? prev : ''))
+      }
+    }
+
+    document.addEventListener('selectionchange', syncSelection)
+    return () => document.removeEventListener('selectionchange', syncSelection)
+  }, [displayReport, readOnly, reportFeedbackMutation.isPending])
+
+  useEffect(() => {
+    if (!displayReport?.id) return
+    if (optimisticRetrospective && optimisticRetrospective.reportId !== displayReport.id) {
+      setOptimisticRetrospective(null)
+    }
+  }, [displayReport?.id, optimisticRetrospective])
+
+  useEffect(() => {
+    if (selectedFeedbackText) {
+      setFeedbackSuccess('')
+    }
+  }, [selectedFeedbackText])
+
+  useEffect(() => {
+    if (readOnly || !regenerationTargetId || !report) return
+    if (report.status === 'enqueued' || report.status === 'processing' || report.status === 'failed') return
+    if (report.id === regenerationTargetId) return
+
+    setSavedReport(null)
+    navigate(`/report/${report.id}`, { state: location.state, replace: true })
+  }, [readOnly, regenerationTargetId, report, navigate, location.state])
 
   // Compute sector distance ranges from the distances array
   const sectorDistRanges = useMemo(() => {
@@ -522,7 +774,6 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
     () => sectorDeltas.reduce((sum, item) => sum + item.deltaMs, 0),
     [sectorDeltas],
   )
-
   const handleSectorClick = (sector: number | null) => {
     setSelectedSector(sector)
     // When sector selected, highlight corners in that range
@@ -541,14 +792,106 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
 
   const isSolo = displayReport?.analysis_mode === 'solo'
   const isAdmin = user?.role === 'admin'
+  const canSeeFeedbackHighlights = !readOnly && !!displayReport && (isAdmin || displayReport.user_id === user?.id)
+  const feedbackHighlights = useMemo(
+    () => (canSeeFeedbackHighlights ? normalizeFeedbackSelections(displayReport?.user_feedback_items) : []),
+    [canSeeFeedbackHighlights, displayReport?.user_feedback_items],
+  )
+  useEffect(() => {
+    if (!activeFeedbackBubble) return
+    const next = feedbackHighlights.find((item) => item.key === activeFeedbackBubble.group.key) ?? null
+    setActiveFeedbackBubble((prev) => (prev && next ? { ...prev, group: next } : null))
+  }, [feedbackHighlights, activeFeedbackBubble])
+
+  useEffect(() => {
+    if (!activeFeedbackBubble) return
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null
+      if (feedbackBubbleRef.current?.contains(target)) return
+      if ((target instanceof HTMLElement) && target.closest('button[title*="feedback item"]')) return
+      setActiveFeedbackBubble(null)
+    }
+    const handleScroll = () => setActiveFeedbackBubble(null)
+    document.addEventListener('mousedown', handlePointerDown)
+    window.addEventListener('scroll', handleScroll, true)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      window.removeEventListener('scroll', handleScroll, true)
+    }
+  }, [activeFeedbackBubble])
+
+  const handleFeedbackClick = (group: FeedbackGroup, target: HTMLElement) => {
+    const rect = target.getBoundingClientRect()
+    const bubbleWidth = 360
+    const gap = 10
+    const preferredLeft = rect.right + gap
+    const left = preferredLeft + bubbleWidth > window.innerWidth - 12
+      ? Math.max(12, rect.left - bubbleWidth - gap)
+      : preferredLeft
+    const top = Math.min(
+      window.innerHeight - 24,
+      Math.max(16, rect.top + rect.height / 2),
+    )
+    setActiveFeedbackBubble({ group, top, left })
+  }
+  const persistedRetrospectives = displayReport?.admin_retrospectives ?? []
+  const retrospectives = optimisticRetrospective && optimisticRetrospective.reportId === displayReport?.id
+    ? [...persistedRetrospectives, optimisticRetrospective.data].filter(
+        (item, index, array) =>
+          array.findIndex(
+            (candidate) =>
+              candidate.created_at === item.created_at &&
+              candidate.feedback_text === item.feedback_text,
+          ) === index,
+      )
+    : persistedRetrospectives
+  const hasRetrospectives = retrospectives.length > 0
+  const versionOptions = displayReport?.available_versions ?? []
   const reportPhase = getReportPhase(report?.status)
   const soloUserLap = isSolo ? displayReport?.laps_metadata?.find((l) => l.role === 'user') : undefined
   const soloTotalLaps = displayReport ? displayReport.reference_lap_ids.length + 1 : 0
   const hasGps = (displayReport?.telemetry?.user_lat?.length ?? 0) > 0
+  const showTrackGuide = hasGps && activeTab !== 'heatmap'
   const trackLength =
     displayReport && displayReport.telemetry?.distances?.length > 0
       ? displayReport.telemetry.distances[displayReport.telemetry.distances.length - 1]
       : 3000
+
+  const renderVersionSelector = () => {
+    if (!isAdmin || readOnly || !displayReport || versionOptions.length <= 1) {
+      return null
+    }
+    return (
+      <span className="flex items-center gap-1.5">
+        <span className="text-slate-500">Version</span>
+        <select
+          value={selectedVersionId || displayReport.id}
+          onChange={(e) => {
+            const nextId = e.target.value
+            setSelectedVersionId(nextId)
+            if (nextId !== displayReport.id) {
+              navigate(`/report/${nextId}`, { state: location.state })
+            }
+          }}
+          className="bg-slate-800 border border-slate-700 rounded-md px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+        >
+          {versionOptions.map((version) => (
+            <option key={version.id} value={version.id}>
+              {`v${version.version_number}${version.is_default_version ? ' default' : ''} · ${new Date(version.created_at).toLocaleDateString()}`}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={() => displayReport.id && setDefaultVersionMutation.mutate(displayReport.id)}
+          disabled={displayReport.is_default_version || setDefaultVersionMutation.isPending}
+          className="px-2 py-1 rounded-md border border-slate-700 text-xs text-slate-300 hover:bg-slate-700/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {displayReport.is_default_version ? 'Default' : 'Make default'}
+        </button>
+      </span>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col">
@@ -589,6 +932,12 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                 Read-only
               </span>
             )}
+            {isAdmin && !readOnly && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-amber-300 border border-amber-500/30 bg-amber-500/10 rounded px-2 py-0.5 flex-shrink-0">
+                <Shield className="w-3 h-3" />
+                Admin
+              </span>
+            )}
             <ThemeToggle />
           </div>
 
@@ -596,7 +945,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
       </header>
 
       {/* Content */}
-      <main className="flex-1 max-w-[90%] w-full mx-auto px-4 py-6">
+      <main ref={reportContentRef} className="flex-1 max-w-[90%] w-full mx-auto px-4 py-6">
         {isLoading && (
           <div className="flex flex-col items-center justify-center py-24 gap-4">
             <div className="w-10 h-10 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
@@ -607,7 +956,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
         {!isLoading && (report?.status === 'enqueued' || report?.status === 'processing') && (
           <div className="flex flex-col items-center justify-center py-24 gap-5">
             <div className="w-12 h-12 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
-            <div className="text-center">
+            <div className="text-center w-full max-w-xl">
               <p className="text-white font-medium mb-1">
                 {report.status === 'enqueued' ? 'Waiting in queue…' : 'Analysing telemetry…'}
               </p>
@@ -621,6 +970,21 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
               <p className="text-slate-500 text-sm mt-3">
                 {reportPhase.detail}
               </p>
+              <div className="mt-4">
+                <div className="mb-1.5 flex items-center justify-between text-xs text-slate-500">
+                  <span>Projected progress</span>
+                  <span className="font-medium text-amber-300">{projectedProgress}%</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-800 ring-1 ring-slate-700/80">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-amber-500 via-amber-400 to-yellow-300 transition-[width] duration-700 ease-out"
+                    style={{ width: `${projectedProgress}%` }}
+                  />
+                </div>
+                <p className="mt-2 text-[11px] text-slate-500">
+                  Based on an expected analysis runtime of about {projectedRuntimeSeconds} seconds.
+                </p>
+              </div>
               {elapsedLabel && (
                 <p className="text-amber-400 text-sm font-medium mt-3">
                   Time elapsed: {elapsedLabel}
@@ -664,16 +1028,87 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
           </div>
         )}
 
-        {newVersionReady && (
-          <div className="mb-4 flex items-center gap-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3">
-            <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
-            <span className="text-emerald-300 text-sm flex-1">New analysis is ready.</span>
-            <button
-              onClick={() => setSavedReport(null)}
-              className="px-3 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-xs font-medium transition-colors flex-shrink-0"
-            >
-              View new version
-            </button>
+        {displayReport && (!displayReport.status || displayReport.status === 'completed') && isAdmin && !readOnly && (
+          <div className="mb-5 rounded-xl border border-sky-500/20 bg-sky-950/10 px-4 py-4 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-sky-300">LLM Retrospective</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Review prior retrospectives and send fresh follow-up comments back to the LLM to diagnose mistakes and suggest prompt changes.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowRetrospect((prev) => !prev)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-sky-500/10 border border-sky-500/30 text-sky-300 hover:bg-sky-500/20 transition-colors"
+              >
+                <Sparkles className="w-4 h-4" />
+                {showRetrospect ? 'Hide' : hasRetrospectives ? `Open (${retrospectives.length})` : 'Open'}
+              </button>
+            </div>
+
+            {hasRetrospectives && !showRetrospect && (
+              <div className="rounded-lg border border-slate-700/70 bg-slate-900/35 px-3 py-2">
+                <p className="text-xs text-slate-400">
+                  Latest retrospective from{' '}
+                  <span className="text-slate-200">
+                    {new Date(retrospectives[retrospectives.length - 1].created_at).toLocaleString()}
+                  </span>
+                </p>
+              </div>
+            )}
+
+            {showRetrospect && (
+              <>
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">Feedback / comments</label>
+                  <textarea
+                    value={retrospectFeedback}
+                    onChange={(e) => setRetrospectFeedback(e.target.value)}
+                    disabled={retrospectMutation.isPending}
+                    rows={6}
+                    placeholder="Add fresh follow-up comments, corrections, or nuance for the LLM to review."
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-sky-400 resize-y disabled:opacity-60 disabled:cursor-wait"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => retrospectMutation.mutate()}
+                    disabled={retrospectMutation.isPending}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-sky-500/15 border border-sky-500/30 text-sky-300 hover:bg-sky-500/20 disabled:opacity-50 transition-colors"
+                  >
+                    <Sparkles className={`w-4 h-4 ${retrospectMutation.isPending ? 'animate-pulse' : ''}`} />
+                    {retrospectMutation.isPending ? 'Running…' : 'Run retrospective'}
+                  </button>
+                  {retrospectMutation.isPending && (
+                    <span className="text-xs text-sky-300">
+                      Status: sending report payload to the LLM and waiting for feedback...
+                    </span>
+                  )}
+                  {!retrospectMutation.isPending && !retrospectMutation.isError && hasRetrospectives && (
+                    <span className="text-xs text-slate-500">
+                      Status: ready
+                    </span>
+                  )}
+                  {retrospectMutation.isError && (
+                    <span className="text-xs text-red-400">Retrospective failed. Check provider/API key availability and try again.</span>
+                  )}
+                </div>
+
+                {hasRetrospectives && (
+                  <div className="space-y-3">
+                    {[...retrospectives].reverse().map((retrospective) => (
+                      <RetrospectiveView
+                        key={`${retrospective.created_at}-${retrospective.feedback_text}`}
+                        retrospective={retrospective}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
 
@@ -681,12 +1116,12 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
           <>
             {/* Lap metadata bar */}
             {isSolo ? (
-              /* Session analysis — compact non-expandable header */
+              /* Driving-pattern analysis — compact non-expandable header */
               <div className="mb-5 card p-0 overflow-hidden">
                 <div className="flex items-center gap-x-5 gap-y-1.5 flex-wrap px-3 py-2.5 text-xs text-slate-400">
                   {/* Mode badge */}
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium border bg-violet-500/15 border-violet-500/30 text-violet-300">
-                    Session Analysis
+                    Driving Patterns
                   </span>
                   {/* Timestamp */}
                   <span className="flex items-center gap-1.5">
@@ -736,6 +1171,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       )}
                     </span>
                   )}
+                  {renderVersionSelector()}
                   {/* Link to best lap on Garage61 */}
                   <a
                     href={`https://garage61.net/app/laps/${displayReport.lap_id}`}
@@ -857,6 +1293,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       )}
                     </span>
                   )}
+                  {renderVersionSelector()}
                   <div className="ml-auto flex items-center gap-1 flex-shrink-0">
                     {!readOnly && (
                       <>
@@ -970,7 +1407,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                 const n = soloTotalLaps
                 return (
                   <p className="text-xs text-slate-500 mb-4 px-0.5">
-                    Analyzing <span className="text-slate-300">{n} session laps</span> by {userLap?.driver_name || 'you'}
+                    Analyzing <span className="text-slate-300">{n} sampled laps</span> by {userLap?.driver_name || 'you'}
                     {userLap?.lap_time ? <> — fastest <span className="font-mono text-amber-400">{formatLapTime(userLap.lap_time)}</span></> : null}
                     {refLaps.length > 0 ? <> compared point-by-point against the <span className="text-slate-300">median of {refLaps.length} other {refLaps.length === 1 ? 'lap' : 'laps'}</span></> : null}.
                   </p>
@@ -1064,10 +1501,10 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
             </div>
 
             {/* Two-column layout when GPS available */}
-            <div className={hasGps ? 'grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-4 items-start' : ''}>
+            <div className={showTrackGuide ? 'grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-4 items-start' : ''}>
 
               {/* Persistent sticky TrackMap */}
-              {hasGps && (
+              {showTrackGuide && (
                 <div className="xl:sticky xl:top-20">
                   <TrackMap
                     userLat={displayReport.telemetry.user_lat ?? []}
@@ -1104,7 +1541,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                           </div>
                         )}
                       </div>
-                      <p className="text-slate-300 text-sm leading-relaxed">{displayReport.summary}</p>
+                      <p className="text-slate-300 text-sm leading-relaxed">{renderHighlightedText(displayReport.summary, feedbackHighlights, handleFeedbackClick)}</p>
                     </div>
 
                     {displayReport.strengths.length > 0 && (
@@ -1116,7 +1553,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                               key={index}
                               className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-3 text-sm text-slate-300"
                             >
-                              {strength}
+                              {renderHighlightedText(strength, feedbackHighlights, handleFeedbackClick)}
                             </div>
                           ))}
                         </div>
@@ -1135,7 +1572,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                               <span className="flex-shrink-0 text-xs text-slate-500 font-mono mt-0.5">
                                 {String(index + 1).padStart(2, '0')}
                               </span>
-                              <p className="text-sm text-slate-300 leading-relaxed">{note}</p>
+                              <p className="text-sm text-slate-300 leading-relaxed">{renderHighlightedText(note, feedbackHighlights, handleFeedbackClick)}</p>
                             </div>
                           ))}
                         </div>
@@ -1159,10 +1596,14 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       refBrake: displayReport.telemetry.ref_brake,
                       userThrottle: displayReport.telemetry.user_throttle,
                       refThrottle: displayReport.telemetry.ref_throttle,
+                      userGear: displayReport.telemetry.user_gear,
+                      refGear: displayReport.telemetry.ref_gear,
                       corners: displayReport.telemetry.corners,
                     }}
                     onActiveCorners={setActiveCornerNums}
                     onHoverIndex={setHoverIdx}
+                    feedbackHighlights={feedbackHighlights}
+                    onFeedbackClick={handleFeedbackClick}
                   />
                 )}
 
@@ -1174,10 +1615,10 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                           <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
                         </svg>
                         <span>
-                          <span className="text-slate-300 font-medium">Session mode — </span>
-                          your fastest lap from the session is shown as <span className="text-amber-400 font-medium">You</span>.
-                          The <span className="text-orange-400 font-medium">Ref</span> line is the point-by-point median of all your other session laps,
-                          showing where your fastest lap deviates from your typical driving.
+                          <span className="text-slate-300 font-medium">Driving-pattern mode — </span>
+                          your fastest sampled lap is shown as <span className="text-amber-400 font-medium">You</span>.
+                          The <span className="text-orange-400 font-medium">Ref</span> line is the point-by-point median of your other sampled laps,
+                          showing where your best attempt deviates from your repeatable habits across sessions.
                         </span>
                       </div>
                     )}
@@ -1210,16 +1651,16 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                 )}
 
                 {activeTab === 'heatmap' && (
-                  <div className="space-y-4">
-                    {isSolo && (
-                      <DeltaHeatmap
-                        distances={displayReport.telemetry.distances}
-                        delta_ms={displayReport.telemetry.delta_ms}
-                        corners={displayReport.telemetry.corners}
-                        isSolo={isSolo}
-                        xRange={activeSectorRange}
-                      />
-                    )}
+                  <div className="space-y-3">
+                    <DeltaHeatmap
+                      distances={displayReport.telemetry.distances}
+                      delta_ms={displayReport.telemetry.delta_ms}
+                      corners={displayReport.telemetry.corners}
+                      isSolo={isSolo}
+                      xRange={activeSectorRange}
+                      hoverIndex={hoverIdx}
+                      onHoverIndex={setHoverIdx}
+                    />
                     <HeatMap
                       lat={displayReport.telemetry.user_lat ?? []}
                       lon={displayReport.telemetry.user_lon ?? []}
@@ -1232,6 +1673,8 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       xRange={activeSectorRange}
                       distances={displayReport.telemetry.distances}
                       isSolo={isSolo}
+                      hoverIndex={hoverIdx}
+                      onHoverIndex={setHoverIdx}
                     />
                   </div>
                 )}
@@ -1239,7 +1682,130 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
             </div>
           </>
         )}
+
+        {!readOnly && displayReport && (!displayReport.status || displayReport.status === 'completed') && (selectedFeedbackText || feedbackSuccess) && (
+          <div
+            ref={feedbackPanelRef}
+            className="fixed bottom-5 right-5 z-20 w-full max-w-md rounded-2xl border border-amber-500/30 bg-slate-900/95 shadow-2xl shadow-black/40 backdrop-blur"
+          >
+            <div className="px-4 py-3 border-b border-slate-800 flex items-center gap-2">
+              <MessageSquare className="w-4 h-4 text-amber-400" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-white">Send Feedback to Admin</p>
+                <p className="text-xs text-slate-400">Selected report text plus your comment will be sent for review.</p>
+              </div>
+            </div>
+            <div className="px-4 py-3 space-y-3">
+              {feedbackSuccess ? (
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+                  {feedbackSuccess}
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Selected text</p>
+                    <div className="max-h-28 overflow-auto rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-200 whitespace-pre-wrap">
+                      {selectedFeedbackText}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[11px] uppercase tracking-wide text-slate-500 mb-1 block">Comment</label>
+                    <textarea
+                      value={feedbackComment}
+                      onChange={(e) => setFeedbackComment(e.target.value)}
+                      disabled={reportFeedbackMutation.isPending}
+                      rows={4}
+                      placeholder="What do you disagree with or want the admin to review?"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 resize-y disabled:opacity-60 disabled:cursor-wait"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedFeedbackText('')
+                        setFeedbackComment('')
+                        window.getSelection()?.removeAllRanges()
+                      }}
+                      className="px-3 py-2 rounded-lg border border-slate-700 text-sm text-slate-300 hover:bg-slate-800 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => reportFeedbackMutation.mutate()}
+                      disabled={reportFeedbackMutation.isPending || !selectedFeedbackText}
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500 text-slate-900 text-sm font-medium hover:bg-amber-400 disabled:opacity-50 transition-colors"
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                      {reportFeedbackMutation.isPending ? 'Sending…' : 'Send'}
+                    </button>
+                  </div>
+                  {reportFeedbackMutation.isError && (
+                    <p className="text-xs text-red-400">Failed to send feedback. Try again.</p>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
       </main>
+      {canSeeFeedbackHighlights && activeFeedbackBubble && (
+        <div
+          ref={feedbackBubbleRef}
+          className="fixed z-30 w-[22rem] max-w-[calc(100vw-1.5rem)] -translate-y-1/2 rounded-2xl border border-fuchsia-400/30 bg-slate-900/96 shadow-2xl shadow-black/50 backdrop-blur"
+          style={{ top: activeFeedbackBubble.top, left: activeFeedbackBubble.left }}
+        >
+          <div className="flex items-start justify-between gap-3 border-b border-fuchsia-400/20 px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-white">Feedback Details</p>
+              <p className="text-xs text-slate-400">Comments attached to this highlighted passage.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveFeedbackBubble(null)}
+              className="rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 transition-colors hover:bg-slate-800"
+            >
+              Close
+            </button>
+          </div>
+          <div className="space-y-3 px-4 py-3">
+            <div>
+              <p className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">Highlighted text</p>
+              <div className="rounded-lg border border-fuchsia-400/25 bg-fuchsia-500/10 px-3 py-2 text-sm text-slate-200 whitespace-pre-wrap">
+                {activeFeedbackBubble.group.key}
+              </div>
+            </div>
+            <div className="max-h-80 space-y-2 overflow-auto pr-1">
+              {activeFeedbackBubble.group.items.map((item) => (
+                <div key={item.id} className="rounded-lg border border-slate-700/70 bg-slate-950/60 px-3 py-2">
+                  <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                    <div className="flex items-center gap-2">
+                      <span>{item.user_display_name || 'User feedback'}</span>
+                      <span>{new Date(item.created_at).toLocaleString()}</span>
+                    </div>
+                    {(isAdmin || item.user_id === user?.id) && (
+                      <button
+                        type="button"
+                        onClick={() => deleteFeedbackMutation.mutate(item.id)}
+                        disabled={deleteFeedbackMutation.isPending}
+                        className="inline-flex items-center gap-1 rounded-md border border-red-500/30 px-2 py-1 text-[11px] text-red-300 transition-colors hover:bg-red-500/10 disabled:opacity-50"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-sm text-slate-200 whitespace-pre-wrap">
+                    {item.comment || 'No comment provided.'}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

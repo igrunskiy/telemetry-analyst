@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import type { ReactNode } from 'react'
+import { useNavigate, Link, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { LogOut, User, ChevronRight, Clock, Calendar, Loader2, Car, MapPin, BarChart2, Trash2, Zap, Activity, History, Shield, Upload, FileText, Pencil, Save, X } from 'lucide-react'
+import { LogOut, User, ChevronRight, Calendar, Loader2, Car, MapPin, BarChart2, Trash2, Zap, Activity, History, Shield, Upload, FileText, Pencil, Save, X, ThermometerSun, Waves, Wind, Filter } from 'lucide-react'
 import { ThemeToggle } from '../components/ThemeToggle'
 import { useAuth } from '../hooks/useAuth'
 import { adminListPrompts } from '../api/client'
@@ -10,7 +11,6 @@ import {
   getCars,
   getTracks,
   getMyLaps,
-  getMySessions,
   getRecentLaps,
   getReferenceLaps,
   getAnalysisHistory,
@@ -25,7 +25,7 @@ import {
   deleteAnalysis,
   logout,
 } from '../api/client'
-import type { Lap, Session, AnalysisHistoryItem, Car as CarType, Track, UploadInspection, ImportedTelemetry, Garage61DictionaryEntry, RecentActivity } from '../types'
+import type { Lap, AnalysisHistoryItem, Car as CarType, Track, UploadInspection, ImportedTelemetry, Garage61DictionaryEntry, RecentActivity } from '../types'
 
 function normalizeLapTimeMs(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
@@ -104,60 +104,105 @@ function parseOptionalNumber(value: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
-function formatDate(dateStr: string): string {
-  const parsed = parseDate(dateStr)
-  if (!parsed) {
-    return '—'
-  }
-  return parsed.toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  })
-}
-
 function formatDateTime(dateStr: string): string {
   const parsed = parseDate(dateStr)
   if (!parsed) return '—'
-  const date = parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  const date = parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
   // Only show time if the value contained a time component (not just a date string)
   const hasTime = /[T ]/.test(dateStr) && !/T00:00:00/.test(dateStr)
   if (!hasTime) return date
-  const time = parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  const time = parsed.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }).replace(/\s/g, '').toLowerCase()
   return `${date} ${time}`
 }
 
-function formatLapConditionsCompact(lap: Lap): string {
-  const conditions = lap.conditions
-  if (!conditions) {
-    return '—'
-  }
+function formatTemperature(value?: number | null): string | null {
+  if (value == null || !Number.isFinite(value)) return null
+  return `${Math.round(value)}°C`
+}
 
-  const formatWindDirection = (value?: string | number): string | null => {
-    if (value == null || value === '') return null
-    if (typeof value === 'string') return value
-    const degrees = Math.abs(value) <= Math.PI * 2 + 0.001 ? (value * 180) / Math.PI : value
-    const normalized = ((degrees % 360) + 360) % 360
-    const labels = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
-    const label = labels[Math.round(normalized / 45) % labels.length]
-    return `${label} ${normalized.toFixed(0)}deg`
+function normalizeWindDegrees(value?: string | number | null): number | null {
+  if (value == null) return null
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    const parsed = Number(trimmed)
+    if (!Number.isFinite(parsed)) return null
+    value = parsed
   }
-
-  const parts: string[] = []
-  if (conditions.setup_type) parts.push(`Setup ${conditions.setup_type}`)
-  if (conditions.weather) parts.push(conditions.weather)
-  if (conditions.track_temp_c != null) parts.push(`Track ${conditions.track_temp_c.toFixed(0)}C`)
-  if (conditions.air_temp_c != null) parts.push(`Air ${conditions.air_temp_c.toFixed(0)}C`)
-  if (conditions.wind_kph != null) {
-    const windDirection = formatWindDirection(conditions.wind_direction)
-    parts.push(`Wind ${conditions.wind_kph.toFixed(0)}${windDirection ? ` ${windDirection}` : ''}`)
-  } else {
-    const windDirection = formatWindDirection(conditions.wind_direction)
-    if (windDirection) parts.push(`Wind ${windDirection}`)
+  if (!Number.isFinite(value)) return null
+  if (Math.abs(value) <= Math.PI * 2 + 0.001) {
+    const deg = (value * 180) / Math.PI
+    return ((deg % 360) + 360) % 360
   }
-  if (conditions.time_of_day) parts.push(conditions.time_of_day)
+  return ((value % 360) + 360) % 360
+}
 
-  return parts.length > 0 ? parts.join(' • ') : '—'
+function windDirectionLabel(value?: string | number | null): string | null {
+  const deg = normalizeWindDegrees(value)
+  if (deg == null) return null
+  const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+  const index = Math.round(deg / 45) % 8
+  return directions[index]
+}
+
+function formatWind(value?: string | number | null, speedKph?: number | null): string | null {
+  const direction = windDirectionLabel(value)
+  const speed = speedKph != null && Number.isFinite(speedKph) ? `${Math.round(speedKph)}` : null
+  if (direction && speed) return `${direction} ${speed} kph`
+  if (speed) return `${speed} kph`
+  return direction
+}
+
+function ConditionIconChip({ icon, label, title }: { icon: ReactNode, label: string, title?: string }) {
+  return (
+    <span
+      title={title ?? label}
+      className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300"
+    >
+      {icon}
+      <span>{label}</span>
+    </span>
+  )
+}
+
+function renderConditionChips(conditions?: Lap['conditions'] | null, compact = false) {
+  if (!conditions) return null
+  const air = formatTemperature(conditions.air_temp_c)
+  const track = formatTemperature(conditions.track_temp_c)
+  const wind = formatWind(conditions.wind_direction, conditions.wind_kph)
+  if (!air && !track && !wind) return null
+  return (
+    <div className={`${compact ? '' : 'mt-1 '}flex flex-wrap items-center gap-1`}>
+      {track ? (
+        <ConditionIconChip
+          icon={<Waves className="w-3 h-3 text-amber-300" />}
+          label={track}
+          title={`Track ${track}`}
+        />
+      ) : null}
+      {air ? (
+        <ConditionIconChip
+          icon={<ThermometerSun className="w-3 h-3 text-orange-300" />}
+          label={air}
+          title={`Air ${air}`}
+        />
+      ) : null}
+      {wind ? (
+        <ConditionIconChip
+          icon={<Wind className="w-3 h-3 text-sky-300" />}
+          label={wind}
+          title={`Wind ${wind}`}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function pickBestLapFromRecentActivity(activity: RecentActivity): Lap | null {
+  if (!activity.laps?.length) return null
+  return activity.laps.reduce((best, lap) => (
+    parseLapTime(lap.lap_time) < parseLapTime(best.lap_time) ? lap : best
+  ), activity.laps[0])
 }
 
 function formatTrackName(track: Track): string {
@@ -177,24 +222,22 @@ function buildDriverKey(value: string): string | undefined {
   return key || undefined
 }
 
-function getLapSourceLabel(lapId: string): 'csv' | 'g61' {
-  return lapId.startsWith('upload:') ? 'csv' : 'g61'
+function getLapSourceLabel(lapId: string): 'upload' | 'g61' {
+  return lapId.startsWith('upload:') ? 'upload' : 'g61'
 }
 
 function sortSessionLapsChronologically(laps: Lap[]): Lap[] {
   return [...laps].sort((a, b) => {
     const aTime = parseDate(a.recorded_at)?.getTime()
     const bTime = parseDate(b.recorded_at)?.getTime()
-    if (aTime != null && bTime != null) {
-      return aTime - bTime
-    }
+    if (aTime != null && bTime != null) return aTime - bTime
     if (aTime != null) return -1
     if (bTime != null) return 1
     return 0
   })
 }
 
-function pickSessionConsecutiveWindow(laps: Lap[], windowSize = 5): Lap[] {
+function pickSessionConsecutiveWindow(laps: Lap[], windowSize = 6): Lap[] {
   const ordered = sortSessionLapsChronologically(laps)
   if (ordered.length <= windowSize) {
     return ordered
@@ -233,22 +276,29 @@ function pickSessionConsecutiveWindow(laps: Lap[], windowSize = 5): Lap[] {
   return ordered.slice(bestStart, bestStart + windowSize)
 }
 
-function buildSessionAnalysisLaps(laps: Lap[], windowSize = 5): { consecutiveLaps: Lap[], analysisLaps: Lap[], fastestLap: Lap | null } {
+function buildSessionAnalysisLaps(
+  laps: Lap[],
+  windowSize = 6,
+): { primary: Lap | null, references: Lap[], consecutiveLaps: Lap[] } {
   const ordered = sortSessionLapsChronologically(laps)
   if (ordered.length === 0) {
-    return { consecutiveLaps: [], analysisLaps: [], fastestLap: null }
+    return { primary: null, references: [], consecutiveLaps: [] }
   }
+
   const consecutiveLaps = pickSessionConsecutiveWindow(ordered, windowSize)
   const fastestLap = ordered.reduce((best, lap) => (
     parseLapTime(lap.lap_time) < parseLapTime(best.lap_time) ? lap : best
   ), ordered[0])
 
-  const included = new Set(consecutiveLaps.map((lap) => lap.id))
-  const analysisLaps = included.has(fastestLap.id)
-    ? consecutiveLaps
-    : [...consecutiveLaps, fastestLap]
+  const references = consecutiveLaps
+    .filter((lap) => lap.id !== fastestLap.id)
+    .slice(0, Math.max(windowSize - 1, 0))
 
-  return { consecutiveLaps, analysisLaps, fastestLap }
+  return {
+    primary: fastestLap ?? null,
+    references,
+    consecutiveLaps,
+  }
 }
 
 type UploadTab = 'files' | 'metadata'
@@ -305,11 +355,12 @@ function buildUploadDraft(file: File, accountOwnerName: string, inspection?: Upl
 
 export default function LapSelectorPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { user } = useAuth()
   const accountOwnerName = normalizeDriverName(user?.display_name ?? '')
+  const restoredFilterState = location.state as { selectedCarId?: string | number | null; selectedTrackId?: string | number | null } | null
 
   const [pageTab, setPageTab] = useState<PageTab>('analysis')
-  const [analysisMode, setAnalysisMode] = useState<'vs_reference' | 'sessions'>('vs_reference')
   const [uploadTab, setUploadTab] = useState<UploadTab>('files')
   const [llmModel, setLlmModel] = useState<'claude' | 'gemini'>('claude')
   const [promptVersion, setPromptVersion] = useState<string>('default')
@@ -328,17 +379,16 @@ export default function LapSelectorPage() {
   const [selectedLapId, setSelectedLapId] = useState<string | null>(null)
   const [selectedRefIds, setSelectedRefIds] = useState<Set<string>>(new Set())
   const [refLapLimit, setRefLapLimit] = useState(5)
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
-  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null)
-  const [myLapsLimit, setMyLapsLimit] = useState(5)
+  const [refLapsPage, setRefLapsPage] = useState(0)
+  const REF_LAPS_PAGE_SIZE = 5
   const [myLapsPage, setMyLapsPage] = useState(0)
-  const [mySessionsLimit, setMySessionsLimit] = useState(10)
-  const [mySessionsPage, setMySessionsPage] = useState(0)
+  const [myLapsSort, setMyLapsSort] = useState<'time' | 'date'>('time')
+  const MY_LAPS_PAGE_SIZE = 5
   const [recentPage, setRecentPage] = useState(0)
-  const [expandedRecentIds, setExpandedRecentIds] = useState<Set<string>>(new Set())
   const [recentSourceFilter, setRecentSourceFilter] = useState<'all' | 'garage61' | 'upload'>('all')
   const RECENT_PAGE_SIZE = 5
   const [historyPage, setHistoryPage] = useState(0)
+  const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'reference' | 'patterns'>('all')
   const HISTORY_PAGE_SIZE = 5
 
   // Data fetching
@@ -357,22 +407,16 @@ export default function LapSelectorPage() {
   })
 
   const { data: myLaps = [], isLoading: myLapsLoading } = useQuery({
-    queryKey: ['myLaps', selectedCarId, selectedTrackId, myLapsLimit, myLapsPage],
+    queryKey: ['myLaps', selectedCarId, selectedTrackId, myLapsPage],
     queryFn: () =>
-      getMyLaps(selectedCarId!, selectedTrackId!, myLapsLimit, myLapsPage * myLapsLimit),
-    enabled: selectedCarId !== null && selectedTrackId !== null && analysisMode === 'vs_reference',
-  })
-
-  const { data: mySessions = [], isLoading: mySessionsLoading } = useQuery({
-    queryKey: ['mySessions', selectedCarId, selectedTrackId, mySessionsLimit, mySessionsPage],
-    queryFn: () =>
-      getMySessions(selectedCarId!, selectedTrackId!, mySessionsLimit, mySessionsPage * mySessionsLimit),
-    enabled: selectedCarId !== null && selectedTrackId !== null && analysisMode === 'sessions',
+      getMyLaps(selectedCarId!, selectedTrackId!, 100, 0),
+    enabled: selectedCarId !== null && selectedTrackId !== null,
   })
 
   const { data: refLaps = [], isLoading: refLapsLoading } = useQuery({
     queryKey: ['refLaps', selectedCarId, selectedTrackId, refLapLimit],
-    queryFn: () => getReferenceLaps(selectedCarId!, selectedTrackId!, refLapLimit),
+    queryFn: () =>
+      getReferenceLaps(selectedCarId!, selectedTrackId!, refLapLimit),
     enabled: selectedCarId !== null && selectedTrackId !== null,
   })
 
@@ -435,6 +479,12 @@ export default function LapSelectorPage() {
   )
 
   const filteredHistory = history.filter((item: AnalysisHistoryItem) => {
+    if (historyTypeFilter === 'reference' && item.analysis_mode !== 'vs_reference') {
+      return false
+    }
+    if (historyTypeFilter === 'patterns' && item.analysis_mode !== 'solo') {
+      return false
+    }
     if (selectedCarId) {
       const car = cars.find((c) => c.id === selectedCarId)
       if (car && item.car_name !== car.name) return false
@@ -447,6 +497,22 @@ export default function LapSelectorPage() {
   })
   const historyTotalPages = Math.ceil(filteredHistory.length / HISTORY_PAGE_SIZE)
   const pagedHistory = filteredHistory.slice(historyPage * HISTORY_PAGE_SIZE, (historyPage + 1) * HISTORY_PAGE_SIZE)
+  const sortedMyLaps = useMemo(() => {
+    const next = [...myLaps]
+    if (myLapsSort === 'date') {
+      next.sort((a, b) => {
+        const aTime = parseDate(a.recorded_at)?.getTime() ?? 0
+        const bTime = parseDate(b.recorded_at)?.getTime() ?? 0
+        return bTime - aTime
+      })
+      return next
+    }
+    next.sort((a, b) => parseLapTime(a.lap_time) - parseLapTime(b.lap_time))
+    return next
+  }, [myLaps, myLapsSort])
+  const pagedMyLaps = sortedMyLaps.slice(myLapsPage * MY_LAPS_PAGE_SIZE, (myLapsPage + 1) * MY_LAPS_PAGE_SIZE)
+  const pagedRefLaps = refLaps.slice(refLapsPage * REF_LAPS_PAGE_SIZE, (refLapsPage + 1) * REF_LAPS_PAGE_SIZE)
+  const refLapsTotalPages = Math.ceil(refLaps.length / REF_LAPS_PAGE_SIZE)
   const recentCars = cars.filter((c) => recentCarIds.has(c.id))
   const otherCars = cars.filter((c) => !recentCarIds.has(c.id))
   const recentTracks = tracks.filter((t) => recentTrackIds.has(t.id))
@@ -472,11 +538,6 @@ export default function LapSelectorPage() {
     return otherTracks.filter((track) => formatTrackName(track).toLowerCase().includes(query))
   }, [trackQuery, otherTracks])
 
-  // Clear reference lap selection when new ref laps load
-  useEffect(() => {
-    setSelectedRefIds(new Set())
-  }, [refLaps])
-
   useEffect(() => {
     const selectedCar = cars.find((car) => car.id === selectedCarId)
     setCarQuery(selectedCar ? selectedCar.name : '')
@@ -487,15 +548,22 @@ export default function LapSelectorPage() {
     setTrackQuery(selectedTrack ? formatTrackName(selectedTrack) : '')
   }, [tracks, selectedTrackId])
 
+  useEffect(() => {
+    const nextCarId = restoredFilterState?.selectedCarId
+    const nextTrackId = restoredFilterState?.selectedTrackId
+    if (nextCarId == null && nextTrackId == null) return
+    setSelectedCarId(nextCarId ?? null)
+    setSelectedTrackId(nextTrackId ?? null)
+    navigate(location.pathname, { replace: true, state: null })
+  }, [restoredFilterState, navigate, location.pathname])
+
   // Reset lap/session selection when car/track change
   function handleCarChange(carId: string | number | null) {
     setSelectedCarId(carId)
     setSelectedLapId(null)
     setSelectedRefIds(new Set())
-    setSelectedSessionId(null)
-    setExpandedSessionId(null)
+    setRefLapsPage(0)
     setMyLapsPage(0)
-    setMySessionsPage(0)
     setRecentPage(0)
     setHistoryPage(0)
   }
@@ -504,10 +572,8 @@ export default function LapSelectorPage() {
     setSelectedTrackId(trackId)
     setSelectedLapId(null)
     setSelectedRefIds(new Set())
-    setSelectedSessionId(null)
-    setExpandedSessionId(null)
+    setRefLapsPage(0)
     setMyLapsPage(0)
-    setMySessionsPage(0)
     setRecentPage(0)
     setHistoryPage(0)
   }
@@ -558,19 +624,42 @@ export default function LapSelectorPage() {
     setShowTrackSuggestions(false)
   }
 
-  function applyRecentFilters(carId: string | number | null, trackId: string | number | null) {
+  async function applyRecentFilters(
+    carId: string | number | null,
+    trackId: string | number | null,
+    sourceOverride: 'all' | 'garage61' | 'upload' = 'all',
+  ) {
     if (!carId || !trackId) {
       return
     }
     setSelectedCarId(carId)
     setSelectedTrackId(trackId)
+    setRecentSourceFilter(sourceOverride)
     setSelectedLapId(null)
     setSelectedRefIds(new Set())
-    setSelectedSessionId(null)
-    setExpandedSessionId(null)
+    setRefLapsPage(0)
     setMyLapsPage(0)
-    setMySessionsPage(0)
+    setRecentPage(0)
     setHistoryPage(0)
+
+    await Promise.allSettled([
+      queryClient.fetchQuery({
+        queryKey: ['myLaps', carId, trackId, 0],
+        queryFn: () => getMyLaps(carId, trackId, 100, 0),
+      }),
+      queryClient.fetchQuery({
+        queryKey: ['refLaps', carId, trackId, refLapLimit],
+        queryFn: () => getReferenceLaps(carId, trackId, refLapLimit),
+      }),
+      queryClient.fetchQuery({
+        queryKey: ['recentLaps', carId, trackId, sourceOverride],
+        queryFn: () => getRecentLaps(100, {
+          carId,
+          trackId,
+          source: sourceOverride,
+        }),
+      }),
+    ])
   }
 
   function resolveRecentIds(lap: RecentActivity) {
@@ -587,38 +676,6 @@ export default function LapSelectorPage() {
     return { carId, trackId }
   }
 
-  function toggleRecentCard(id: string) {
-    setExpandedRecentIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
-      return next
-    })
-  }
-
-  function toggleRefLap(lapId: string) {
-    setSelectedRefIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(lapId)) {
-        next.delete(lapId)
-      } else {
-        next.add(lapId)
-      }
-      return next
-    })
-  }
-
-  function handleModeChange(mode: 'vs_reference' | 'sessions') {
-    setAnalysisMode(mode)
-    setSelectedLapId(null)
-    setSelectedRefIds(new Set())
-    setSelectedSessionId(null)
-    setExpandedSessionId(null)
-  }
-
   async function handleUploadFiles(fileList: FileList | null) {
     const files = Array.from(fileList ?? []).filter((file) => file.name.toLowerCase().endsWith('.csv'))
     if (files.length === 0) {
@@ -631,7 +688,7 @@ export default function LapSelectorPage() {
       const drafts = files.map((file, index) => {
         const inspection = inspections.find((item) => item.file_name === file.name) ?? inspections[index]
         const draft = buildUploadDraft(file, accountOwnerName, inspection)
-        if (analysisMode === 'vs_reference' && index === 0 && uploadedLaps.length === 0) {
+        if (index === 0 && uploadedLaps.length === 0) {
           draft.role = 'user'
         }
         return draft
@@ -661,7 +718,7 @@ export default function LapSelectorPage() {
   function removeUploadedLap(localId: string) {
     setUploadedLaps((prev) => {
       const next = prev.filter((lap) => lap.localId !== localId)
-      if (analysisMode === 'vs_reference' && next.length > 0 && !next.some((lap) => lap.role === 'user')) {
+      if (next.length > 0 && !next.some((lap) => lap.role === 'user')) {
         next[0] = { ...next[0], role: 'user' }
       }
       return next
@@ -696,6 +753,15 @@ export default function LapSelectorPage() {
   const canImportTelemetry = uploadHasRequiredMetadata && uploadHasLapTimes && uploadFilesAreValid && normalizedUploadedLaps.length > 0 && !isInspectingUploads
 
   const queryClient = useQueryClient()
+  const reportBackState = {
+    backTo: {
+      pathname: '/app',
+      state: {
+        selectedCarId,
+        selectedTrackId,
+      },
+    },
+  }
 
   const importMutation = useMutation({
     mutationFn: async () => {
@@ -724,7 +790,6 @@ export default function LapSelectorPage() {
       queryClient.invalidateQueries({ queryKey: ['importedTelemetry'] })
       if (selectedCarId && selectedTrackId) {
         queryClient.invalidateQueries({ queryKey: ['myLaps', selectedCarId, selectedTrackId] })
-        queryClient.invalidateQueries({ queryKey: ['mySessions', selectedCarId, selectedTrackId] })
         queryClient.invalidateQueries({ queryKey: ['refLaps', selectedCarId, selectedTrackId] })
       }
       setUploadedLaps([])
@@ -765,7 +830,6 @@ export default function LapSelectorPage() {
       queryClient.invalidateQueries({ queryKey: ['importedTelemetry'] })
       if (selectedCarId && selectedTrackId) {
         queryClient.invalidateQueries({ queryKey: ['myLaps', selectedCarId, selectedTrackId] })
-        queryClient.invalidateQueries({ queryKey: ['mySessions', selectedCarId, selectedTrackId] })
         queryClient.invalidateQueries({ queryKey: ['refLaps', selectedCarId, selectedTrackId] })
       }
       setEditingImportedId(null)
@@ -782,7 +846,6 @@ export default function LapSelectorPage() {
       queryClient.invalidateQueries({ queryKey: ['recentLaps'] })
       if (selectedCarId && selectedTrackId) {
         queryClient.invalidateQueries({ queryKey: ['myLaps', selectedCarId, selectedTrackId] })
-        queryClient.invalidateQueries({ queryKey: ['mySessions', selectedCarId, selectedTrackId] })
         queryClient.invalidateQueries({ queryKey: ['refLaps', selectedCarId, selectedTrackId] })
       }
     },
@@ -807,55 +870,138 @@ export default function LapSelectorPage() {
   const carSuggestions = garage61CarDictionary.map((item: Garage61DictionaryEntry) => item.display_name)
   const trackSuggestions = garage61TrackDictionary.map((item: Garage61DictionaryEntry) => item.display_name)
 
+  useEffect(() => {
+    if (!selectedLapId && sortedMyLaps.length > 0) {
+      setSelectedLapId(sortedMyLaps[0].id)
+      return
+    }
+    if (selectedLapId && !sortedMyLaps.some((lap) => lap.id === selectedLapId)) {
+      setSelectedLapId(sortedMyLaps[0]?.id ?? null)
+    }
+  }, [sortedMyLaps, selectedLapId])
+
+  useEffect(() => {
+    setSelectedRefIds((prev) => {
+      const availableIds = new Set(refLaps.map((lap) => lap.id))
+      const next = new Set([...prev].filter((id) => availableIds.has(id)))
+      if (next.size > 0) {
+        return next
+      }
+      return new Set(refLaps.map((lap) => lap.id))
+    })
+  }, [refLaps])
+
+  function toggleRefLap(lapId: string) {
+    setSelectedRefIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(lapId)) {
+        next.delete(lapId)
+      } else {
+        next.add(lapId)
+      }
+      return next
+    })
+  }
+
   // Analysis mutation
   const analysisMutation = useMutation({
     mutationFn: async () => {
-      if (analysisMode === 'sessions') {
-        const session = mySessions.find((s: Session) => s.id === selectedSessionId)
-        if (!session) throw new Error('Selected session not found')
-        const { analysisLaps } = buildSessionAnalysisLaps(session.laps, 5)
-        if (analysisLaps.length === 0) throw new Error('Selected session has no laps')
-        const sorted = [...analysisLaps].sort(
-          (a, b) => parseLapTime(a.lap_time) - parseLapTime(b.lap_time)
-        )
-        const primary = sorted[0]
-        const rest = sorted.slice(1)
-        const lapsMetadata = [
-          { id: primary.id, role: 'user' as const, driver_name: normalizeDriverName(primary.driver_name), source_driver_name: primary.driver_name, driver_key: primary.driver_key ?? buildDriverKey(primary.driver_name), lap_time: parseLapTime(primary.lap_time), conditions: primary.conditions ?? undefined },
-          ...rest.map((l) => ({ id: l.id, role: 'reference' as const, driver_name: normalizeDriverName(l.driver_name), source_driver_name: l.driver_name, driver_key: l.driver_key ?? buildDriverKey(l.driver_name), lap_time: parseLapTime(l.lap_time), conditions: l.conditions ?? undefined })),
-        ]
-        const pv = isAdmin && promptVersion !== 'default' ? promptVersion : null
-        return runAnalysis(primary.id, rest.map((l) => l.id), primary.car_name, primary.track_name, 'solo', lapsMetadata, llmModel, pv)
-      } else {
-        const lap = myLaps.find((l) => l.id === selectedLapId)
-        if (!lap) throw new Error('Selected lap not found')
-        const lapsMetadata = [
-          { id: lap.id, role: 'user' as const, driver_name: normalizeDriverName(lap.driver_name), source_driver_name: lap.driver_name, driver_key: lap.driver_key ?? buildDriverKey(lap.driver_name), lap_time: parseLapTime(lap.lap_time), conditions: lap.conditions ?? undefined },
-          ...Array.from(selectedRefIds).map((id) => {
-            const ref = refLaps.find((r) => r.id === id)
-            return { id, role: 'reference' as const, driver_name: normalizeDriverName(ref?.driver_name ?? ''), source_driver_name: ref?.driver_name ?? '', driver_key: ref?.driver_key ?? buildDriverKey(ref?.driver_name ?? ''), lap_time: parseLapTime(ref?.lap_time ?? 0), irating: ref?.irating, conditions: ref?.conditions ?? undefined }
-          }),
-        ]
-        const pv = isAdmin && promptVersion !== 'default' ? promptVersion : null
-        return runAnalysis(
-          selectedLapId!,
-          Array.from(selectedRefIds),
-          lap.car_name,
-          lap.track_name,
-          'vs_reference',
-          lapsMetadata,
-          llmModel,
-          pv,
-        )
-      }
+      const primary = myLaps.find((lap) => lap.id === selectedLapId)
+      const references = refLaps.filter((lap) => selectedRefIds.has(lap.id))
+      if (!primary) throw new Error('Select one of your laps')
+      if (references.length === 0) throw new Error('Select at least one reference lap')
+      const lapsMetadata = [
+        {
+          id: primary.id,
+          role: 'user' as const,
+          driver_name: normalizeDriverName(primary.driver_name),
+          source_driver_name: primary.driver_name,
+          driver_key: primary.driver_key ?? buildDriverKey(primary.driver_name),
+          lap_time: parseLapTime(primary.lap_time),
+          recorded_at: primary.recorded_at,
+          conditions: primary.conditions ?? undefined,
+        },
+        ...references.map((lap) => ({
+          id: lap.id,
+          role: 'reference' as const,
+          driver_name: normalizeDriverName(lap.driver_name),
+          source_driver_name: lap.driver_name,
+          driver_key: lap.driver_key ?? buildDriverKey(lap.driver_name),
+          lap_time: parseLapTime(lap.lap_time),
+          recorded_at: lap.recorded_at,
+          conditions: lap.conditions ?? undefined,
+        })),
+      ]
+      const pv = isAdmin && promptVersion !== 'default' ? promptVersion : null
+      return runAnalysis(
+        primary.id,
+        references.map((lap) => lap.id),
+        primary.car_name,
+        primary.track_name,
+        'vs_reference',
+        lapsMetadata,
+        llmModel,
+        pv,
+      )
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['analysisHistory'] })
-      // Reset lap/session selection so the user can queue another analysis
-      setSelectedLapId(null)
-      setSelectedRefIds(new Set())
-      setSelectedSessionId(null)
-      setExpandedSessionId(null)
+    },
+  })
+
+  const sessionAnalysisMutation = useMutation({
+    mutationFn: async (activity: RecentActivity) => {
+      let sessionLaps = activity.laps
+      let sessionSample = buildSessionAnalysisLaps(sessionLaps)
+
+      if ((!sessionSample.primary || sessionSample.references.length === 0) && activity.car_id && activity.track_id) {
+        const fetchedLaps = await getMyLaps(activity.car_id, activity.track_id, 100, 0)
+        const sessionDay = String(activity.recorded_at || activity.date || '').slice(0, 10)
+        const sameDayLaps = sessionDay
+          ? fetchedLaps.filter((lap) => String(lap.recorded_at || '').slice(0, 10) === sessionDay)
+          : []
+        sessionLaps = sameDayLaps.length >= 2 ? sameDayLaps : fetchedLaps
+        sessionSample = buildSessionAnalysisLaps(sessionLaps)
+      }
+
+      if (!sessionSample.primary) throw new Error('No laps available for this session')
+      if (sessionSample.references.length === 0) throw new Error('Need at least two laps in the session')
+      const lapsMetadata = [
+        {
+          id: sessionSample.primary.id,
+          role: 'user' as const,
+          driver_name: normalizeDriverName(sessionSample.primary.driver_name),
+          source_driver_name: sessionSample.primary.driver_name,
+          driver_key: sessionSample.primary.driver_key ?? buildDriverKey(sessionSample.primary.driver_name),
+          lap_time: parseLapTime(sessionSample.primary.lap_time),
+          recorded_at: sessionSample.primary.recorded_at,
+          conditions: sessionSample.primary.conditions ?? undefined,
+        },
+        ...sessionSample.references.map((lap) => ({
+          id: lap.id,
+          role: 'reference' as const,
+          driver_name: normalizeDriverName(lap.driver_name),
+          source_driver_name: lap.driver_name,
+          driver_key: lap.driver_key ?? buildDriverKey(lap.driver_name),
+          lap_time: parseLapTime(lap.lap_time),
+          recorded_at: lap.recorded_at,
+          conditions: lap.conditions ?? undefined,
+        })),
+      ]
+      const pv = isAdmin && promptVersion !== 'default' ? promptVersion : null
+      return runAnalysis(
+        sessionSample.primary.id,
+        sessionSample.references.map((lap) => lap.id),
+        activity.car_name,
+        activity.track_name,
+        'solo',
+        lapsMetadata,
+        llmModel,
+        pv,
+      )
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['analysisHistory'] })
     },
   })
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
@@ -876,7 +1022,6 @@ export default function LapSelectorPage() {
     }
   }
 
-  const selectedSession = mySessions.find((s: Session) => s.id === selectedSessionId)
   const llmAccess = user?.llm_access
   const selectedProviderAccess = llmAccess?.providers?.[llmModel]
   const alternateProvider = llmModel === 'claude' ? 'gemini' : 'claude'
@@ -888,10 +1033,22 @@ export default function LapSelectorPage() {
   const hasSharedFreeReports = Boolean(
     llmAccess?.providers?.claude?.has_shared_key || llmAccess?.providers?.gemini?.has_shared_key,
   )
-  const baseCanAnalyse = analysisMode === 'sessions'
-    ? selectedSessionId !== null && (selectedSession?.laps?.length ?? 0) >= 2 && !analysisMutation.isPending
-    : selectedLapId !== null && selectedRefIds.size > 0 && !analysisMutation.isPending
+  const baseCanAnalyse = Boolean(
+    selectedCarId
+    && selectedTrackId
+    && selectedLapId
+    && selectedRefIds.size > 0
+    && !analysisMutation.isPending,
+  )
   const canAnalyse = baseCanAnalyse && Boolean(selectedProviderAccess?.can_generate)
+
+  function canRunSessionReport(activity: RecentActivity): boolean {
+    const sample = buildSessionAnalysisLaps(activity.laps)
+    return Boolean(
+      (sample.primary && sample.references.length > 0)
+      || (activity.car_id && activity.track_id),
+    )
+  }
 
   useEffect(() => {
     if (!selectedProviderAccess?.can_generate && alternateProviderAccess?.can_generate) {
@@ -967,7 +1124,7 @@ export default function LapSelectorPage() {
         <div className="border-b border-red-500/20 bg-red-500/10">
           <div className="max-w-[90%] mx-auto px-4 py-2 flex items-center justify-between gap-4">
             <p className="text-red-200 text-xs">
-              Garage61 not connected — you can still upload and analyse CSV telemetry files.
+              Garage61 not connected — you can still upload and analyse uploaded telemetry files.
             </p>
             <Link
               to="/profile"
@@ -1055,43 +1212,18 @@ export default function LapSelectorPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left column: Steps 1-4 */}
           <div className="flex flex-col gap-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-white">
-                {pageTab === 'analysis' ? 'Analysis' : 'Data Import'}
-              </h2>
-            </div>
+            {pageTab === 'import' && (
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-white">Data Import</h2>
+              </div>
+            )}
 
             {pageTab === 'analysis' && (
               <>
-                <div className="flex items-center bg-slate-800 border border-slate-700 rounded-lg p-0.5 text-xs font-medium w-fit">
-                  <button
-                    onClick={() => handleModeChange('vs_reference')}
-                    className={`px-3 py-1.5 rounded-md transition-colors ${
-                      analysisMode === 'vs_reference'
-                        ? 'bg-amber-500 text-slate-900'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    Reference
-                  </button>
-                  <button
-                    onClick={() => handleModeChange('sessions')}
-                    className={`px-3 py-1.5 rounded-md transition-colors ${
-                      analysisMode === 'sessions'
-                        ? 'bg-amber-500 text-slate-900'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    My Sessions
-                  </button>
-                </div>
-
-                <p className="text-slate-500 text-xs -mt-2">
-                  {analysisMode === 'sessions'
-                    ? 'Select a stored session from any connected telemetry source. The fastest lap becomes the baseline automatically.'
-                    : 'Pick your lap and compare it against any other stored lap from Garage61 or imported telemetry.'}
-                </p>
-
+            <div className="flex items-center gap-2 -mb-1">
+              <Filter className="w-4 h-4 text-amber-500" />
+              <span className="text-lg font-semibold text-white">Filter</span>
+            </div>
             {/* Step 1: Car */}
             <div className="card">
               <div className="flex items-center gap-2 mb-3">
@@ -1116,7 +1248,7 @@ export default function LapSelectorPage() {
               ) : (
                 <div className="relative">
                   <input
-                    className="select"
+                    className="select py-2 text-sm"
                     value={carQuery}
                     onChange={(e) => handleCarInputChange(e.target.value)}
                     onFocus={() => setShowCarSuggestions(true)}
@@ -1169,9 +1301,6 @@ export default function LapSelectorPage() {
                       )}
                     </div>
                   )}
-                  <p className="mt-2 text-[11px] text-slate-500">
-                    Type to search, then pick a matching car from the suggestions.
-                  </p>
                 </div>
               )}
             </div>
@@ -1200,7 +1329,7 @@ export default function LapSelectorPage() {
               ) : (
                 <div className="relative">
                   <input
-                    className="select"
+                    className="select py-2 text-sm"
                     value={trackQuery}
                     onChange={(e) => handleTrackInputChange(e.target.value)}
                     onFocus={() => setShowTrackSuggestions(true)}
@@ -1253,309 +1382,129 @@ export default function LapSelectorPage() {
                       )}
                     </div>
                   )}
-                  <p className="mt-2 text-[11px] text-slate-500">
-                    Type to search, then pick a matching track from the suggestions.
-                  </p>
                 </div>
               )}
             </div>
 
-            {/* Step 3: Sessions or Laps depending on mode */}
             {selectedCarId && selectedTrackId && (
               <div className="card">
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-6 h-6 rounded-full bg-amber-500 text-slate-900 text-xs font-bold flex items-center justify-center">
                     3
                   </div>
-                  <span className="text-white font-medium text-sm">
-                    {analysisMode === 'sessions' ? 'Select Session' : 'Your Laps'}
-                  </span>
-                  <div className="flex items-center gap-2 text-xs text-slate-400 ml-auto">
-                    <span>Rows</span>
+                  <span className="text-white font-medium text-sm">Your Laps</span>
+                  <div className="ml-auto flex items-center gap-2">
+                    <span className="text-[11px] text-slate-500">Sort</span>
                     <select
-                      className="bg-slate-800 border border-slate-700 rounded-md px-2 py-1 text-xs text-slate-200"
-                      value={analysisMode === 'sessions' ? mySessionsLimit : myLapsLimit}
+                      value={myLapsSort}
                       onChange={(e) => {
-                        if (analysisMode === 'sessions') {
-                          setMySessionsLimit(Number(e.target.value))
-                          setMySessionsPage(0)
-                        } else {
-                          setMyLapsLimit(Number(e.target.value))
-                          setMyLapsPage(0)
-                        }
+                        setMyLapsSort(e.target.value as 'time' | 'date')
+                        setMyLapsPage(0)
                       }}
+                      className="bg-slate-800 border border-slate-700 rounded-md px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
                     >
-                      {[5, 10, 25].map((size) => (
-                        <option key={size} value={size}>
-                          {size}
-                        </option>
-                      ))}
+                      <option value="time">Time</option>
+                      <option value="date">Date</option>
                     </select>
                   </div>
                 </div>
 
-                {/* Sessions mode */}
-                {analysisMode === 'sessions' && (
-                  mySessionsLoading ? (
-                    <div className="space-y-2">
-                      {[...Array(3)].map((_, i) => (
-                        <div key={i} className="h-12 bg-slate-700 rounded-lg animate-pulse" />
-                      ))}
-                    </div>
-                  ) : mySessions.length === 0 ? (
-                    <p className="text-slate-500 text-sm text-center py-4">
-                      No sessions found for this car &amp; track combination.
-                    </p>
-                  ) : (
-                    <>
-                      <div className="space-y-1">
-                        {mySessions.map((session: Session) => {
-                          const isSelected = selectedSessionId === session.id
-                          const isExpanded = expandedSessionId === session.id
-                          const hasEnoughLaps = session.laps.length >= 2
-                          const { consecutiveLaps, analysisLaps, fastestLap } = buildSessionAnalysisLaps(session.laps, 5)
-                          const fastestOutsideWindow = fastestLap != null && !consecutiveLaps.some((lap) => lap.id === fastestLap.id)
-                          return (
-                            <div key={session.id}>
-                              <div
-                                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg transition-colors ${
-                                  isSelected
-                                    ? 'bg-amber-500/10 border border-amber-500/30'
-                                    : 'bg-slate-700/40 border border-transparent hover:bg-slate-700/70'
-                                }`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={isSelected}
-                                  disabled={!hasEnoughLaps}
-                                  onChange={() => {
-                                    setSelectedSessionId(isSelected ? null : session.id)
-                                    if (!isSelected) setExpandedSessionId(session.id)
-                                  }}
-                                  className="accent-amber-500 flex-shrink-0 cursor-pointer disabled:cursor-not-allowed"
-                                />
-                                <div className="flex-1 min-w-0 flex items-center gap-3 flex-wrap">
-                                  <span className="font-mono text-white text-sm">
-                                    {formatLapTime(session.best_lap_time)}
-                                  </span>
-                                  <span className={`text-xs ${hasEnoughLaps ? 'text-slate-400' : 'text-slate-600'}`}>
-                                    {session.lap_count} lap{session.lap_count !== 1 ? 's' : ''}
-                                    {!hasEnoughLaps && ' (need ≥ 2)'}
-                                  </span>
-                                  {session.laps.length > 5 && (
-                                    <span className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">
-                                      {fastestOutsideWindow ? 'uses 5 consecutive laps + fastest lap' : 'uses 5 consecutive laps'}
-                                    </span>
-                                  )}
-                                  <span className="text-slate-500 text-xs flex items-center gap-1">
-                                    <Calendar className="w-3 h-3" />
-                                    {formatDate(session.date)}
-                                  </span>
-                                  {session.source && (
-                                    <span className={`text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ${
-                                      session.source === 'upload' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-blue-500/20 text-blue-400'
-                                    }`}>
-                                      {session.source === 'upload' ? 'csv' : 'g61'}
-                                    </span>
-                                  )}
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}
-                                  className="p-0.5 text-slate-500 hover:text-slate-300 flex-shrink-0"
-                                >
-                                  <ChevronRight
-                                    className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-                                  />
-                                </button>
-                              </div>
-
-                              {/* Expanded laps within session */}
-                              {isExpanded && session.laps.length > 0 && (
-                                <div className="ml-4 mt-1 mb-1 border-l border-slate-700 pl-3 space-y-0.5">
-                                  {consecutiveLaps.map((lap, idx) => (
-                                    <div key={lap.id} className="flex items-center gap-3 py-1 text-xs">
-                                      <span className="text-slate-600 w-4 text-right flex-shrink-0">{idx + 1}</span>
-                                      <span className={`font-mono flex-shrink-0 ${lap.id === fastestLap?.id ? 'text-amber-400' : 'text-slate-300'}`}>
-                                        {formatLapTime(lap.lap_time)}
-                                      </span>
-                                      <span className="text-slate-500">
-                                        {formatDateTime(lap.recorded_at)}
-                                      </span>
-                                      {lap.id === fastestLap?.id && (
-                                        <span className="text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300">
-                                          fastest
-                                        </span>
-                                      )}
-                                    </div>
-                                  ))}
-                                  {fastestOutsideWindow && fastestLap && (
-                                    <div className="pt-1">
-                                      <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">
-                                        Added fastest lap
-                                      </div>
-                                      <div className="flex items-center gap-3 py-1 text-xs">
-                                        <span className="text-slate-600 w-4 text-right flex-shrink-0">{analysisLaps.length}</span>
-                                        <span className="font-mono flex-shrink-0 text-amber-400">
-                                          {formatLapTime(fastestLap.lap_time)}
-                                        </span>
-                                        <span className="text-slate-500">
-                                          {formatDateTime(fastestLap.recorded_at)}
-                                        </span>
-                                        <span className="text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300">
-                                          fastest
-                                        </span>
-                                      </div>
-                                    </div>
-                                  )}
-                                  {session.laps.length > 5 && (
-                                    <div className="pt-1 text-[11px] text-slate-500">
-                                      {fastestOutsideWindow
-                                        ? 'Showing the 5-lap consecutive run plus the session fastest lap used for analysis.'
-                                        : 'Showing the 5-lap consecutive run used for analysis.'}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
+                {myLapsLoading ? (
+                  <div className="space-y-2">
+                    {[...Array(3)].map((_, i) => (
+                      <div key={i} className="h-12 bg-slate-700 rounded-lg animate-pulse" />
+                    ))}
+                  </div>
+                ) : sortedMyLaps.length === 0 ? (
+                  <p className="text-slate-500 text-sm text-center py-4">
+                    No laps found for this car &amp; track combination.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {pagedMyLaps.map((lap) => {
+                      const isSelected = selectedLapId === lap.id
+                      return (
+                        <button
+                          key={lap.id}
+                          type="button"
+                          onClick={() => setSelectedLapId(lap.id)}
+                          className={`w-full flex items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
+                            isSelected
+                              ? 'border border-amber-500/30 bg-amber-500/10'
+                              : 'border border-slate-700/60 bg-slate-800/50 hover:bg-slate-700/60'
+                          }`}
+                        >
+                          <div className="min-w-0 flex items-center gap-3 flex-1">
+                            <div className={`h-4 w-4 rounded-full border flex items-center justify-center flex-shrink-0 ${
+                              isSelected ? 'border-amber-400' : 'border-slate-500'
+                            }`}>
+                              {isSelected ? <div className="h-2 w-2 rounded-full bg-amber-400" /> : null}
                             </div>
-                          )
-                        })}
-                      </div>
-                      <div className="flex items-center justify-between text-xs text-slate-500 mt-3">
-                        <button
-                          type="button"
-                          onClick={() => setMySessionsPage((prev) => Math.max(0, prev - 1))}
-                          disabled={mySessionsPage === 0}
-                          className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
-                        >
-                          Previous
+                            <span className={`font-mono text-xs flex-shrink-0 ${isSelected ? 'text-amber-300' : 'text-slate-200'}`}>
+                              {formatLapTime(lap.lap_time)}
+                            </span>
+                            <span className="text-xs text-slate-300 truncate min-w-0">
+                              {lap.driver_name || 'You'}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-end gap-1.5 flex-shrink-0 min-w-0">
+                            <span className="text-xs text-slate-500 flex-shrink-0">
+                              {formatDateTime(lap.recorded_at)}
+                            </span>
+                            {renderConditionChips(lap.conditions, true)}
+                            {lap.source && (
+                              <span className={`text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded flex-shrink-0 ${
+                                lap.source === 'upload' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-blue-500/20 text-blue-400'
+                              }`}>
+                                {getLapSourceLabel(lap.id)}
+                              </span>
+                            )}
+                          </div>
                         </button>
-                        <span>Page {mySessionsPage + 1}</span>
-                        <button
-                          type="button"
-                          onClick={() => setMySessionsPage((prev) => prev + 1)}
-                          disabled={mySessions.length < mySessionsLimit}
-                          className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
-                        >
-                          Next
-                        </button>
-                      </div>
-                    </>
-                  )
+                      )
+                    })}
+                  </div>
                 )}
-
-                {/* vs_reference mode — individual lap selection */}
-                {analysisMode === 'vs_reference' && (
-                  myLapsLoading ? (
-                    <div className="space-y-2">
-                      {[...Array(3)].map((_, i) => (
-                        <div key={i} className="h-12 bg-slate-700 rounded-lg animate-pulse" />
-                      ))}
-                    </div>
-                  ) : myLaps.length === 0 ? (
-                    <p className="text-slate-500 text-sm text-center py-4">
-                      No laps found for this car &amp; track combination.
-                    </p>
-                  ) : (
-                    <>
-                      <div className="overflow-x-auto -mx-4 px-4">
-                        <table className="w-full text-sm min-w-[300px]">
-                          <thead>
-                            <tr className="text-slate-500 text-xs border-b border-slate-700">
-                              <th className="text-left pb-2 font-medium">Select</th>
-                              <th className="text-left pb-2 font-medium flex items-center gap-1">
-                                <Clock className="w-3 h-3" /> Lap Time
-                              </th>
-                              <th className="text-left pb-2 font-medium">
-                                <Calendar className="w-3 h-3 inline mr-1" />Date
-                              </th>
-                              <th className="text-left pb-2 font-medium">Conditions</th>
-                              <th className="text-left pb-2 font-medium">Src</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-700/50">
-                            {myLaps.map((lap: Lap) => {
-                              const isSelected = selectedLapId === lap.id
-                              return (
-                                <tr
-                                  key={lap.id}
-                                  className={`cursor-pointer transition-colors ${
-                                    isSelected ? 'bg-amber-500/10' : 'hover:bg-slate-700/50'
-                                  }`}
-                                  onClick={() => setSelectedLapId(lap.id)}
-                                >
-                                  <td className="py-2.5 pr-3">
-                                    <input
-                                      type="radio"
-                                      name="userLap"
-                                      checked={isSelected}
-                                      onChange={() => setSelectedLapId(lap.id)}
-                                      className="accent-amber-500"
-                                    />
-                                  </td>
-                                  <td className="py-2.5 font-mono text-white">
-                                    {formatLapTime(lap.lap_time)}
-                                  </td>
-                                  <td className="py-2.5 text-slate-400">
-                                    {formatDate(lap.recorded_at)}
-                                  </td>
-                                  <td className="py-2.5 text-xs text-slate-400 max-w-[18rem]">
-                                    <span className="block truncate" title={formatLapConditionsCompact(lap)}>
-                                      {formatLapConditionsCompact(lap)}
-                                    </span>
-                                  </td>
-                                  <td className="py-2.5">
-                                    {lap.source === 'upload' ? (
-                                      <span className="text-[10px] uppercase tracking-wide text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">csv</span>
-                                    ) : lap.source === 'garage61' ? (
-                                      <span className="text-[10px] uppercase tracking-wide text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded">g61</span>
-                                    ) : null}
-                                  </td>
-                                </tr>
-                              )
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                      <div className="flex items-center justify-between text-xs text-slate-500 mt-3">
-                        <button
-                          type="button"
-                          onClick={() => setMyLapsPage((prev) => Math.max(0, prev - 1))}
-                          disabled={myLapsPage === 0}
-                          className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
-                        >
-                          Previous
-                        </button>
-                        <span>Page {myLapsPage + 1}</span>
-                        <button
-                          type="button"
-                          onClick={() => setMyLapsPage((prev) => prev + 1)}
-                          disabled={myLaps.length < myLapsLimit}
-                          className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
-                        >
-                          Next
-                        </button>
-                      </div>
-                    </>
-                  )
+                {!myLapsLoading && sortedMyLaps.length > 0 && (
+                  <div className="flex items-center justify-between text-xs text-slate-500 mt-3">
+                    <button
+                      type="button"
+                      onClick={() => setMyLapsPage((prev) => Math.max(0, prev - 1))}
+                      disabled={myLapsPage === 0}
+                      className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
+                    >
+                      Previous
+                    </button>
+                    <span>Page {myLapsPage + 1}</span>
+                    <button
+                      type="button"
+                      onClick={() => setMyLapsPage((prev) => prev + 1)}
+                      disabled={(myLapsPage + 1) * MY_LAPS_PAGE_SIZE >= sortedMyLaps.length}
+                      className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
+                    >
+                      Next
+                    </button>
+                  </div>
                 )}
               </div>
             )}
 
-            {/* Step 4: Reference Laps — hidden in sessions mode */}
-            {selectedCarId && selectedTrackId && analysisMode === 'vs_reference' && (
+            {selectedCarId && selectedTrackId && (
               <div className="card">
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-6 h-6 rounded-full bg-amber-500 text-slate-900 text-xs font-bold flex items-center justify-center">
                     4
                   </div>
                   <span className="text-white font-medium text-sm">Reference Laps</span>
-                  <span className="text-slate-500 text-xs">(Top {refLapLimit} fastest)</span>
                   <div className="ml-auto flex items-center gap-1">
                     {[5, 10, 15, 20].map((n) => (
                       <button
                         key={n}
-                        onClick={() => setRefLapLimit(n)}
+                        type="button"
+                        onClick={() => {
+                          setRefLapLimit(n)
+                          setRefLapsPage(0)
+                        }}
                         className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
                           refLapLimit === n
                             ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
@@ -1571,17 +1520,19 @@ export default function LapSelectorPage() {
                 {!refLapsLoading && refLaps.length > 0 && (
                   <div className="flex items-center gap-2 mb-2">
                     <button
-                      onClick={() => setSelectedRefIds(new Set(refLaps.map((l: Lap) => l.id)))}
+                      type="button"
+                      onClick={() => setSelectedRefIds(new Set(refLaps.map((lap) => lap.id)))}
                       className="text-xs text-slate-400 hover:text-white transition-colors"
                     >
                       Select all
                     </button>
                     <span className="text-slate-700">·</span>
                     <button
+                      type="button"
                       onClick={() => setSelectedRefIds(new Set())}
                       className="text-xs text-slate-400 hover:text-white transition-colors"
                     >
-                      Unselect all
+                      Clear
                     </button>
                     <span className="text-slate-600 text-xs ml-auto">{selectedRefIds.size} selected</span>
                   </div>
@@ -1599,7 +1550,7 @@ export default function LapSelectorPage() {
                   </p>
                 ) : (
                   <div className="space-y-1">
-                    {refLaps.map((lap: Lap, idx: number) => (
+                    {pagedRefLaps.map((lap, idx) => (
                       <label
                         key={lap.id}
                         className={`flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
@@ -1615,33 +1566,54 @@ export default function LapSelectorPage() {
                           className="accent-orange-500 flex-shrink-0"
                         />
                         <span className="text-slate-500 font-mono text-xs w-5 text-right flex-shrink-0">
-                          {idx + 1}
+                          {refLapsPage * REF_LAPS_PAGE_SIZE + idx + 1}
                         </span>
                         <span className="text-orange-400 font-mono text-xs flex-shrink-0">
                           {formatLapTime(lap.lap_time)}
                         </span>
-                        <span className="text-white text-xs truncate flex-1 min-w-0">
-                          {lap.driver_name}
-                        </span>
-                        {lap.source && (
-                          <span className={`text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded flex-shrink-0 ${
-                            lap.source === 'upload' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-blue-500/20 text-blue-400'
-                          }`}>
-                            {lap.source === 'upload' ? 'csv' : 'g61'}
+                        <div className="min-w-0 flex-1 flex items-center justify-between gap-2 overflow-hidden">
+                          <span className="text-white text-xs truncate min-w-0 flex-1">
+                            {lap.driver_name}
                           </span>
-                        )}
-                        {lap.irating != null && (
-                          <span className="text-slate-500 text-xs flex-shrink-0 font-mono">
-                            iR {lap.irating.toLocaleString()}
-                          </span>
-                        )}
-                        {lap.season && (
-                          <span className="text-slate-600 text-xs flex-shrink-0 truncate max-w-[72px]">
-                            {lap.season}
-                          </span>
-                        )}
+                          <div className="flex items-center justify-end gap-1.5 flex-shrink-0 min-w-0">
+                            {typeof lap.irating === 'number' && lap.irating > 0 ? (
+                              <span className="rounded-md border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-300 flex-shrink-0">
+                                {lap.irating.toLocaleString()} iR
+                              </span>
+                            ) : null}
+                            {renderConditionChips(lap.conditions, true)}
+                            {lap.source && (
+                              <span className={`text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded flex-shrink-0 ${
+                                lap.source === 'upload' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-blue-500/20 text-blue-400'
+                              }`}>
+                                {getLapSourceLabel(lap.id)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </label>
                     ))}
+                    {refLapsTotalPages > 1 && (
+                      <div className="flex items-center justify-between text-xs text-slate-500 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setRefLapsPage((prev) => Math.max(0, prev - 1))}
+                          disabled={refLapsPage === 0}
+                          className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
+                        >
+                          Previous
+                        </button>
+                        <span>Page {refLapsPage + 1} / {refLapsTotalPages}</span>
+                        <button
+                          type="button"
+                          onClick={() => setRefLapsPage((prev) => Math.min(refLapsTotalPages - 1, prev + 1))}
+                          disabled={refLapsPage >= refLapsTotalPages - 1}
+                          className="px-2 py-1 rounded-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1653,7 +1625,7 @@ export default function LapSelectorPage() {
             {pageTab === 'import' && (
               <>
                 <p className="text-slate-500 text-xs -mt-2">
-                  Import telemetry files, review the extracted metadata, override anything you need, and store the compressed CSVs in the database for later analysis.
+                  Import telemetry files, review the extracted metadata, override anything you need, and store the compressed uploads in the database for later analysis.
                 </p>
                 <div className="card">
                   <div className="flex items-center justify-between gap-3 mb-4">
@@ -1754,7 +1726,7 @@ export default function LapSelectorPage() {
                         </div>
                         {(!uploadCarMatchesDictionary || !uploadTrackMatchesDictionary) && (
                           <p className="text-xs text-amber-300 mt-3">
-                            Select both car and track from the Garage61 dictionary before importing CSV telemetry.
+                            Select both car and track from the Garage61 dictionary before importing uploaded telemetry.
                           </p>
                         )}
                         <p className="text-xs text-slate-500 mt-3">These batch-level values are extracted from file content or file name when possible. You can override them manually or pick a canonical Garage61 value from the dictionary.</p>
@@ -1939,7 +1911,7 @@ export default function LapSelectorPage() {
                 ) : (
                   <>
                     <BarChart2 className="w-5 h-5" />
-                    <span>{analysisMode === 'sessions' ? 'Analyse Session' : 'Analyse Lap'}</span>
+                    <span>Analyse Lap vs Reference</span>
                   </>
                 )}
               </button>
@@ -1972,7 +1944,7 @@ export default function LapSelectorPage() {
                         : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/50'
                     }`}
                   >
-                    {src === 'all' ? 'All' : src === 'garage61' ? 'G61' : 'CSV'}
+                    {src === 'all' ? 'All' : src === 'garage61' ? 'G61' : 'Upload'}
                   </button>
                 ))}
               </div>
@@ -1995,89 +1967,80 @@ export default function LapSelectorPage() {
                 <div className="space-y-2">
                   {recentPageLaps.map((lap) => {
                     const { carId, trackId } = resolveRecentIds(lap)
+                    const bestLap = pickBestLapFromRecentActivity(lap)
                     const canApply = Boolean(carId && trackId)
-                    const isExpanded = expandedRecentIds.has(lap.id)
+                    const canRunSession = canRunSessionReport(lap) && Boolean(selectedProviderAccess?.can_generate) && !sessionAnalysisMutation.isPending
                     return (
                       <div
                         key={lap.id}
-                        className={`card text-left transition-colors w-full px-3 py-2.5 ${
+                        className={`card text-left transition-colors w-full px-2.5 py-2 ${
                           canApply ? 'hover:bg-slate-700' : 'opacity-70'
                         }`}
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <button
-                            type="button"
-                            onClick={() => toggleRecentCard(lap.id)}
-                            className="min-w-0 flex-1 text-left"
-                          >
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2 min-w-0 text-sm">
-                                <ChevronRight className={`w-3.5 h-3.5 text-slate-500 transition-transform flex-shrink-0 ${isExpanded ? 'rotate-90' : ''}`} />
-                                <Car className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                                <span className="text-amber-400 font-semibold truncate">{lap.car_name}</span>
-                                <span className="text-slate-600 flex-shrink-0">·</span>
-                                <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                                <span className="text-slate-300 truncate">{lap.track_name}</span>
-                              </div>
-                              <div className="mt-1 flex flex-wrap items-center gap-1.5 pl-5 text-[11px]">
-                                <span className="rounded-md bg-slate-800 px-2 py-0.5 text-slate-300">
-                                  {lap.lap_count ?? 0} laps
-                                </span>
-                                <span className="rounded-md bg-slate-800 px-2 py-0.5 text-slate-400">
-                                  {lap.entries.length} date{lap.entries.length === 1 ? '' : 's'}
-                                </span>
-                                {lap.source && (
-                                  <span className={`text-[10px] uppercase tracking-wide font-semibold px-2 py-0.5 rounded-md ${
-                                    lap.source === 'upload'
-                                      ? 'bg-emerald-500/20 text-emerald-400'
-                                      : lap.source === 'garage61'
-                                        ? 'bg-blue-500/20 text-blue-400'
-                                        : 'bg-slate-600/40 text-slate-300'
-                                  }`}>
-                                    {lap.source === 'upload' ? 'csv' : lap.source === 'garage61' ? 'g61' : 'mix'}
-                                  </span>
-                                )}
-                              </div>
+                          <div className="min-w-0 flex-1 text-left">
+                            <div className="flex items-center gap-1.5 min-w-0 text-[13px] leading-tight">
+                              <Car className="w-3 h-3 text-slate-500 flex-shrink-0" />
+                              <span className="text-amber-400 font-semibold truncate">{lap.car_name}</span>
+                              <span className="text-slate-600 flex-shrink-0">·</span>
+                              <MapPin className="w-3 h-3 text-slate-500 flex-shrink-0" />
+                              <span className="text-slate-300 truncate">{lap.track_name}</span>
                             </div>
-                          </button>
-                          <div className="flex items-start gap-2 flex-shrink-0">
+                            <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] leading-tight">
+                              <span className="rounded-md bg-slate-800 px-1.5 py-0.5 text-slate-300">
+                                {lap.lap_count ?? 0} laps
+                              </span>
+                              <span className="rounded-md bg-slate-800 px-1.5 py-0.5 text-slate-400">
+                                best {formatLapTime(lap.best_lap_time)}
+                              </span>
+                              <span className="rounded-md bg-slate-800 px-1.5 py-0.5 text-slate-400">
+                                {formatDateTime(lap.recorded_at || lap.date)}
+                              </span>
+                              {lap.source && (
+                                <span className={`text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded-md ${
+                                  lap.source === 'upload'
+                                    ? 'bg-emerald-500/20 text-emerald-400'
+                                    : 'bg-blue-500/20 text-blue-400'
+                                }`}>
+                                  {lap.source === 'upload' ? 'upload' : 'g61'}
+                                </span>
+                              )}
+                            </div>
+                            {renderConditionChips(bestLap?.conditions)}
+                          </div>
+                          <div className="flex items-center gap-1 flex-shrink-0">
                             <button
                               type="button"
                               onClick={() => canApply && applyRecentFilters(carId, trackId)}
                               disabled={!canApply}
-                              className="text-[11px] px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/15 text-amber-200 font-semibold hover:bg-amber-500 hover:text-slate-950 hover:border-amber-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-amber-500/15 disabled:hover:text-amber-200 transition-colors"
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-amber-500/40 bg-amber-500/15 text-amber-200 hover:bg-amber-500 hover:text-slate-950 hover:border-amber-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-amber-500/15 disabled:hover:text-amber-200 transition-colors"
                               title={
                                 canApply
-                                  ? 'Select this car and track'
+                                  ? 'Filter by this car and track combo'
                                   : 'Car or track not available for selection'
                               }
+                              aria-label="Filter"
                             >
-                              Select
+                              <Filter className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => sessionAnalysisMutation.mutate(lap)}
+                              disabled={!canRunSession}
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-blue-500/40 bg-blue-500/10 text-blue-200 hover:bg-blue-500 hover:text-slate-950 hover:border-blue-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-500/10 disabled:hover:text-blue-200 transition-colors"
+                              title={
+                                canRunSession
+                                  ? 'Analyze this recent session directly'
+                                  : !selectedProviderAccess?.can_generate
+                                    ? 'Selected model is not available'
+                                    : 'Need at least two laps with telemetry in this recent activity'
+                              }
+                              aria-label="Analyze"
+                            >
+                              <BarChart2 className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </div>
-                        {isExpanded && (
-                          <div className="mt-2 border-t border-slate-700/50 pt-2">
-                            <div className="space-y-1.5">
-                              {lap.entries.map((entry, idx) => (
-                                <div
-                                  key={`${lap.id}-${entry.date}-${idx}`}
-                                  className="flex items-center justify-between gap-3 rounded-md bg-slate-800/70 px-2.5 py-1.5 text-[11px]"
-                                >
-                                  <span className="text-slate-300">{formatDate(entry.date)}</span>
-                                  <div className="flex items-center gap-2 flex-shrink-0">
-                                    <span className="text-slate-400">{entry.lap_count ?? 0} laps</span>
-                                    <span className={`uppercase tracking-wide font-semibold ${
-                                      entry.source === 'upload' ? 'text-emerald-400' : 'text-blue-400'
-                                    }`}>
-                                      {entry.source === 'upload' ? 'csv' : 'g61'}
-                                    </span>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
                       </div>
                     )
                   })}
@@ -2106,11 +2069,40 @@ export default function LapSelectorPage() {
               </>
             )}
 
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3">
               <h2 className="text-lg font-semibold text-white flex items-center gap-2"><History className="w-5 h-5 text-amber-500" />Analysis History</h2>
-              {filteredHistory.length > 0 && (
-                <span className="text-xs text-slate-500">{filteredHistory.length} total</span>
-              )}
+              <div className="flex items-center gap-2">
+                <div className="flex gap-1">
+                  {([
+                    { key: 'all', label: 'All' },
+                    { key: 'reference', label: 'Reference' },
+                    { key: 'patterns', label: 'Patterns' },
+                  ] as const).map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => {
+                        setHistoryTypeFilter(option.key)
+                        setHistoryPage(0)
+                      }}
+                      className={`text-[10px] uppercase tracking-wide font-semibold px-2 py-1 rounded transition-colors ${
+                        historyTypeFilter === option.key
+                          ? option.key === 'reference'
+                            ? 'bg-orange-500/30 text-orange-300'
+                            : option.key === 'patterns'
+                              ? 'bg-violet-500/30 text-violet-300'
+                              : 'bg-slate-600/50 text-white'
+                          : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/50'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                {filteredHistory.length > 0 && (
+                  <span className="text-xs text-slate-500">{filteredHistory.length} total</span>
+                )}
+              </div>
             </div>
 
             {historyLoading ? (
@@ -2144,7 +2136,7 @@ export default function LapSelectorPage() {
                       <button
                         data-testid="analysis-history-item"
                         onClick={() => navigate(`/report/${item.id}`, {
-                          state: { backTo: { pathname: '/app' } },
+                          state: reportBackState,
                         })}
                         className={`w-full card text-left hover:bg-slate-700 transition-colors pr-10 py-2 border-l-2 ${
                           isSoloItem ? 'border-l-violet-500/50' : 'border-l-orange-500/50'
@@ -2152,33 +2144,10 @@ export default function LapSelectorPage() {
                           isActive ? 'bg-slate-800/55 border-slate-700/70' : ''
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-3">
+                        <div className="flex flex-col gap-1.5">
                           <div className={`flex-1 min-w-0 transition-opacity ${isActive ? 'opacity-75' : 'opacity-100'}`}>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${
-                                isSoloItem
-                                  ? 'bg-violet-500/15 text-violet-400'
-                                  : 'bg-orange-500/15 text-orange-400'
-                              }`}>
-                                {isSoloItem ? 'Session' : 'Reference'}
-                              </span>
-                              {isQueued && (
-                                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-sky-500/20 text-sky-300 ring-1 ring-sky-400/30 shadow-[0_0_0_1px_rgba(56,189,248,0.08)] flex-shrink-0 opacity-100">
-                                  <Loader2 className="w-3 h-3 animate-spin" />
-                                  In queue
-                                </span>
-                              )}
-                              {isProcessing && (
-                                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-400/20 text-amber-300 ring-1 ring-amber-300/35 shadow-[0_0_0_1px_rgba(251,191,36,0.08)] flex-shrink-0 opacity-100">
-                                  <Loader2 className="w-3 h-3 animate-spin" />
-                                  Processing
-                                </span>
-                              )}
-                              {item.status === 'failed' && (
-                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-500/15 text-red-400 flex-shrink-0">
-                                  Failed
-                                </span>
-                              )}
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex items-center gap-2">
                               <span className="text-amber-400 font-semibold text-sm truncate">
                                 {item.car_name}
                               </span>
@@ -2186,23 +2155,49 @@ export default function LapSelectorPage() {
                               <span className="text-slate-300 text-sm truncate">
                                 {item.track_name}
                               </span>
+                              </div>
+                              <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-amber-500 flex-shrink-0 transition-colors" />
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-slate-500 leading-4">
+                              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium flex-shrink-0 ${
+                                isSoloItem
+                                  ? 'bg-violet-500/15 text-violet-400'
+                                  : 'bg-orange-500/15 text-orange-400'
+                              }`}>
+                                {isSoloItem ? 'Patterns' : 'Reference'}
+                              </span>
+                              {isQueued && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-sky-500/20 text-sky-300 ring-1 ring-sky-400/30 flex-shrink-0 opacity-100">
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                  Queue
+                                </span>
+                              )}
+                              {isProcessing && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-400/20 text-amber-300 ring-1 ring-amber-300/35 flex-shrink-0 opacity-100">
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                  Processing
+                                </span>
+                              )}
+                              {item.status === 'failed' && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-red-500/15 text-red-400 flex-shrink-0">
+                                  Failed
+                                </span>
+                              )}
+                              <span className={`uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ${
+                                sourceLabel === 'upload'
+                                  ? 'bg-emerald-500/15 text-emerald-400'
+                                  : 'bg-blue-500/15 text-blue-400'
+                              }`}>
+                                {sourceLabel}
+                              </span>
                               {item.estimated_time_gain_seconds != null && item.estimated_time_gain_seconds > 0 && (
-                                <span className={`inline-flex items-center gap-1 bg-amber-500/20 border border-amber-500/30 text-amber-400 font-semibold text-xs px-2 py-0.5 rounded-full flex-shrink-0 ${
+                                <span className={`inline-flex items-center gap-1 bg-amber-500/20 border border-amber-500/30 text-amber-400 font-semibold text-[11px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${
                                   isActive ? 'opacity-70' : ''
                                 }`}>
                                   <Zap className="w-3 h-3" />
                                   +{item.estimated_time_gain_seconds.toFixed(1)}s
                                 </span>
                               )}
-                            </div>
-                            <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-slate-500 mt-1">
-                              <span className={`uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ${
-                                sourceLabel === 'csv'
-                                  ? 'bg-emerald-500/15 text-emerald-400'
-                                  : 'bg-blue-500/15 text-blue-400'
-                              }`}>
-                                {sourceLabel}
-                              </span>
                               {isSoloItem && (
                                 <>
                                   <span className="text-slate-600">·</span>
@@ -2213,7 +2208,6 @@ export default function LapSelectorPage() {
                               <span className="text-slate-600">{formatDateTime(item.created_at)}</span>
                             </div>
                           </div>
-                          <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-amber-500 flex-shrink-0 transition-colors" />
                         </div>
                       </button>
 

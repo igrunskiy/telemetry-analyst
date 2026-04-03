@@ -6,14 +6,21 @@
     handle /api/* {
         reverse_proxy backend:8000 {
             transport http {
-                read_timeout 120s
-                write_timeout 120s
+                dial_timeout 300s
+                read_timeout 300s
+                write_timeout 300s
             }
         }
     }
 
     handle /admin/* {
-        reverse_proxy backend:8000
+        reverse_proxy backend:8000 {
+            transport http {
+                dial_timeout 300s
+                read_timeout 300s
+                write_timeout 300s
+            }
+        }
     }
 
     handle /health {
