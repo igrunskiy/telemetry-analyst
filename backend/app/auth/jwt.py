@@ -14,6 +14,10 @@ from app.database import get_db
 logger = logging.getLogger(__name__)
 
 
+def has_staff_access(role: str | None) -> bool:
+    return role in {"admin", "moderator"}
+
+
 def create_access_token(user_id: uuid.UUID) -> str:
     """Issue a signed JWT containing the user's internal UUID."""
     now = datetime.now(timezone.utc)
@@ -76,5 +80,15 @@ async def require_admin(current_user=Depends(get_current_user)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
+        )
+    return current_user
+
+
+async def require_staff(current_user=Depends(get_current_user)):
+    """FastAPI dependency: requires admin or moderator role."""
+    if not has_staff_access(getattr(current_user, "role", None)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Staff access required",
         )
     return current_user

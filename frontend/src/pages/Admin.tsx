@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield, Users, Settings, ChevronLeft, Check, X, RefreshCw, Plus, Save, AlertTriangle, Activity, BarChart2, ChevronRight, Loader2, FileText, Trash2, Star, Sparkles, Bell, MessageSquare } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useAuth } from '../hooks/useAuth'
 import {
   adminListUsers,
   adminSetSuspended,
@@ -32,17 +33,29 @@ import {
 import type { AdminUser, AdminReport, AdminRetrospective, PromptMeta, PromptsDefaults, ReportFeedback } from '../types'
 
 type Section = 'users' | 'config' | 'prompt' | 'workers' | 'reports' | 'feedback'
+const MODERATOR_SECTIONS: Section[] = ['reports', 'feedback']
 
 export default function AdminPage() {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
+  const allowedSections = isAdmin ? (['users', 'config', 'prompt', 'workers', 'reports', 'feedback'] as Section[]) : MODERATOR_SECTIONS
   const location = useLocation()
   const initialSection = (location.state as { initialSection?: Section } | null)?.initialSection
-  const [section, setSection] = useState<Section>(initialSection ?? 'users')
+  const [section, setSection] = useState<Section>(
+    initialSection && allowedSections.includes(initialSection) ? initialSection : allowedSections[0],
+  )
   const { data: feedbackInbox } = useQuery({
     queryKey: ['admin', 'report-feedback'],
     queryFn: adminListReportFeedback,
     refetchInterval: 30000,
   })
   const unreadFeedbackCount = feedbackInbox?.unread_count ?? 0
+
+  useEffect(() => {
+    if (!allowedSections.includes(section)) {
+      setSection(allowedSections[0])
+    }
+  }, [allowedSections, section])
 
   return (
     <div className="min-h-screen bg-slate-900 text-white">
@@ -52,7 +65,7 @@ export default function AdminPage() {
           <ChevronLeft className="w-5 h-5" />
         </Link>
         <Shield className="w-5 h-5 text-amber-500" />
-        <h1 className="text-lg font-semibold">Admin Panel</h1>
+        <h1 className="text-lg font-semibold">{isAdmin ? 'Admin Panel' : 'Moderation Panel'}</h1>
         <button
           type="button"
           onClick={() => setSection('feedback')}
@@ -71,6 +84,7 @@ export default function AdminPage() {
       <div className="flex h-[calc(100vh-65px)]">
         {/* Sidebar */}
         <nav className="w-52 border-r border-slate-800 p-4 flex flex-col gap-1">
+          {isAdmin && (
           <button
             onClick={() => setSection('users')}
             className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full text-left ${
@@ -82,6 +96,8 @@ export default function AdminPage() {
             <Users className="w-4 h-4" />
             User Management
           </button>
+          )}
+          {isAdmin && (
           <button
             onClick={() => setSection('config')}
             className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full text-left ${
@@ -93,6 +109,8 @@ export default function AdminPage() {
             <Settings className="w-4 h-4" />
             Server Config
           </button>
+          )}
+          {isAdmin && (
           <button
             onClick={() => setSection('prompt')}
             className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full text-left ${
@@ -104,6 +122,8 @@ export default function AdminPage() {
             <FileText className="w-4 h-4" />
             System Prompt
           </button>
+          )}
+          {isAdmin && (
           <button
             onClick={() => setSection('workers')}
             className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full text-left ${
@@ -115,6 +135,7 @@ export default function AdminPage() {
             <Activity className="w-4 h-4" />
             Worker Monitor
           </button>
+          )}
           <button
             onClick={() => setSection('reports')}
             className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full text-left ${
@@ -148,10 +169,10 @@ export default function AdminPage() {
 
         {/* Main content */}
         <main className="flex-1 overflow-auto p-6">
-          {section === 'users' && <UserManagement />}
-          {section === 'config' && <ConfigEditor />}
-          {section === 'prompt' && <PromptsManager />}
-          {section === 'workers' && <WorkerMonitor />}
+          {isAdmin && section === 'users' && <UserManagement />}
+          {isAdmin && section === 'config' && <ConfigEditor />}
+          {isAdmin && section === 'prompt' && <PromptsManager />}
+          {isAdmin && section === 'workers' && <WorkerMonitor />}
           {section === 'reports' && <ReportsView />}
           {section === 'feedback' && <FeedbackInbox />}
         </main>
@@ -182,7 +203,7 @@ function UserManagement() {
   })
 
   const roleMutation = useMutation({
-    mutationFn: ({ id, role }: { id: string; role: 'admin' | 'user' }) =>
+    mutationFn: ({ id, role }: { id: string; role: 'admin' | 'moderator' | 'user' }) =>
       adminSetRole(id, role),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
   })
@@ -253,7 +274,7 @@ function UserRow({
 }: {
   user: AdminUser
   onSuspend: (suspended: boolean) => void
-  onRoleChange: (role: 'admin' | 'user') => void
+  onRoleChange: (role: 'admin' | 'moderator' | 'user') => void
 }) {
   const authMethods: string[] = []
   if (user.username) authMethods.push('local')
@@ -309,10 +330,11 @@ function UserRow({
       <div className="flex items-center gap-2 flex-shrink-0">
         <select
           value={user.role}
-          onChange={e => onRoleChange(e.target.value as 'admin' | 'user')}
+          onChange={e => onRoleChange(e.target.value as 'admin' | 'moderator' | 'user')}
           className="bg-slate-900 border border-slate-700 text-slate-300 text-[11px] rounded-lg px-2 py-1.5 focus:outline-none focus:border-amber-500"
         >
           <option value="user">user</option>
+          <option value="moderator">moderator</option>
           <option value="admin">admin</option>
         </select>
 
@@ -1229,6 +1251,8 @@ function useElapsed(since: string, active: boolean) {
 }
 
 function ReportRow({ r }: { r: AdminReport }) {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [expanded, setExpanded] = useState(false)
@@ -1318,7 +1342,7 @@ function ReportRow({ r }: { r: AdminReport }) {
             {isFailed && (
               <span className="text-xs text-slate-500 flex-shrink-0">{expanded ? '▲' : '▼'}</span>
             )}
-            {isOngoing && (
+            {isOngoing && isAdmin && (
               <button
                 onClick={(e) => { e.stopPropagation(); failMutation.mutate() }}
                 disabled={failMutation.isPending}

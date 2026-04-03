@@ -792,7 +792,9 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
 
   const isSolo = displayReport?.analysis_mode === 'solo'
   const isAdmin = user?.role === 'admin'
-  const canSeeFeedbackHighlights = !readOnly && !!displayReport && (isAdmin || displayReport.user_id === user?.id)
+  const isStaff = user?.role === 'admin' || user?.role === 'moderator'
+  const canDeleteOrShareReport = isAdmin || (!!displayReport?.user_id && displayReport.user_id === user?.id)
+  const canSeeFeedbackHighlights = !readOnly && !!displayReport && (isStaff || displayReport.user_id === user?.id)
   const feedbackHighlights = useMemo(
     () => (canSeeFeedbackHighlights ? normalizeFeedbackSelections(displayReport?.user_feedback_items) : []),
     [canSeeFeedbackHighlights, displayReport?.user_feedback_items],
@@ -932,10 +934,10 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                 Read-only
               </span>
             )}
-            {isAdmin && !readOnly && (
+            {isStaff && !readOnly && (
               <span className="inline-flex items-center gap-1.5 text-xs text-amber-300 border border-amber-500/30 bg-amber-500/10 rounded px-2 py-0.5 flex-shrink-0">
                 <Shield className="w-3 h-3" />
-                Admin
+                {isAdmin ? 'Admin' : 'Moderator'}
               </span>
             )}
             <ThemeToggle />
@@ -1028,7 +1030,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
           </div>
         )}
 
-        {displayReport && (!displayReport.status || displayReport.status === 'completed') && isAdmin && !readOnly && (
+        {displayReport && (!displayReport.status || displayReport.status === 'completed') && isStaff && !readOnly && (
           <div className="mb-5 rounded-xl border border-sky-500/20 bg-sky-950/10 px-4 py-4 space-y-4">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -1194,40 +1196,44 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       >
                         <RefreshCw className={`w-3.5 h-3.5 ${isRegenerating ? 'animate-spin' : ''}`} />
                       </button>
-                      <button
-                        onClick={handleShare}
-                        disabled={shareState === 'loading'}
-                        className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/60 rounded-lg transition-colors disabled:opacity-50"
-                        title="Copy share link"
-                      >
-                        {shareState === 'copied'
-                          ? <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          : <Share2 className="w-3.5 h-3.5" />}
-                      </button>
-                      {confirmDelete ? (
+                      {canDeleteOrShareReport && (
                         <>
                           <button
-                            onClick={() => deleteMutation.mutate()}
-                            disabled={deleteMutation.isPending}
-                            className="px-2 py-0.5 rounded text-xs bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
+                            onClick={handleShare}
+                            disabled={shareState === 'loading'}
+                            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/60 rounded-lg transition-colors disabled:opacity-50"
+                            title="Copy share link"
                           >
-                            {deleteMutation.isPending ? '…' : 'Delete'}
+                            {shareState === 'copied'
+                              ? <Check className="w-3.5 h-3.5 text-emerald-400" />
+                              : <Share2 className="w-3.5 h-3.5" />}
                           </button>
-                          <button
-                            onClick={() => setConfirmDelete(false)}
-                            className="px-2 py-0.5 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
-                          >
-                            Cancel
-                          </button>
+                          {confirmDelete ? (
+                            <>
+                              <button
+                                onClick={() => deleteMutation.mutate()}
+                                disabled={deleteMutation.isPending}
+                                className="px-2 py-0.5 rounded text-xs bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
+                              >
+                                {deleteMutation.isPending ? '…' : 'Delete'}
+                              </button>
+                              <button
+                                onClick={() => setConfirmDelete(false)}
+                                className="px-2 py-0.5 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              onClick={() => setConfirmDelete(true)}
+                              className="p-1.5 text-red-500 hover:text-red-400 hover:bg-slate-700/60 rounded-lg transition-colors"
+                              title="Delete analysis"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </>
-                      ) : (
-                        <button
-                          onClick={() => setConfirmDelete(true)}
-                          className="p-1.5 text-red-500 hover:text-red-400 hover:bg-slate-700/60 rounded-lg transition-colors"
-                          title="Delete analysis"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
                       )}
                     </div>
                   )}
@@ -1305,42 +1311,46 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                         >
                           <RefreshCw className={`w-3.5 h-3.5 ${regenerateMutation.isPending ? 'animate-spin' : ''}`} />
                         </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleShare() }}
-                          disabled={shareState === 'loading'}
-                          className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/60 rounded-lg transition-colors disabled:opacity-50"
-                          title="Copy share link"
-                        >
-                          {shareState === 'copied'
-                            ? <Check className="w-3.5 h-3.5 text-emerald-400" />
-                            : <Share2 className="w-3.5 h-3.5" />}
-                        </button>
-                        {confirmDelete ? (
+                        {canDeleteOrShareReport && (
                           <>
                             <button
-                              onClick={(e) => { e.stopPropagation(); deleteMutation.mutate() }}
-                              disabled={deleteMutation.isPending}
-                              className="px-2 py-0.5 rounded text-xs bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
+                              onClick={(e) => { e.stopPropagation(); handleShare() }}
+                              disabled={shareState === 'loading'}
+                              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/60 rounded-lg transition-colors disabled:opacity-50"
+                              title="Copy share link"
                             >
-                              {deleteMutation.isPending ? '…' : 'Delete'}
+                              {shareState === 'copied'
+                                ? <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                : <Share2 className="w-3.5 h-3.5" />}
                             </button>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setConfirmDelete(false) }}
-                              className="px-2 py-0.5 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
-                            >
-                              Cancel
-                            </button>
+                            {confirmDelete ? (
+                              <>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); deleteMutation.mutate() }}
+                                  disabled={deleteMutation.isPending}
+                                  className="px-2 py-0.5 rounded text-xs bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
+                                >
+                                  {deleteMutation.isPending ? '…' : 'Delete'}
+                                </button>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setConfirmDelete(false) }}
+                                  className="px-2 py-0.5 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setConfirmDelete(true) }}
+                                className="p-1.5 text-red-500 hover:text-red-400 hover:bg-slate-700/60 rounded-lg transition-colors"
+                                title="Delete analysis"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            <span className="w-px h-4 bg-slate-700 mx-1" />
                           </>
-                        ) : (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setConfirmDelete(true) }}
-                            className="p-1.5 text-red-500 hover:text-red-400 hover:bg-slate-700/60 rounded-lg transition-colors"
-                            title="Delete analysis"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
                         )}
-                        <span className="w-px h-4 bg-slate-700 mx-1" />
                       </>
                     )}
                     <span className="flex items-center gap-1 text-slate-500">
@@ -1785,7 +1795,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       <span>{item.user_display_name || 'User feedback'}</span>
                       <span>{new Date(item.created_at).toLocaleString()}</span>
                     </div>
-                    {(isAdmin || item.user_id === user?.id) && (
+                    {(isStaff || item.user_id === user?.id) && (
                       <button
                         type="button"
                         onClick={() => deleteFeedbackMutation.mutate(item.id)}

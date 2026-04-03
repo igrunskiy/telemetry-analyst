@@ -298,7 +298,7 @@ export async function adminSetSuspended(userId: string, suspended: boolean): Pro
   await api.patch(`/admin/users/${userId}/suspend`, { suspended })
 }
 
-export async function adminSetRole(userId: string, role: 'admin' | 'user'): Promise<void> {
+export async function adminSetRole(userId: string, role: 'admin' | 'moderator' | 'user'): Promise<void> {
   await api.patch(`/admin/users/${userId}/role`, { role })
 }
 

@@ -1,7 +1,8 @@
 """
 Admin API router.
 
-All endpoints require the 'admin' role.
+Most endpoints require the 'admin' role. Report and feedback oversight
+also allow 'moderator'.
 """
 
 import logging
@@ -16,7 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.jwt import require_admin
+from app.auth.jwt import require_admin, require_staff
 from app.config import reload_settings, settings
 from app.database import get_db, AsyncSessionLocal
 from app.models.user import User
@@ -242,11 +243,11 @@ async def set_user_role(
     admin=Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Change a user's role (admin or user)."""
+    """Change a user's role (admin, moderator, or user)."""
     import uuid
     role = body.get("role")
-    if role not in ("admin", "user"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role must be 'admin' or 'user'")
+    if role not in ("admin", "moderator", "user"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role must be 'admin', 'moderator', or 'user'")
 
     try:
         uid = uuid.UUID(user_id)
@@ -275,7 +276,7 @@ async def set_user_role(
 
 @router.get("/reports", response_model=List[AdminReportItem])
 async def list_all_reports(
-    _admin=Depends(require_admin),
+    _staff=Depends(require_staff),
     db: AsyncSession = Depends(get_db),
 ):
     """Return all analysis reports across all users, newest first."""
@@ -331,7 +332,7 @@ async def list_all_reports(
 async def retrospect_report(
     report_id: str,
     body: AdminRetrospectiveRequest,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_staff),
     db: AsyncSession = Depends(get_db),
 ):
     import uuid
@@ -402,7 +403,7 @@ async def fail_report(
 
 @router.get("/report-feedback", response_model=AdminReportFeedbackResponse)
 async def list_report_feedback(
-    _admin=Depends(require_admin),
+    _staff=Depends(require_staff),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -444,7 +445,7 @@ async def list_report_feedback(
 async def mark_report_feedback_reviewed(
     analysis_id: str,
     feedback_id: str,
-    _admin=Depends(require_admin),
+    _staff=Depends(require_staff),
     db: AsyncSession = Depends(get_db),
 ):
     import uuid
@@ -480,7 +481,7 @@ async def mark_report_feedback_reviewed(
 async def delete_report_feedback(
     analysis_id: str,
     feedback_id: str,
-    _admin=Depends(require_admin),
+    _staff=Depends(require_staff),
     db: AsyncSession = Depends(get_db),
 ):
     import uuid

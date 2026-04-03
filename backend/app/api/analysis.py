@@ -21,7 +21,7 @@ from app.analysis.lap_metadata import driver_key as _driver_key
 from app.analysis.lap_metadata import normalize_lap_meta_dict as _normalize_lap_meta_dict
 from app.analysis.upload_inspector import inspect_upload_with_llm
 from app.auth.crypto import decrypt
-from app.auth.jwt import get_current_user
+from app.auth.jwt import get_current_user, has_staff_access
 from app.config import settings
 from app.database import get_db
 from app.llm_access import require_llm_provider_access
@@ -263,7 +263,7 @@ async def download_analysis_telemetry(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID format")
 
     query = select(AnalysisResult).where(AnalysisResult.id == uid)
-    if current_user.role != "admin":
+    if not has_staff_access(current_user.role):
         query = query.where(AnalysisResult.user_id == current_user.id)
 
     result = await db.execute(query)
@@ -301,7 +301,7 @@ async def submit_analysis_feedback(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID format")
 
     query = select(AnalysisResult).where(AnalysisResult.id == uid)
-    if current_user.role != "admin":
+    if not has_staff_access(current_user.role):
         query = query.where(AnalysisResult.user_id == current_user.id)
 
     result = await db.execute(query)
@@ -351,7 +351,7 @@ async def delete_analysis_feedback(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID format")
 
     query = select(AnalysisResult).where(AnalysisResult.id == uid)
-    if current_user.role != "admin":
+    if not has_staff_access(current_user.role):
         query = query.where(AnalysisResult.user_id == current_user.id)
 
     result = await db.execute(query)
@@ -365,7 +365,7 @@ async def delete_analysis_feedback(
     if target_item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback not found")
 
-    if current_user.role != "admin" and str(target_item.get("user_id")) != str(current_user.id):
+    if not has_staff_access(current_user.role) and str(target_item.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to delete this feedback")
 
     result_json["user_feedback_items"] = [
@@ -601,7 +601,7 @@ async def regenerate_analysis(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID format")
 
     query = select(AnalysisResult).where(AnalysisResult.id == uid)
-    if current_user.role != "admin":
+    if not has_staff_access(current_user.role):
         query = query.where(AnalysisResult.user_id == current_user.id)
 
     result = await db.execute(query)
@@ -776,7 +776,7 @@ async def delete_analysis(
     )
     record = result.scalar_one_or_none()
 
-    if record is not None and not (current_user.role == "admin" or record.user_id == current_user.id):
+    if record is not None and not (has_staff_access(current_user.role) or record.user_id == current_user.id):
         record = None
 
     if record is None:
@@ -806,7 +806,7 @@ async def get_analysis(
 
     query = select(AnalysisResult).where(AnalysisResult.id == uid)
     # Admins can read any report; regular users only their own
-    if current_user.role != "admin":
+    if not has_staff_access(current_user.role):
         query = query.where(AnalysisResult.user_id == current_user.id)
 
     result = await db.execute(query)
@@ -818,7 +818,7 @@ async def get_analysis(
             detail="Analysis not found",
         )
 
-    if current_user.role != "admin" and record.version_group_id and record.id == record.version_group_id:
+    if not has_staff_access(current_user.role) and record.version_group_id and record.id == record.version_group_id:
         default_result = await db.execute(
             select(AnalysisResult)
             .where(
@@ -831,7 +831,7 @@ async def get_analysis(
         record = default_result.scalar_one_or_none() or record
 
     payload = _record_response(record)
-    if current_user.role == "admin":
+    if has_staff_access(current_user.role):
         payload = await _attach_version_history(payload, record, db)
     return payload
 

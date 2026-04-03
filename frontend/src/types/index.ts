@@ -24,7 +24,7 @@ export interface User {
   has_custom_claude_key: boolean
   has_custom_gemini_key: boolean
   has_garage61: boolean
-  role: 'admin' | 'user'
+  role: 'admin' | 'moderator' | 'user'
   llm_access: LlmAccessState
 }
 
@@ -54,7 +54,7 @@ export interface AdminUser {
   display_name: string
   username: string | null
   email: string | null
-  role: 'admin' | 'user'
+  role: 'admin' | 'moderator' | 'user'
   is_suspended: boolean
   garage61_user_id: string | null
   discord_user_id: string | null
