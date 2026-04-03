@@ -427,6 +427,7 @@ export default function LapSelectorPage() {
   })
 
   const isAdmin = user?.role === 'admin'
+  const isStaff = user?.role === 'admin' || user?.role === 'moderator'
   const { data: availablePrompts = [] } = useQuery<PromptMeta[]>({
     queryKey: ['admin', 'prompts'],
     queryFn: adminListPrompts,
@@ -1077,14 +1078,14 @@ export default function LapSelectorPage() {
             <span className="font-semibold text-white text-sm">Telemetry Analyst</span>
           </div>
           <div className="flex items-center gap-2">
-            {user?.role === 'admin' && (
+            {isStaff && (
               <Link
                 to="/admin"
-                title="Admin Panel"
+                title={isAdmin ? 'Admin Panel' : 'Moderation Panel'}
                 className="flex items-center gap-1.5 text-amber-400 hover:text-amber-300 transition-colors text-sm px-2 py-1 rounded-lg hover:bg-slate-700"
               >
                 <Shield className="w-4 h-4" />
-                <span className="hidden sm:inline text-xs font-medium">Admin</span>
+                <span className="hidden sm:inline text-xs font-medium">{isAdmin ? 'Admin' : 'Mod'}</span>
               </Link>
             )}
             {user && (

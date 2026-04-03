@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield, Users, Settings, ChevronLeft, Check, X, RefreshCw, Plus, Save, AlertTriangle, Activity, BarChart2, ChevronRight, Loader2, FileText, Trash2, Star, Sparkles, Bell, MessageSquare } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useAuth } from '../hooks/useAuth'
 import {
   adminListUsers,
   adminSetSuspended,
@@ -32,17 +33,29 @@ import {
 import type { AdminUser, AdminReport, AdminRetrospective, PromptMeta, PromptsDefaults, ReportFeedback } from '../types'
 
 type Section = 'users' | 'config' | 'prompt' | 'workers' | 'reports' | 'feedback'
+const MODERATOR_SECTIONS: Section[] = ['reports', 'feedback']
 
 export default function AdminPage() {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
+  const allowedSections = isAdmin ? (['users', 'config', 'prompt', 'workers', 'reports', 'feedback'] as Section[]) : MODERATOR_SECTIONS
   const location = useLocation()
   const initialSection = (location.state as { initialSection?: Section } | null)?.initialSection
-  const [section, setSection] = useState<Section>(initialSection ?? 'users')
+  const [section, setSection] = useState<Section>(
+    initialSection && allowedSections.includes(initialSection) ? initialSection : allowedSections[0],
+  )
   const { data: feedbackInbox } = useQuery({
     queryKey: ['admin', 'report-feedback'],
     queryFn: adminListReportFeedback,
     refetchInterval: 30000,
   })
   const unreadFeedbackCount = feedbackInbox?.unread_count ?? 0
+
+  useEffect(() => {
+    if (!allowedSections.includes(section)) {
+      setSection(allowedSections[0])
+    }
+  }, [allowedSections, section])
 
   return (
     <div className="min-h-screen bg-slate-900 text-white">
@@ -52,7 +65,7 @@ export default function AdminPage() {
           <ChevronLeft className="w-5 h-5" />
         </Link>
         <Shield className="w-5 h-5 text-amber-500" />
-        <h1 className="text-lg font-semibold">Admin Panel</h1>
+        <h1 className="text-lg font-semibold">{isAdmin ? 'Admin Panel' : 'Moderation Panel'}</h1>
         <button
           type="button"
           onClick={() => setSection('feedback')}
@@ -71,6 +84,7 @@ export default function AdminPage() {
       <div className="flex h-[calc(100vh-65px)]">
         {/* Sidebar */}
         <nav className="w-52 border-r border-slate-800 p-4 flex flex-col gap-1">
+          {isAdmin && (
           <button
             onClick={() => setSection('users')}
             className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full text-left ${
@@ -82,6 +96,8 @@ export default function AdminPage() {
             <Users className="w-4 h-4" />
             User Management
           </button>
+          )}
+          {isAdmin && (
           <button
             onClick={() => setSection('config')}
             className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full text-left ${
@@ -93,6 +109,8 @@ export default function AdminPage() {
             <Settings className="w-4 h-4" />
             Server Config
           </button>
+          )}
+          {isAdmin && (
           <button
             onClick={() => setSection('prompt')}
             className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full text-left ${
@@ -104,6 +122,8 @@ export default function AdminPage() {
             <FileText className="w-4 h-4" />
             System Prompt
           </button>
+          )}
+          {isAdmin && (
           <button
             onClick={() => setSection('workers')}
             className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full text-left ${
@@ -115,6 +135,7 @@ export default function AdminPage() {
             <Activity className="w-4 h-4" />
             Worker Monitor
           </button>
+          )}
           <button
             onClick={() => setSection('reports')}
             className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full text-left ${
@@ -148,10 +169,10 @@ export default function AdminPage() {
 
         {/* Main content */}
         <main className="flex-1 overflow-auto p-6">
-          {section === 'users' && <UserManagement />}
-          {section === 'config' && <ConfigEditor />}
-          {section === 'prompt' && <PromptsManager />}
-          {section === 'workers' && <WorkerMonitor />}
+          {isAdmin && section === 'users' && <UserManagement />}
+          {isAdmin && section === 'config' && <ConfigEditor />}
+          {isAdmin && section === 'prompt' && <PromptsManager />}
+          {isAdmin && section === 'workers' && <WorkerMonitor />}
           {section === 'reports' && <ReportsView />}
           {section === 'feedback' && <FeedbackInbox />}
         </main>
@@ -165,6 +186,7 @@ export default function AdminPage() {
 // ---------------------------------------------------------------------------
 
 function UserManagement() {
+  const { user: currentUser } = useAuth()
   const [showCreate, setShowCreate] = useState(false)
   const qc = useQueryClient()
 
@@ -182,7 +204,7 @@ function UserManagement() {
   })
 
   const roleMutation = useMutation({
-    mutationFn: ({ id, role }: { id: string; role: 'admin' | 'user' }) =>
+    mutationFn: ({ id, role }: { id: string; role: 'admin' | 'moderator' | 'user' }) =>
       adminSetRole(id, role),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
   })
@@ -237,6 +259,7 @@ function UserManagement() {
           <UserRow
             key={user.id}
             user={user}
+            isCurrentUser={currentUser?.id === user.id}
             onSuspend={(suspended) => suspendMutation.mutate({ id: user.id, suspended })}
             onRoleChange={(role) => roleMutation.mutate({ id: user.id, role })}
           />
@@ -248,12 +271,14 @@ function UserManagement() {
 
 function UserRow({
   user,
+  isCurrentUser,
   onSuspend,
   onRoleChange,
 }: {
   user: AdminUser
+  isCurrentUser: boolean
   onSuspend: (suspended: boolean) => void
-  onRoleChange: (role: 'admin' | 'user') => void
+  onRoleChange: (role: 'admin' | 'moderator' | 'user') => void
 }) {
   const authMethods: string[] = []
   if (user.username) authMethods.push('local')
@@ -309,10 +334,13 @@ function UserRow({
       <div className="flex items-center gap-2 flex-shrink-0">
         <select
           value={user.role}
-          onChange={e => onRoleChange(e.target.value as 'admin' | 'user')}
-          className="bg-slate-900 border border-slate-700 text-slate-300 text-[11px] rounded-lg px-2 py-1.5 focus:outline-none focus:border-amber-500"
+          onChange={e => onRoleChange(e.target.value as 'admin' | 'moderator' | 'user')}
+          disabled={isCurrentUser}
+          title={isCurrentUser ? 'You cannot change your own role from this screen.' : 'Change user role'}
+          className="bg-slate-900 border border-slate-700 text-slate-300 text-[11px] rounded-lg px-2 py-1.5 focus:outline-none focus:border-amber-500 disabled:opacity-60 disabled:cursor-not-allowed"
         >
           <option value="user">user</option>
+          <option value="moderator">moderator</option>
           <option value="admin">admin</option>
         </select>
 
@@ -332,6 +360,11 @@ function UserRow({
           )}
         </button>
       </div>
+      {isCurrentUser && (
+        <div className="text-[10px] text-slate-500 text-right min-w-[12rem]">
+          Your own role is locked here to prevent admin lockout.
+        </div>
+      )}
     </div>
   )
 }
@@ -342,7 +375,7 @@ function CreateUserForm({ onClose, onCreated }: { onClose: () => void; onCreated
     password: '',
     display_name: '',
     email: '',
-    role: 'user' as 'admin' | 'user',
+    role: 'user' as 'admin' | 'moderator' | 'user',
   })
   const [error, setError] = useState<string | null>(null)
 
@@ -401,10 +434,11 @@ function CreateUserForm({ onClose, onCreated }: { onClose: () => void; onCreated
           <label className="text-xs text-slate-400 mb-1 block">Role</label>
           <select
             value={form.role}
-            onChange={e => setForm(f => ({ ...f, role: e.target.value as 'admin' | 'user' }))}
+            onChange={e => setForm(f => ({ ...f, role: e.target.value as 'admin' | 'moderator' | 'user' }))}
             className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-amber-500"
           >
             <option value="user">user</option>
+            <option value="moderator">moderator</option>
             <option value="admin">admin</option>
           </select>
         </div>
@@ -1229,6 +1263,8 @@ function useElapsed(since: string, active: boolean) {
 }
 
 function ReportRow({ r }: { r: AdminReport }) {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [expanded, setExpanded] = useState(false)
@@ -1241,6 +1277,8 @@ function ReportRow({ r }: { r: AdminReport }) {
   const isProcessing = r.status === 'processing'
   const elapsed = useElapsed(r.enqueued_at ?? r.created_at, isProcessing)
   const latestRetrospective = r.latest_retrospective
+  const latestValidVersionId = r.latest_valid_version_id ?? null
+  const latestValidVersionNumber = r.latest_valid_version_number ?? null
 
   const isOngoing = r.status === 'enqueued' || r.status === 'processing'
 
@@ -1297,6 +1335,13 @@ function ReportRow({ r }: { r: AdminReport }) {
                     Failed
                   </span>
                 )}
+                {r.telemetry_storage_complete != null && (
+                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${
+                    r.telemetry_storage_complete ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400'
+                  }`}>
+                    {r.telemetry_storage_complete ? 'Telemetry stored' : 'Telemetry partial'}
+                  </span>
+                )}
                 <span className="text-amber-400 font-semibold text-sm truncate">{r.car_name}</span>
                 <span className="text-slate-500 text-xs">@</span>
                 <span className="text-slate-300 text-sm truncate">{r.track_name}</span>
@@ -1318,7 +1363,7 @@ function ReportRow({ r }: { r: AdminReport }) {
             {isFailed && (
               <span className="text-xs text-slate-500 flex-shrink-0">{expanded ? '▲' : '▼'}</span>
             )}
-            {isOngoing && (
+            {isOngoing && isAdmin && (
               <button
                 onClick={(e) => { e.stopPropagation(); failMutation.mutate() }}
                 disabled={failMutation.isPending}
@@ -1350,14 +1395,29 @@ function ReportRow({ r }: { r: AdminReport }) {
           <div className="border-t border-red-500/20 bg-red-950/20 px-4 py-3">
             <div className="flex items-center justify-between mb-1.5">
               <p className="text-xs text-red-400 font-semibold">Error log</p>
-              <button
-                onClick={(e) => { e.stopPropagation(); rerunMutation.mutate() }}
-                disabled={rerunMutation.isPending}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
-              >
-                <RefreshCw className={`w-3 h-3 ${rerunMutation.isPending ? 'animate-spin' : ''}`} />
-                {rerunMutation.isPending ? 'Re-running…' : 'Re-run'}
-              </button>
+              <div className="flex items-center gap-2">
+                {latestValidVersionId && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      navigate(`/report/${latestValidVersionId}`, {
+                        state: { backTo: { pathname: '/admin', state: { initialSection: 'reports' satisfies Section } } },
+                      })
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-700/60 border border-slate-600 text-slate-200 hover:bg-slate-700 transition-colors"
+                  >
+                    {latestValidVersionNumber != null ? `Open valid v${latestValidVersionNumber}` : 'Open latest valid'}
+                  </button>
+                )}
+                <button
+                  onClick={(e) => { e.stopPropagation(); rerunMutation.mutate() }}
+                  disabled={rerunMutation.isPending}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
+                >
+                  <RefreshCw className={`w-3 h-3 ${rerunMutation.isPending ? 'animate-spin' : ''}`} />
+                  {rerunMutation.isPending ? 'Re-running…' : 'Re-run'}
+                </button>
+              </div>
             </div>
             {r.error_message
               ? <pre className="text-xs text-red-300/80 font-mono whitespace-pre-wrap break-all leading-relaxed max-h-64 overflow-y-auto">{r.error_message}</pre>

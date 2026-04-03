@@ -5,6 +5,16 @@ on:
     branches: ["**"]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: "Instance/environment to deploy"
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - prod
+          - staging
 
 permissions:
   contents: read
@@ -205,24 +215,17 @@ jobs:
           cache-from: type=gha,scope=proxy
           cache-to: type=gha,mode=max,scope=proxy
 
-  auto-merge:
-    needs: [build-backend, build-frontend, build-proxy, build-db]
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - name: Merge PR into main
-        run: gh pr merge "${{ github.event.pull_request.number }}" --squash --repo "${{ github.repository }}"
-        env:
-          GH_TOKEN: ${{ secrets.ACTIONS_PAT }}
-
   deploy:
     needs: [build-backend, build-frontend, build-proxy, build-db]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target || 'prod' }}
     steps:
+      - name: Resolve deploy target
+        run: echo "Deploying to '${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target || 'prod' }}'"
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
@@ -233,7 +236,9 @@ jobs:
             set -e
             export DOCKER_CONFIG=$(mktemp -d)
             echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
-            cd /opt/telemetry-analyst
-            docker compose -f docker-compose.prod.yml pull
-            docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans
+            export APP_DIR="${{ vars.APP_DIR || '/opt/telemetry-analyst' }}"
+            export COMPOSE_FILE="${{ vars.COMPOSE_FILE || 'docker-compose.prod.yml' }}"
+            cd "$APP_DIR"
+            docker compose -f "$COMPOSE_FILE" pull
+            docker compose -f "$COMPOSE_FILE" up -d --force-recreate --remove-orphans
             docker image prune -f

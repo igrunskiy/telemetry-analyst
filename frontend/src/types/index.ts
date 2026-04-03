@@ -24,7 +24,7 @@ export interface User {
   has_custom_claude_key: boolean
   has_custom_gemini_key: boolean
   has_garage61: boolean
-  role: 'admin' | 'user'
+  role: 'admin' | 'moderator' | 'user'
   llm_access: LlmAccessState
 }
 
@@ -54,7 +54,7 @@ export interface AdminUser {
   display_name: string
   username: string | null
   email: string | null
-  role: 'admin' | 'user'
+  role: 'admin' | 'moderator' | 'user'
   is_suspended: boolean
   garage61_user_id: string | null
   discord_user_id: string | null
@@ -271,6 +271,8 @@ export interface AnalysisReport {
   version_number?: number
   is_default_version?: boolean
   available_versions?: AnalysisVersionSummary[]
+  latest_valid_version_id?: string
+  latest_valid_version_number?: number
   lap_id: string
   reference_lap_ids: string[]
   car_name: string
@@ -292,6 +294,14 @@ export interface AnalysisReport {
   driving_scores?: DrivingScores
   sector_scores?: { sector: number; driving_scores: DrivingScores }[]
   generation_time_s?: number
+  telemetry_storage?: {
+    analysis_id: string
+    required_lap_count: number
+    stored_lap_count: number
+    required_lap_ids: string[]
+    stored_lap_ids: string[]
+    is_complete: boolean
+  }
   laps_metadata?: LapMeta[]
   admin_retrospectives?: AdminRetrospective[]
   user_feedback_items?: ReportFeedback[]
@@ -325,6 +335,7 @@ export interface AnalysisVersionSummary {
   llm_provider?: 'claude' | 'gemini' | string
   model_name?: string
   prompt_version?: string
+  telemetry_storage_complete?: boolean | null
 }
 
 export interface AdminReport {
@@ -345,6 +356,9 @@ export interface AdminReport {
   version_group_id: string
   enqueued_at?: string | null
   error_message?: string | null
+  telemetry_storage_complete?: boolean | null
+  latest_valid_version_id?: string | null
+  latest_valid_version_number?: number | null
   latest_retrospective?: AdminRetrospective | null
 }
 

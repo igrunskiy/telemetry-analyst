@@ -989,6 +989,7 @@ async def load_csv_for_lap_id(
     user: User,
     db: AsyncSession,
     uploaded_telemetry: list[dict[str, Any]] | None = None,
+    fallback_garage61_user: User | None = None,
 ) -> str:
     def _require_non_empty_csv(csv_text: Any, *, source_name: str) -> str:
         text = str(csv_text or "")
@@ -1019,10 +1020,30 @@ async def load_csv_for_lap_id(
             source_name="Uploaded telemetry",
         )
 
-    garage61 = await get_optional_garage61_client(user, db)
-    if not garage61:
-        raise ValueError(f"Garage61 not connected — cannot fetch lap {lap_id}. Upload CSV telemetry instead.")
-    return _require_non_empty_csv(
-        await garage61.get_lap_csv(raw_id),
-        source_name="Garage61",
-    )
+    async def _fetch_from_garage61(fetch_user: User, *, source_label: str) -> str:
+        garage61 = await get_optional_garage61_client(fetch_user, db)
+        if not garage61:
+            raise ValueError(f"{source_label} Garage61 not connected — cannot fetch lap {lap_id}. Upload CSV telemetry instead.")
+        return _require_non_empty_csv(
+            await garage61.get_lap_csv(raw_id),
+            source_name=f"{source_label} Garage61",
+        )
+
+    primary_error: Exception | None = None
+    try:
+        return await _fetch_from_garage61(user, source_label="Owner")
+    except Exception as exc:
+        primary_error = exc
+        if not fallback_garage61_user or str(fallback_garage61_user.id) == str(user.id):
+            raise
+
+    try:
+        logger.warning(
+            "Primary Garage61 fetch failed for lap %s via user %s; retrying with fallback user %s",
+            lap_id,
+            getattr(user, "id", None),
+            getattr(fallback_garage61_user, "id", None),
+        )
+        return await _fetch_from_garage61(fallback_garage61_user, source_label="Fallback")
+    except Exception:
+        raise primary_error  # preserve the original owner-session failure in error logs

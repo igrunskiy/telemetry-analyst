@@ -10,11 +10,12 @@
 #   sudo -u telemetry bash /opt/telemetry-analyst/deploy/deploy-images.sh
 #
 # Optional env vars:
+#   APP_DIR       application directory (default: /opt/telemetry-analyst)
 #   COMPOSE_FILE  compose file (default: docker-compose.prod.yml)
 # =============================================================================
 set -euo pipefail
 
-APP_DIR="/opt/telemetry-analyst"
+APP_DIR="${APP_DIR:-/opt/telemetry-analyst}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 
 cd "$APP_DIR"

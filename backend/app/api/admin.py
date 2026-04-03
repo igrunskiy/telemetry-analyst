@@ -1,14 +1,15 @@
 """
 Admin API router.
 
-All endpoints require the 'admin' role.
+Most endpoints require the 'admin' role. Report and feedback oversight
+also allow 'moderator'.
 """
 
 import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -16,7 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.jwt import require_admin
+from app.auth.jwt import require_admin, require_staff
 from app.config import reload_settings, settings
 from app.database import get_db, AsyncSessionLocal
 from app.models.user import User
@@ -57,12 +58,16 @@ class SuspendRequest(BaseModel):
     suspended: bool
 
 
+class RoleUpdateRequest(BaseModel):
+    role: Literal["admin", "moderator", "user"]
+
+
 class CreateUserRequest(BaseModel):
     username: str
     password: str
     display_name: str
     email: str | None = None
-    role: str = "user"
+    role: Literal["admin", "moderator", "user"] = "user"
 
 
 class AdminReportItem(BaseModel):
@@ -83,6 +88,9 @@ class AdminReportItem(BaseModel):
     version_group_id: str
     enqueued_at: str | None
     error_message: str | None
+    telemetry_storage_complete: bool | None = None
+    latest_valid_version_id: str | None = None
+    latest_valid_version_number: int | None = None
     latest_retrospective: dict | None = None
 
 
@@ -238,15 +246,13 @@ async def create_user(
 @router.patch("/users/{user_id}/role")
 async def set_user_role(
     user_id: str,
-    body: dict,
+    body: RoleUpdateRequest,
     admin=Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Change a user's role (admin or user)."""
+    """Change a user's role (admin, moderator, or user)."""
     import uuid
-    role = body.get("role")
-    if role not in ("admin", "user"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role must be 'admin' or 'user'")
+    role = body.role
 
     try:
         uid = uuid.UUID(user_id)
@@ -275,7 +281,7 @@ async def set_user_role(
 
 @router.get("/reports", response_model=List[AdminReportItem])
 async def list_all_reports(
-    _admin=Depends(require_admin),
+    _staff=Depends(require_staff),
     db: AsyncSession = Depends(get_db),
 ):
     """Return all analysis reports across all users, newest first."""
@@ -304,6 +310,17 @@ async def list_all_reports(
         analysis_mode = rj.get("analysis_mode") or input_data.get("analysis_mode", "vs_reference")
         retrospectives = rj.get("admin_retrospectives") or []
         latest_retrospective = retrospectives[-1] if retrospectives else None
+        telemetry_storage = rj.get("telemetry_storage") or input_data.get("telemetry_storage") or {}
+        latest_valid_result = await db.execute(
+            select(AnalysisResult)
+            .where(
+                AnalysisResult.version_group_id == (record.version_group_id or record.id),
+                AnalysisResult.status == "completed",
+            )
+            .order_by(desc(AnalysisResult.version_number), desc(AnalysisResult.created_at))
+            .limit(1)
+        )
+        latest_valid = latest_valid_result.scalar_one_or_none()
         items.append(AdminReportItem(
             id=str(record.id),
             user_id=str(record.user_id),
@@ -322,6 +339,9 @@ async def list_all_reports(
             version_group_id=str(record.version_group_id or record.id),
             enqueued_at=record.enqueued_at.isoformat() if record.enqueued_at else None,
             error_message=record.error_message,
+            telemetry_storage_complete=telemetry_storage.get("is_complete") if isinstance(telemetry_storage, dict) else None,
+            latest_valid_version_id=str(latest_valid.id) if latest_valid else None,
+            latest_valid_version_number=latest_valid.version_number if latest_valid else None,
             latest_retrospective=latest_retrospective,
         ))
     return items
@@ -331,7 +351,7 @@ async def list_all_reports(
 async def retrospect_report(
     report_id: str,
     body: AdminRetrospectiveRequest,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_staff),
     db: AsyncSession = Depends(get_db),
 ):
     import uuid
@@ -402,7 +422,7 @@ async def fail_report(
 
 @router.get("/report-feedback", response_model=AdminReportFeedbackResponse)
 async def list_report_feedback(
-    _admin=Depends(require_admin),
+    _staff=Depends(require_staff),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -444,7 +464,7 @@ async def list_report_feedback(
 async def mark_report_feedback_reviewed(
     analysis_id: str,
     feedback_id: str,
-    _admin=Depends(require_admin),
+    _staff=Depends(require_staff),
     db: AsyncSession = Depends(get_db),
 ):
     import uuid
@@ -480,7 +500,7 @@ async def mark_report_feedback_reviewed(
 async def delete_report_feedback(
     analysis_id: str,
     feedback_id: str,
-    _admin=Depends(require_admin),
+    _staff=Depends(require_staff),
     db: AsyncSession = Depends(get_db),
 ):
     import uuid
