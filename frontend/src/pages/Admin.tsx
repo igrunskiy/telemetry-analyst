@@ -186,6 +186,7 @@ export default function AdminPage() {
 // ---------------------------------------------------------------------------
 
 function UserManagement() {
+  const { user: currentUser } = useAuth()
   const [showCreate, setShowCreate] = useState(false)
   const qc = useQueryClient()
 
@@ -258,6 +259,7 @@ function UserManagement() {
           <UserRow
             key={user.id}
             user={user}
+            isCurrentUser={currentUser?.id === user.id}
             onSuspend={(suspended) => suspendMutation.mutate({ id: user.id, suspended })}
             onRoleChange={(role) => roleMutation.mutate({ id: user.id, role })}
           />
@@ -269,10 +271,12 @@ function UserManagement() {
 
 function UserRow({
   user,
+  isCurrentUser,
   onSuspend,
   onRoleChange,
 }: {
   user: AdminUser
+  isCurrentUser: boolean
   onSuspend: (suspended: boolean) => void
   onRoleChange: (role: 'admin' | 'moderator' | 'user') => void
 }) {
@@ -331,7 +335,9 @@ function UserRow({
         <select
           value={user.role}
           onChange={e => onRoleChange(e.target.value as 'admin' | 'moderator' | 'user')}
-          className="bg-slate-900 border border-slate-700 text-slate-300 text-[11px] rounded-lg px-2 py-1.5 focus:outline-none focus:border-amber-500"
+          disabled={isCurrentUser}
+          title={isCurrentUser ? 'You cannot change your own role from this screen.' : 'Change user role'}
+          className="bg-slate-900 border border-slate-700 text-slate-300 text-[11px] rounded-lg px-2 py-1.5 focus:outline-none focus:border-amber-500 disabled:opacity-60 disabled:cursor-not-allowed"
         >
           <option value="user">user</option>
           <option value="moderator">moderator</option>
@@ -354,6 +360,11 @@ function UserRow({
           )}
         </button>
       </div>
+      {isCurrentUser && (
+        <div className="text-[10px] text-slate-500 text-right min-w-[12rem]">
+          Your own role is locked here to prevent admin lockout.
+        </div>
+      )}
     </div>
   )
 }
@@ -364,7 +375,7 @@ function CreateUserForm({ onClose, onCreated }: { onClose: () => void; onCreated
     password: '',
     display_name: '',
     email: '',
-    role: 'user' as 'admin' | 'user',
+    role: 'user' as 'admin' | 'moderator' | 'user',
   })
   const [error, setError] = useState<string | null>(null)
 
@@ -423,10 +434,11 @@ function CreateUserForm({ onClose, onCreated }: { onClose: () => void; onCreated
           <label className="text-xs text-slate-400 mb-1 block">Role</label>
           <select
             value={form.role}
-            onChange={e => setForm(f => ({ ...f, role: e.target.value as 'admin' | 'user' }))}
+            onChange={e => setForm(f => ({ ...f, role: e.target.value as 'admin' | 'moderator' | 'user' }))}
             className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-amber-500"
           >
             <option value="user">user</option>
+            <option value="moderator">moderator</option>
             <option value="admin">admin</option>
           </select>
         </div>

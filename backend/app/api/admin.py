@@ -9,7 +9,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -58,12 +58,16 @@ class SuspendRequest(BaseModel):
     suspended: bool
 
 
+class RoleUpdateRequest(BaseModel):
+    role: Literal["admin", "moderator", "user"]
+
+
 class CreateUserRequest(BaseModel):
     username: str
     password: str
     display_name: str
     email: str | None = None
-    role: str = "user"
+    role: Literal["admin", "moderator", "user"] = "user"
 
 
 class AdminReportItem(BaseModel):
@@ -239,15 +243,13 @@ async def create_user(
 @router.patch("/users/{user_id}/role")
 async def set_user_role(
     user_id: str,
-    body: dict,
+    body: RoleUpdateRequest,
     admin=Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Change a user's role (admin, moderator, or user)."""
     import uuid
-    role = body.get("role")
-    if role not in ("admin", "moderator", "user"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role must be 'admin', 'moderator', or 'user'")
+    role = body.role
 
     try:
         uid = uuid.UUID(user_id)

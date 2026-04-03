@@ -18,8 +18,8 @@ Lap distance values INCREASE in the direction of travel (0 → track length). Th
 ### Braking Point Data Quality Gate
 If |user_brake_dist - ref_brake_dist| > 100m:
 1. STOP — do not immediately report as a driver error
-2. Cross-check the brake pressure trace at that distance, if it is an isolated and relatively small input, it is likely that one driver simply dod not brake and lifted throttle in the same place. 
-3. Do a cross analysis between braking vs lifting for that section. 
+2. Cross-check the brake pressure trace at that distance, if it is an isolated and relatively small input, it is likely that one driver simply did not brake and lifted throttle in the same place.
+3. Do a cross analysis between braking vs lifting for that section.
 4. General rule of thumb, DO NOT cosider braking areas to be realted to the same corner if distance is greater than 100m
 
 
