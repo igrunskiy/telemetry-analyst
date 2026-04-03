@@ -78,7 +78,7 @@ class TestFindOnsetDist:
         result = _find_onset_dist(
             [0.0, 0.0, 0.1, 0.5, 0.9],
             [100.0, 200.0, 300.0, 400.0, 500.0],
-            50.0, 600.0, threshold=0.05,
+            50.0, 600.0, threshold=0.01,
         )
         assert result == 300.0
 

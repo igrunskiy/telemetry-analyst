@@ -31,7 +31,7 @@ async def _get_db_dep() -> AsyncSession:
 
 logger = logging.getLogger(__name__)
 _ME_STATISTICS_TTL_SECONDS = 60
-_me_statistics_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_me_statistics_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 
 
 class Garage61Client:
@@ -286,21 +286,50 @@ class Garage61Client:
             logger.info("Garage61 /sessions endpoint not available, will fall back to laps grouping")
             return []
 
-    async def get_me_statistics(self) -> dict:
+    async def get_me_statistics(
+        self,
+        *,
+        start: str | None = None,
+        end: str | None = None,
+        car_ids: list[int] | None = None,
+        track_ids: list[int] | None = None,
+    ) -> dict:
         """GET /me/statistics — return aggregate stats for the current user."""
-        cached = _me_statistics_cache.get(self._user_id)
+        params: dict[str, Any] = {}
+        if start:
+            params["start"] = start
+        if end:
+            params["end"] = end
+        if car_ids:
+            params["cars"] = ",".join(str(value) for value in car_ids)
+        if track_ids:
+            params["tracks"] = ",".join(str(value) for value in track_ids)
+
+        cache_key = (
+            self._user_id,
+            repr(
+                {
+                    "start": start or "",
+                    "end": end or "",
+                    "cars": car_ids or [],
+                    "tracks": track_ids or [],
+                }
+            ),
+        )
+        cached = _me_statistics_cache.get(cache_key)
         now = time.monotonic()
         if cached and now - cached[0] < _ME_STATISTICS_TTL_SECONDS:
             logger.info(
-                "Garage61 /me/statistics cache hit for user=%s age_s=%.1f",
+                "Garage61 /me/statistics cache hit for user=%s params=%s age_s=%.1f",
                 self._user_id,
+                params,
                 now - cached[0],
             )
             return cached[1]
 
-        data = await self._request("GET", "/me/statistics")
+        data = await self._request("GET", "/me/statistics", params=params or None)
         if isinstance(data, dict):
-            _me_statistics_cache[self._user_id] = (now, data)
+            _me_statistics_cache[cache_key] = (now, data)
             logger.info(f"Garage61 /me/statistics keys: {list(data.keys())}")
             driving_stats = data.get("drivingStatistics")
             if isinstance(driving_stats, dict):

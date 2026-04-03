@@ -22,6 +22,7 @@ from app.database import get_db, AsyncSessionLocal
 from app.models.user import User
 from app.models.analysis import AnalysisResult
 from app.analysis import prompts_manager
+from app.analysis.retrospective import generate_report_retrospective
 from app.analysis.worker import get_pool
 from app.llm_access import get_shared_report_limit
 
@@ -77,8 +78,42 @@ class AdminReportItem(BaseModel):
     model_name: str | None
     prompt_version: str | None
     created_at: str
+    original_created_at: str
+    latest_regenerated_at: str
+    version_group_id: str
     enqueued_at: str | None
     error_message: str | None
+    latest_retrospective: dict | None = None
+
+
+class AdminRetrospectiveRequest(BaseModel):
+    feedback_text: str = ""
+    focus_areas: str = ""
+
+
+class AdminRetrospectiveResponse(BaseModel):
+    retrospective: dict
+
+
+class AdminReportFeedbackItem(BaseModel):
+    id: str
+    analysis_id: str
+    version_number: int | None = None
+    created_at: str
+    user_id: str
+    user_display_name: str | None = None
+    selected_text: str
+    comment: str
+    reviewed_at: str | None = None
+    report_user_display_name: str
+    car_name: str
+    track_name: str
+    analysis_mode: str
+
+
+class AdminReportFeedbackResponse(BaseModel):
+    unread_count: int
+    items: list[AdminReportFeedbackItem]
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -244,18 +279,31 @@ async def list_all_reports(
     db: AsyncSession = Depends(get_db),
 ):
     """Return all analysis reports across all users, newest first."""
+    family_id = func.coalesce(AnalysisResult.version_group_id, AnalysisResult.id)
+    family_dates = (
+        select(
+            family_id.label("family_id"),
+            func.min(AnalysisResult.created_at).label("original_created_at"),
+            func.max(AnalysisResult.created_at).label("latest_regenerated_at"),
+        )
+        .group_by(family_id)
+        .subquery()
+    )
     result = await db.execute(
-        select(AnalysisResult, User)
+        select(AnalysisResult, User, family_dates.c.original_created_at, family_dates.c.latest_regenerated_at)
         .join(User, AnalysisResult.user_id == User.id)
+        .join(family_dates, family_dates.c.family_id == family_id)
         .order_by(desc(AnalysisResult.created_at))
         .limit(30)
     )
     rows = result.all()
     items = []
-    for record, user in rows:
+    for record, user, original_created_at, latest_regenerated_at in rows:
         rj = record.result_json or {}
         input_data = record.input_json or {}
         analysis_mode = rj.get("analysis_mode") or input_data.get("analysis_mode", "vs_reference")
+        retrospectives = rj.get("admin_retrospectives") or []
+        latest_retrospective = retrospectives[-1] if retrospectives else None
         items.append(AdminReportItem(
             id=str(record.id),
             user_id=str(record.user_id),
@@ -269,10 +317,56 @@ async def list_all_reports(
             model_name=rj.get("model_name"),
             prompt_version=rj.get("prompt_version") or input_data.get("prompt_version"),
             created_at=record.created_at.isoformat(),
+            original_created_at=original_created_at.isoformat() if original_created_at else record.created_at.isoformat(),
+            latest_regenerated_at=latest_regenerated_at.isoformat() if latest_regenerated_at else record.created_at.isoformat(),
+            version_group_id=str(record.version_group_id or record.id),
             enqueued_at=record.enqueued_at.isoformat() if record.enqueued_at else None,
             error_message=record.error_message,
+            latest_retrospective=latest_retrospective,
         ))
     return items
+
+
+@router.post("/reports/{report_id}/retrospect", response_model=AdminRetrospectiveResponse)
+async def retrospect_report(
+    report_id: str,
+    body: AdminRetrospectiveRequest,
+    admin_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    import uuid
+
+    try:
+        rid = uuid.UUID(report_id)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid report id")
+
+    result = await db.execute(select(AnalysisResult).where(AnalysisResult.id == rid))
+    record = result.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+
+    retrospective = await generate_report_retrospective(
+        record=record,
+        admin_user=admin_user,
+        feedback_text=body.feedback_text.strip(),
+        focus_areas=body.focus_areas.strip(),
+    )
+
+    result_json = dict(record.result_json or {})
+    retrospectives = list(result_json.get("admin_retrospectives") or [])
+    retrospectives.append({
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "analysis_id": str(record.id),
+        "version_number": record.version_number,
+        "feedback_text": body.feedback_text.strip(),
+        "focus_areas": body.focus_areas.strip(),
+        **retrospective,
+    })
+    result_json["admin_retrospectives"] = retrospectives
+    record.result_json = result_json
+    await db.commit()
+    return {"retrospective": retrospectives[-1]}
 
 
 @router.post("/reports/{report_id}/fail", status_code=status.HTTP_200_OK)
@@ -304,6 +398,113 @@ async def fail_report(
     await db.commit()
     logger.info("Admin manually failed report %s", report_id)
     return {"id": report_id, "status": "failed"}
+
+
+@router.get("/report-feedback", response_model=AdminReportFeedbackResponse)
+async def list_report_feedback(
+    _admin=Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(AnalysisResult, User)
+        .join(User, AnalysisResult.user_id == User.id)
+        .order_by(desc(AnalysisResult.created_at))
+        .limit(200)
+    )
+    rows = result.all()
+    items: list[AdminReportFeedbackItem] = []
+    unread_count = 0
+    for record, user in rows:
+        result_json = record.result_json or {}
+        analysis_mode = result_json.get("analysis_mode") or (record.input_json or {}).get("analysis_mode", "vs_reference")
+        for item in reversed(list(result_json.get("user_feedback_items") or [])):
+            reviewed_at = item.get("reviewed_at")
+            if not reviewed_at:
+                unread_count += 1
+            items.append(AdminReportFeedbackItem(
+                id=str(item.get("id") or ""),
+                analysis_id=str(item.get("analysis_id") or record.id),
+                version_number=item.get("version_number"),
+                created_at=str(item.get("created_at") or record.created_at.isoformat()),
+                user_id=str(item.get("user_id") or record.user_id),
+                user_display_name=item.get("user_display_name"),
+                selected_text=str(item.get("selected_text") or ""),
+                comment=str(item.get("comment") or ""),
+                reviewed_at=reviewed_at,
+                report_user_display_name=user.display_name,
+                car_name=record.car_name,
+                track_name=record.track_name,
+                analysis_mode=analysis_mode,
+            ))
+    items.sort(key=lambda item: item.created_at, reverse=True)
+    return AdminReportFeedbackResponse(unread_count=unread_count, items=items[:200])
+
+
+@router.post("/report-feedback/{analysis_id}/{feedback_id}/review", status_code=status.HTTP_200_OK)
+async def mark_report_feedback_reviewed(
+    analysis_id: str,
+    feedback_id: str,
+    _admin=Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    import uuid
+
+    try:
+        aid = uuid.UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID")
+
+    result = await db.execute(select(AnalysisResult).where(AnalysisResult.id == aid))
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+
+    result_json = dict(record.result_json or {})
+    feedback_items = list(result_json.get("user_feedback_items") or [])
+    updated = False
+    for item in feedback_items:
+        if str(item.get("id")) == feedback_id:
+            item["reviewed_at"] = datetime.now(timezone.utc).isoformat()
+            updated = True
+            break
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback not found")
+
+    result_json["user_feedback_items"] = feedback_items
+    record.result_json = result_json
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/report-feedback/{analysis_id}/{feedback_id}", status_code=status.HTTP_200_OK)
+async def delete_report_feedback(
+    analysis_id: str,
+    feedback_id: str,
+    _admin=Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    import uuid
+
+    try:
+        aid = uuid.UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID")
+
+    result = await db.execute(select(AnalysisResult).where(AnalysisResult.id == aid))
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+
+    result_json = dict(record.result_json or {})
+    feedback_items = list(result_json.get("user_feedback_items") or [])
+    remaining_items = [item for item in feedback_items if str(item.get("id")) != feedback_id]
+    if len(remaining_items) == len(feedback_items):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback not found")
+
+    result_json["user_feedback_items"] = remaining_items
+    record.result_json = result_json
+    await db.commit()
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

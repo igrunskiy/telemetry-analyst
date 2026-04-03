@@ -33,6 +33,8 @@ THROTTLE_LOOKAHEAD_M = 100.0    # look this far after corner end for throttle pi
 THROTTLE_GAP_THRESHOLD_M = 15.0 # flag if user picks up throttle ≥15 m later than reference
 EXIT_WINDOW_M = 30.0            # ±30 m around corner end for exit speed check
 MIN_STRAIGHT_M = 80.0           # minimum straight length (m) to analyse
+BRAKE_ONSET_THRESHOLD = 0.01    # treat 1% pedal application as meaningful onset
+THROTTLE_ONSET_THRESHOLD = 0.01 # treat 1% pedal application as meaningful pickup
 
 
 def _severity(delta: float, low: float, high: float) -> str:
@@ -143,8 +145,20 @@ def detect_weak_zones(processed: dict) -> list[dict]:
         r_brakes = _get_slice(ref_brake, dist_grid, brake_zone_start, d_start)
 
         if u_brakes and r_brakes:
-            u_brake_onset = _find_onset_dist(user_brake, dist_grid, brake_zone_start, d_apex, threshold=0.05)
-            r_brake_onset = _find_onset_dist(ref_brake, dist_grid, brake_zone_start, d_apex, threshold=0.05)
+            u_brake_onset = _find_onset_dist(
+                user_brake,
+                dist_grid,
+                brake_zone_start,
+                d_apex,
+                threshold=BRAKE_ONSET_THRESHOLD,
+            )
+            r_brake_onset = _find_onset_dist(
+                ref_brake,
+                dist_grid,
+                brake_zone_start,
+                d_apex,
+                threshold=BRAKE_ONSET_THRESHOLD,
+            )
 
             if u_brake_onset is not None and r_brake_onset is not None:
                 # Negative = user brakes earlier (smaller dist = earlier braking)
@@ -168,10 +182,18 @@ def detect_weak_zones(processed: dict) -> list[dict]:
         # 3. Throttle pickup — check if user gets on throttle later post-apex
         throttle_zone_end = d_end + THROTTLE_LOOKAHEAD_M
         u_throttle_onset = _find_onset_dist(
-            user_throttle, dist_grid, d_apex, throttle_zone_end, threshold=0.1
+            user_throttle,
+            dist_grid,
+            d_apex,
+            throttle_zone_end,
+            threshold=THROTTLE_ONSET_THRESHOLD,
         )
         r_throttle_onset = _find_onset_dist(
-            ref_throttle, dist_grid, d_apex, throttle_zone_end, threshold=0.1
+            ref_throttle,
+            dist_grid,
+            d_apex,
+            throttle_zone_end,
+            threshold=THROTTLE_ONSET_THRESHOLD,
         )
 
         if u_throttle_onset is not None and r_throttle_onset is not None:
@@ -275,7 +297,7 @@ def _find_onset_dist(
     dist_grid: list[float],
     d_start: float,
     d_end: float,
-    threshold: float = 0.05,
+    threshold: float = 0.01,
 ) -> float | None:
     """
     Find the first LapDistPct value within [d_start, d_end] where `series`

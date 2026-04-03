@@ -157,9 +157,11 @@ interface SingleChartProps {
   isStep?: boolean
   height?: number
   onHoverIndex?: (idx: number | null) => void
+  hoverIndex?: number | null
   xRange?: [number, number] | null
   onRangeChange?: (range: [number, number] | null) => void
   deltaMode?: 'ahead' | 'lost'
+  valueScale?: number
 }
 
 export function SingleChart({
@@ -173,107 +175,75 @@ export function SingleChart({
   isStep = false,
   height = 180,
   onHoverIndex,
+  hoverIndex,
   xRange,
   onRangeChange,
   deltaMode = 'ahead',
+  valueScale = 1,
 }: SingleChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const panState = useRef<{ startX: number; startRange: [number, number]; ppu: number } | null>(null)
-  const rafRef = useRef<number | null>(null)
 
-  const fullRange: [number, number] = distances.length > 0
-    ? [distances[0], distances[distances.length - 1]]
-    : [0, 1]
+  const fullRange: [number, number] = useMemo(() => {
+    if (distances.length === 0) return [0, 1]
+    const min = distances[0]
+    const max = distances[distances.length - 1]
+    const span = Math.max(max - min, 1)
+    const pad = Math.max(10, span * 0.02)
+    return [Math.max(0, min - pad), max + pad]
+  }, [distances])
   const fullRangeRef = useRef(fullRange)
   useEffect(() => { fullRangeRef.current = fullRange }, [fullRange[0], fullRange[1]])
-
-  // Right-click drag → pan
-  useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
-
-    type PlotlyDiv = HTMLElement & { _fullLayout?: { xaxis: { range: number[]; _length: number } } }
-    const getPlotDiv = (): PlotlyDiv | null => container.querySelector('.js-plotly-plot')
-
-    const onMouseDown = (e: MouseEvent) => {
-      if (e.button !== 2) return
-      e.preventDefault()
-      e.stopPropagation() // prevent Plotly from handling right-click
-      const pd = getPlotDiv()
-      if (!pd?._fullLayout?.xaxis) return
-      const xa = pd._fullLayout.xaxis
-      panState.current = {
-        startX: e.clientX,
-        startRange: [xa.range[0], xa.range[1]],
-        ppu: xa._length / (xa.range[1] - xa.range[0]),
-      }
-    }
-
-    const onMouseMove = (e: MouseEvent) => {
-      const ps = panState.current
-      if (!ps) return
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
-      rafRef.current = requestAnimationFrame(() => {
-        const deltaData = -(e.clientX - ps.startX) / ps.ppu
-        const span = ps.startRange[1] - ps.startRange[0]
-        const [flo, fhi] = fullRangeRef.current
-        let lo = ps.startRange[0] + deltaData
-        let hi = ps.startRange[1] + deltaData
-        if (lo < flo) { lo = flo; hi = lo + span }
-        if (hi > fhi) { hi = fhi; lo = hi - span }
-        onRangeChange?.([lo, hi])
-      })
-    }
-
-    const onMouseUp = (e: MouseEvent) => {
-      if (e.button === 2) panState.current = null
-    }
-
-    const onContextMenu = (e: Event) => e.preventDefault()
-
-    // Capture phase so we run before Plotly's internal handlers
-    container.addEventListener('mousedown', onMouseDown, true)
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onMouseUp)
-    container.addEventListener('contextmenu', onContextMenu, true)
-
-    return () => {
-      container.removeEventListener('mousedown', onMouseDown, true)
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onMouseUp)
-      container.removeEventListener('contextmenu', onContextMenu, true)
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
-    }
-  }, [onRangeChange])
   // When isDelta the displayed values are converted to seconds. "ahead" flips the
   // backend sign so positive means user ahead; "lost" preserves backend sign so
   // positive means user behind / time lost.
+  const scaledUserValues = useMemo(
+    () => userValues.map((value) => value * valueScale),
+    [userValues, valueScale],
+  )
+  const scaledRefValues = useMemo(
+    () => refValues?.map((value) => value * valueScale),
+    [refValues, valueScale],
+  )
   const displayValues = isDelta
     ? userValues.map((v) => (deltaMode === 'ahead' ? -v : v) / 1000)
-    : userValues
+    : scaledUserValues
   const yMin = useMemo(
     () =>
       Math.min(
         ...displayValues,
-        ...(refValues ?? []),
+        ...(scaledRefValues ?? []),
         isDelta ? -0.05 : 0,
       ),
-    [displayValues, refValues, isDelta],
+    [displayValues, scaledRefValues, isDelta],
   )
   const yMax = useMemo(
     () =>
       Math.max(
         ...displayValues,
-        ...(refValues ?? []),
+        ...(scaledRefValues ?? []),
         isDelta ? 0.05 : 1,
       ),
-    [displayValues, refValues, isDelta],
+    [displayValues, scaledRefValues, isDelta],
   )
 
   const shapes = useMemo(
     () => cornerShapes(corners, yMin, yMax),
     [corners, yMin, yMax],
   )
+
+  const hoverLineShape = useMemo(() => {
+    if (hoverIndex == null || hoverIndex < 0 || hoverIndex >= distances.length) return []
+    const x = distances[hoverIndex]
+    if (!Number.isFinite(x)) return []
+    return [{
+      type: 'line' as const,
+      x0: x,
+      x1: x,
+      y0: yMin,
+      y1: yMax,
+      line: { color: 'rgba(226,232,240,0.65)', width: 1 },
+    }]
+  }, [hoverIndex, distances, yMin, yMax])
 
   const annotations = useMemo(
     () => cornerAnnotations(corners, yMin),
@@ -337,19 +307,19 @@ export function SingleChart({
         type: 'scatter',
         mode: 'lines',
         x: distances,
-        y: userValues,
+        y: scaledUserValues,
         name: 'You',
         line: { color: USER_COLOR, width: 1.5, shape: isStep ? 'hv' : 'linear' },
         hovertemplate: isStep ? `%{y:.0f}<extra>You</extra>` : `%{y:.1f}<extra>You</extra>`,
       },
     ]
 
-    if (refValues) {
+    if (scaledRefValues) {
       result.push({
         type: 'scatter',
         mode: 'lines',
         x: distances,
-        y: refValues,
+        y: scaledRefValues,
         name: 'Reference',
         line: { color: REF_COLOR, width: 1.5, shape: isStep ? 'hv' : 'linear' },
         hovertemplate: isStep ? `%{y:.0f}<extra>Reference</extra>` : `%{y:.1f}<extra>Reference</extra>`,
@@ -357,7 +327,7 @@ export function SingleChart({
     }
 
     return result
-  }, [distances, userValues, refValues, isDelta, isStep, deltaMode])
+  }, [distances, userValues, scaledUserValues, scaledRefValues, isDelta, isStep, deltaMode])
 
   return (
     <div ref={containerRef}>
@@ -410,7 +380,7 @@ export function SingleChart({
             tickfont: DARK.tickfont,
             range: [yMin, yMax],
           },
-          shapes,
+          shapes: [...shapes, ...hoverLineShape],
           annotations,
           showlegend: false,
           hovermode: 'x unified',
@@ -457,6 +427,7 @@ export default function TelemetryChart({
     : [0, 1]
 
   const [controlledRange, setControlledRange] = useState<[number, number] | null>(xRange ?? null)
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
 
   // Sync with external xRange (sector filter) changes
   useEffect(() => {
@@ -508,7 +479,11 @@ export default function TelemetryChart({
   const sharedProps = {
     distances,
     corners,
-    onHoverIndex,
+    onHoverIndex: (idx: number | null) => {
+      setHoveredIndex(idx)
+      onHoverIndex?.(idx)
+    },
+    hoverIndex: hoveredIndex,
     xRange: controlledRange,
     onRangeChange: handleRangeChange,
   }
@@ -519,7 +494,7 @@ export default function TelemetryChart({
         <div>
           <h3 className="text-white font-medium text-sm">Telemetry Traces</h3>
           <p className="text-slate-500 text-xs mt-0.5">
-            Left-drag to zoom · right-drag to pan · scroll to zoom · double-click to reset
+            Left-drag to zoom · scroll to zoom · double-click to reset
           </p>
         </div>
         <div className="flex items-center gap-0.5">
@@ -552,7 +527,7 @@ export default function TelemetryChart({
         yLabel="km/h"
         userValues={userSpeed}
         refValues={refSpeed}
-        height={198}
+        height={180}
         {...sharedProps}
       />
 
@@ -561,7 +536,8 @@ export default function TelemetryChart({
         yLabel="%"
         userValues={userThrottle}
         refValues={refThrottle}
-        height={165}
+        height={150}
+        valueScale={100}
         {...sharedProps}
       />
 
@@ -570,7 +546,8 @@ export default function TelemetryChart({
         yLabel="%"
         userValues={userBrake}
         refValues={refBrake}
-        height={165}
+        height={150}
+        valueScale={100}
         {...sharedProps}
       />
 
@@ -581,7 +558,7 @@ export default function TelemetryChart({
           userValues={cleanedUserGear}
           refValues={cleanedRefGear.length > 0 ? cleanedRefGear : undefined}
           isStep
-          height={132}
+          height={120}
           {...sharedProps}
         />
       )}
@@ -592,17 +569,7 @@ export default function TelemetryChart({
         userValues={deltaMs}
         isDelta
         deltaMode="ahead"
-        height={165}
-        {...sharedProps}
-      />
-
-      <SingleChart
-        title="Time Lost (+ = you behind)"
-        yLabel="s"
-        userValues={deltaMs}
-        isDelta
-        deltaMode="lost"
-        height={165}
+        height={150}
         {...sharedProps}
       />
     </div>

@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.worker import get_active_job_count
@@ -111,6 +111,22 @@ class AnalysisHistoryItemResponse(BaseModel):
     prompt_version: str | None = None
 
 
+class AnalysisVersionSummaryResponse(BaseModel):
+    id: str
+    version_number: int
+    created_at: datetime
+    status: str
+    is_default_version: bool
+    llm_provider: str | None = None
+    model_name: str | None = None
+    prompt_version: str | None = None
+
+
+class ReportFeedbackRequest(BaseModel):
+    selected_text: str
+    comment: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -130,6 +146,9 @@ def _enqueued_response(record: AnalysisResult) -> dict[str, Any]:
         "analysis_mode": (record.input_json or {}).get("analysis_mode", "vs_reference"),
         "llm_provider": input_data.get("llm_provider"),
         "prompt_version": input_data.get("prompt_version"),
+        "version_group_id": str(record.version_group_id or record.id),
+        "version_number": record.version_number,
+        "is_default_version": record.is_default_version,
     }
 
 
@@ -137,10 +156,14 @@ def _completed_response(record: AnalysisResult) -> dict[str, Any]:
     enriched = dict(record.result_json or {})
     input_data = record.input_json or {}
     enriched["id"] = str(record.id)
+    enriched["user_id"] = str(record.user_id)
     enriched["status"] = record.status
     enriched["created_at"] = record.created_at.isoformat()
     enriched["enqueued_at"] = record.enqueued_at.isoformat() if record.enqueued_at else None
     enriched["share_token"] = record.share_token
+    enriched["version_group_id"] = str(record.version_group_id or record.id)
+    enriched["version_number"] = record.version_number
+    enriched["is_default_version"] = record.is_default_version
     if not enriched.get("prompt_version"):
         enriched["prompt_version"] = input_data.get("prompt_version")
     return enriched
@@ -160,6 +183,9 @@ def _failed_response(record: AnalysisResult) -> dict[str, Any]:
         "enqueued_at": record.enqueued_at.isoformat() if record.enqueued_at else None,
         "llm_provider": input_data.get("llm_provider"),
         "prompt_version": input_data.get("prompt_version"),
+        "version_group_id": str(record.version_group_id or record.id),
+        "version_number": record.version_number,
+        "is_default_version": record.is_default_version,
     }
 
 
@@ -169,6 +195,59 @@ def _record_response(record: AnalysisResult) -> dict[str, Any]:
     if record.status == "failed":
         return _failed_response(record)
     return _enqueued_response(record)
+
+
+def _version_group_id_for(record: AnalysisResult) -> uuid.UUID:
+    return record.version_group_id or record.id
+
+
+def _version_summary(record: AnalysisResult) -> dict[str, Any]:
+    result_data = record.result_json or {}
+    input_data = record.input_json or {}
+    return {
+        "id": str(record.id),
+        "version_number": record.version_number,
+        "created_at": record.created_at.isoformat(),
+        "status": record.status,
+        "is_default_version": record.is_default_version,
+        "llm_provider": input_data.get("llm_provider") or result_data.get("llm_provider"),
+        "model_name": result_data.get("model_name"),
+        "prompt_version": result_data.get("prompt_version") or input_data.get("prompt_version"),
+    }
+
+
+async def _attach_version_history(payload: dict[str, Any], record: AnalysisResult, db: AsyncSession) -> dict[str, Any]:
+    group_id = _version_group_id_for(record)
+    version_result = await db.execute(
+        select(AnalysisResult)
+        .where(AnalysisResult.version_group_id == group_id)
+        .order_by(AnalysisResult.version_number.desc(), AnalysisResult.created_at.desc())
+    )
+    versions = version_result.scalars().all()
+    payload["version_group_id"] = str(group_id)
+    payload["version_number"] = record.version_number
+    payload["is_default_version"] = record.is_default_version
+    payload["available_versions"] = [_version_summary(item) for item in versions]
+    return payload
+
+
+async def _clone_analysis_telemetry_files(
+    *,
+    source_analysis_id: uuid.UUID,
+    target_analysis_id: uuid.UUID,
+    db: AsyncSession,
+) -> None:
+    source_result = await db.execute(
+        select(AnalysisTelemetryFile).where(AnalysisTelemetryFile.analysis_result_id == source_analysis_id)
+    )
+    for row in source_result.scalars().all():
+        db.add(AnalysisTelemetryFile(
+            analysis_result_id=target_analysis_id,
+            lap_id=row.lap_id,
+            file_name=row.file_name,
+            compression=row.compression,
+            csv_blob=row.csv_blob,
+        ))
 
 
 @router.get("/{analysis_id}/telemetry/{lap_id}")
@@ -207,6 +286,94 @@ async def download_analysis_telemetry(
         "Content-Disposition": f'attachment; filename="{telemetry_file.file_name}"'
     }
     return Response(content=csv_text, media_type="text/csv; charset=utf-8", headers=headers)
+
+
+@router.post("/{analysis_id}/feedback", status_code=status.HTTP_201_CREATED)
+async def submit_analysis_feedback(
+    analysis_id: str,
+    body: ReportFeedbackRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        uid = uuid.UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID format")
+
+    query = select(AnalysisResult).where(AnalysisResult.id == uid)
+    if current_user.role != "admin":
+        query = query.where(AnalysisResult.user_id == current_user.id)
+
+    result = await db.execute(query)
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not found")
+
+    selected_text = body.selected_text.strip()
+    comment = body.comment.strip()
+    if not selected_text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected text is required")
+    if len(selected_text) > 4000:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected text is too long")
+    if len(comment) > 4000:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Comment is too long")
+
+    result_json = dict(record.result_json or {})
+    feedback_items = list(result_json.get("user_feedback_items") or [])
+    feedback = {
+        "id": str(uuid.uuid4()),
+        "analysis_id": str(record.id),
+        "version_number": record.version_number,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "user_id": str(current_user.id),
+        "user_display_name": current_user.display_name,
+        "selected_text": selected_text,
+        "comment": comment,
+        "reviewed_at": None,
+    }
+    feedback_items.append(feedback)
+    result_json["user_feedback_items"] = feedback_items
+    record.result_json = result_json
+    await db.commit()
+    return {"feedback": feedback}
+
+
+@router.delete("/{analysis_id}/feedback/{feedback_id}", status_code=status.HTTP_200_OK)
+async def delete_analysis_feedback(
+    analysis_id: str,
+    feedback_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        uid = uuid.UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID format")
+
+    query = select(AnalysisResult).where(AnalysisResult.id == uid)
+    if current_user.role != "admin":
+        query = query.where(AnalysisResult.user_id == current_user.id)
+
+    result = await db.execute(query)
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not found")
+
+    result_json = dict(record.result_json or {})
+    feedback_items = list(result_json.get("user_feedback_items") or [])
+    target_item = next((item for item in feedback_items if str(item.get("id")) == feedback_id), None)
+    if target_item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback not found")
+
+    if current_user.role != "admin" and str(target_item.get("user_id")) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to delete this feedback")
+
+    result_json["user_feedback_items"] = [
+        item for item in feedback_items if str(item.get("id")) != feedback_id
+    ]
+    record.result_json = result_json
+    await db.commit()
+    return {"ok": True}
 
 def _resolve_uploaded_context(body: RunAnalysisRequest) -> tuple[str, str, list[dict[str, Any]] | None]:
     uploaded = [_normalize_lap_meta_dict(item.model_dump()) for item in (body.uploaded_telemetry or [])]
@@ -371,6 +538,8 @@ async def run_analysis(
     )
     db.add(record)
     await db.flush()
+    if record.version_group_id is None:
+        record.version_group_id = record.id
     await db.refresh(record)
 
     return _enqueued_response(record)
@@ -469,27 +638,61 @@ async def regenerate_analysis(
         status_code = status.HTTP_429_TOO_MANY_REQUESTS if "quota" in detail.lower() else status.HTTP_403_FORBIDDEN
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
-    # Preserve input_json (analysis_mode + laps_metadata); backfill from result_json for old records
     existing_rj = record.result_json or {}
-    if not record.input_json:
-        record.input_json = {
+    base_input = dict(record.input_json or {})
+    if not base_input:
+        base_input = {
             "analysis_mode": existing_rj.get("analysis_mode", "vs_reference"),
             "laps_metadata": existing_rj.get("laps_metadata"),
         }
-    record.input_json = {
-        **(record.input_json or {}),
+    base_input = {
+        **base_input,
         "llm_provider": llm_provider,
         "llm_key_source": provider_access["key_source"],
         "used_shared_provider": provider_access["key_source"] == "shared",
+        "source_analysis_id": str(record.id),
     }
 
-    record.status = "enqueued"
-    record.result_json = {}
-    record.error_message = None
-    record.enqueued_at = datetime.now(timezone.utc)
+    group_id = _version_group_id_for(record)
+    next_version_result = await db.execute(
+        select(func.max(AnalysisResult.version_number)).where(AnalysisResult.version_group_id == group_id)
+    )
+    next_version_number = int(next_version_result.scalar() or 0) + 1
+
+    await db.execute(
+        update(AnalysisResult)
+        .where(AnalysisResult.version_group_id == group_id)
+        .values(is_default_version=False)
+    )
+
+    now = datetime.now(timezone.utc)
+    new_record = AnalysisResult(
+        user_id=record.user_id,
+        lap_id=record.lap_id,
+        reference_lap_ids=record.reference_lap_ids or [],
+        car_id=record.car_id,
+        track_id=record.track_id,
+        car_name=record.car_name,
+        track_name=record.track_name,
+        result_json={},
+        status="enqueued",
+        input_json=base_input,
+        created_at=now,
+        enqueued_at=now,
+        version_group_id=group_id,
+        version_number=next_version_number,
+        is_default_version=True,
+    )
+    db.add(new_record)
+    await db.flush()
+    await _clone_analysis_telemetry_files(
+        source_analysis_id=record.id,
+        target_analysis_id=new_record.id,
+        db=db,
+    )
     await db.flush()
 
-    return _enqueued_response(record)
+    return _enqueued_response(new_record)
 
 
 @router.get("/history", response_model=list[AnalysisHistoryItemResponse])
@@ -615,7 +818,55 @@ async def get_analysis(
             detail="Analysis not found",
         )
 
-    return _record_response(record)
+    if current_user.role != "admin" and record.version_group_id and record.id == record.version_group_id:
+        default_result = await db.execute(
+            select(AnalysisResult)
+            .where(
+                AnalysisResult.version_group_id == record.version_group_id,
+                AnalysisResult.is_default_version == True,
+            )
+            .order_by(AnalysisResult.version_number.desc())
+            .limit(1)
+        )
+        record = default_result.scalar_one_or_none() or record
+
+    payload = _record_response(record)
+    if current_user.role == "admin":
+        payload = await _attach_version_history(payload, record, db)
+    return payload
+
+
+@router.post("/{analysis_id}/set-default")
+async def set_default_analysis_version(
+    analysis_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    try:
+        uid = uuid.UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid analysis ID format")
+
+    result = await db.execute(select(AnalysisResult).where(AnalysisResult.id == uid))
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not found")
+
+    group_id = _version_group_id_for(record)
+    await db.execute(
+        update(AnalysisResult)
+        .where(AnalysisResult.version_group_id == group_id)
+        .values(is_default_version=False)
+    )
+    record.is_default_version = True
+    await db.flush()
+
+    payload = _record_response(record)
+    payload = await _attach_version_history(payload, record, db)
+    return payload
 
 
 @router.post("/{analysis_id}/share")

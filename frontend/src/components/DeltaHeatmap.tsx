@@ -8,6 +8,8 @@ interface DeltaHeatmapProps {
   corners: Corner[]
   isSolo: boolean
   xRange?: [number, number] | null
+  hoverIndex?: number | null
+  onHoverIndex?: (idx: number | null) => void
 }
 
 const PAPER_BG = '#0f172a'
@@ -22,7 +24,15 @@ function downsample<T>(arr: T[], maxPts: number): T[] {
   return Array.from({ length: maxPts }, (_, i) => arr[Math.round(i * step)])
 }
 
-export default function DeltaHeatmap({ distances, delta_ms, corners, isSolo, xRange }: DeltaHeatmapProps) {
+export default function DeltaHeatmap({
+  distances,
+  delta_ms,
+  corners,
+  isSolo,
+  xRange,
+  hoverIndex,
+  onHoverIndex,
+}: DeltaHeatmapProps) {
   const { posY, negY, rateValues, rateDist, maxAbsDelta } = useMemo(() => {
     if (!distances.length || !delta_ms.length) {
       return { posY: [], negY: [], rateValues: [], rateDist: [], maxAbsDelta: 1 }
@@ -141,13 +151,30 @@ export default function DeltaHeatmap({ distances, delta_ms, corners, isSolo, xRa
             xgap: 0,
             ygap: 0,
           },
+          ...(hoverIndex != null && hoverIndex >= 0 && hoverIndex < distances.length
+            ? [{
+                type: 'scatter' as const,
+                x: [distances[hoverIndex]],
+                y: [delta_ms[hoverIndex]],
+                mode: 'markers',
+                marker: {
+                  size: 9,
+                  color: '#fbbf24',
+                  line: { width: 2, color: '#0f172a' },
+                },
+                name: 'Hover',
+                showlegend: false,
+                hoverinfo: 'skip' as const,
+                yaxis: 'y',
+              }]
+            : []),
         ]}
         layout={{
           paper_bgcolor: PAPER_BG,
           plot_bgcolor: PLOT_BG,
-          height: 300,
+          height: 196,
           autosize: true,
-          margin: { t: 28, r: 16, b: 32, l: 52 },
+          margin: { t: 18, r: 10, b: 20, l: 42 },
           showlegend: false,
           hovermode: 'x unified',
           xaxis: {
@@ -158,7 +185,7 @@ export default function DeltaHeatmap({ distances, delta_ms, corners, isSolo, xRa
             title: { text: 'Distance (m)', font: { color: '#64748b', size: 10 } },
           },
           yaxis: {
-            domain: [0.26, 1],
+            domain: [0.34, 1],
             showgrid: true,
             gridcolor: GRID_COLOR,
             zeroline: true,
@@ -170,7 +197,7 @@ export default function DeltaHeatmap({ distances, delta_ms, corners, isSolo, xRa
             title: { text: 'gap (ms)', font: { color: '#94a3b8', size: 10 } },
           },
           yaxis2: {
-            domain: [0.04, 0.16],
+            domain: [0.11, 0.19],
             showgrid: false,
             showticklabels: false,
             zeroline: false,
@@ -201,7 +228,7 @@ export default function DeltaHeatmap({ distances, delta_ms, corners, isSolo, xRa
               yref: 'paper',
               text: `Delta Time vs ${refLabel} &nbsp;(+ = you ahead)`,
               showarrow: false,
-              font: { color: '#94a3b8', size: 11 },
+              font: { color: '#94a3b8', size: 9 },
               xanchor: 'center',
               yanchor: 'bottom',
             },
@@ -218,6 +245,11 @@ export default function DeltaHeatmap({ distances, delta_ms, corners, isSolo, xRa
             },
           ],
         }}
+        onHover={(e) => {
+          const pointIndex = e.points.find((point) => typeof point.pointIndex === 'number')?.pointIndex
+          onHoverIndex?.(typeof pointIndex === 'number' ? pointIndex : null)
+        }}
+        onUnhover={() => onHoverIndex?.(null)}
         config={{ displayModeBar: false, responsive: true }}
         style={{ width: '100%' }}
         useResizeHandler

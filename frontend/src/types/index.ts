@@ -28,6 +28,27 @@ export interface User {
   llm_access: LlmAccessState
 }
 
+export interface ReportFeedback {
+  id: string
+  analysis_id: string
+  version_number?: number
+  created_at: string
+  user_id: string
+  user_display_name?: string | null
+  selected_text: string
+  comment: string
+  reviewed_at?: string | null
+  report_user_display_name?: string
+  car_name?: string
+  track_name?: string
+  analysis_mode?: string
+}
+
+export interface AdminReportFeedbackInbox {
+  unread_count: number
+  items: ReportFeedback[]
+}
+
 export interface AdminUser {
   id: string
   display_name: string
@@ -78,22 +99,18 @@ export interface Lap {
   conditions?: LapConditions | null
 }
 
-export interface RecentActivityEntry {
-  date: string
-  lap_count?: number
-  source: 'garage61' | 'upload'
-}
-
 export interface RecentActivity {
   id: string
+  date: string
   car_name: string
   track_name: string
   car_id?: string | number
   track_id?: string | number
   recorded_at: string
-  lap_count?: number
-  source?: 'garage61' | 'upload' | 'mixed'
-  entries: RecentActivityEntry[]
+  lap_count: number
+  best_lap_time: number
+  laps: Lap[]
+  source?: 'garage61' | 'upload'
 }
 
 export interface Session {
@@ -249,6 +266,11 @@ export interface Garage61DictionaryEntry {
 
 export interface AnalysisReport {
   id: string
+  user_id?: string
+  version_group_id?: string
+  version_number?: number
+  is_default_version?: boolean
+  available_versions?: AnalysisVersionSummary[]
   lap_id: string
   reference_lap_ids: string[]
   car_name: string
@@ -271,6 +293,8 @@ export interface AnalysisReport {
   sector_scores?: { sector: number; driving_scores: DrivingScores }[]
   generation_time_s?: number
   laps_metadata?: LapMeta[]
+  admin_retrospectives?: AdminRetrospective[]
+  user_feedback_items?: ReportFeedback[]
   share_token?: string | null
   telemetry: {
     distances: number[]
@@ -292,6 +316,17 @@ export interface AnalysisReport {
   }
 }
 
+export interface AnalysisVersionSummary {
+  id: string
+  version_number: number
+  created_at: string
+  status: 'enqueued' | 'processing' | 'completed' | 'failed'
+  is_default_version: boolean
+  llm_provider?: 'claude' | 'gemini' | string
+  model_name?: string
+  prompt_version?: string
+}
+
 export interface AdminReport {
   id: string
   user_id: string
@@ -305,8 +340,31 @@ export interface AdminReport {
   model_name?: string
   prompt_version?: string
   created_at: string
+  original_created_at: string
+  latest_regenerated_at: string
+  version_group_id: string
   enqueued_at?: string | null
   error_message?: string | null
+  latest_retrospective?: AdminRetrospective | null
+}
+
+export interface AdminRetrospective {
+  created_at: string
+  analysis_id?: string
+  version_number?: number
+  feedback_text: string
+  focus_areas: string
+  summary?: string
+  root_causes?: string[]
+  feedback_alignment?: string[]
+  suggested_prompt_patch?: string
+  _meta?: {
+    llm_provider?: string
+    model_name?: string
+    prompt_version?: string
+    request_payload_bytes?: number
+    response_bytes?: number
+  }
 }
 
 export interface DbHealth {
