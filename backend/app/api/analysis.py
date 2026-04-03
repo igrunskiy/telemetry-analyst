@@ -665,6 +665,8 @@ async def regenerate_analysis(
         "used_shared_provider": provider_access["key_source"] == "shared",
         "source_analysis_id": str(record.id),
     }
+    if has_staff_access(current_user.role) and str(record.user_id) != str(current_user.id) and current_user.access_token_enc:
+        base_input["fallback_garage61_user_id"] = str(current_user.id)
 
     group_id = _version_group_id_for(record)
     next_version_result = await db.execute(

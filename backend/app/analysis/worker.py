@@ -315,6 +315,18 @@ async def _process_job(job_id: uuid.UUID) -> None:
             llm_provider = input_data.get("llm_provider", "claude")
             prompt_version = input_data.get("prompt_version")
             uploaded_telemetry = input_data.get("uploaded_telemetry")
+            fallback_garage61_user = None
+            fallback_garage61_user_id = input_data.get("fallback_garage61_user_id")
+            if fallback_garage61_user_id:
+                try:
+                    fallback_uuid = uuid.UUID(str(fallback_garage61_user_id))
+                except ValueError:
+                    fallback_uuid = None
+                if fallback_uuid is not None:
+                    fallback_user_result = await db.execute(
+                        select(User).where(User.id == fallback_uuid)
+                    )
+                    fallback_garage61_user = fallback_user_result.scalar_one_or_none()
 
             result_json = await execute_analysis(
                 analysis_id=job.id,
@@ -328,6 +340,7 @@ async def _process_job(job_id: uuid.UUID) -> None:
                 prompt_version=prompt_version,
                 uploaded_telemetry=uploaded_telemetry,
                 user=user,
+                fallback_garage61_user=fallback_garage61_user,
                 db=db,
             )
 

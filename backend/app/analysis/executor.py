@@ -138,6 +138,7 @@ async def execute_analysis(
     prompt_version: str | None = None,
     uploaded_telemetry: list[dict[str, Any]] | None = None,
     user: User,
+    fallback_garage61_user: User | None = None,
     db,
 ) -> dict[str, Any]:
     """
@@ -176,6 +177,7 @@ async def execute_analysis(
                     user=user,
                     db=db,
                     uploaded_telemetry=uploaded_telemetry,
+                    fallback_garage61_user=fallback_garage61_user,
                 )
                 for lid in missing_lap_ids
             ],
