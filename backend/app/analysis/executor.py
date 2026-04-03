@@ -50,6 +50,26 @@ async def _load_stored_report_csvs(
     }
 
 
+def _build_telemetry_storage_state(
+    *,
+    analysis_id,
+    all_lap_ids: list[str],
+    csv_results: list[Any],
+) -> dict[str, Any]:
+    stored_lap_ids = [
+        lap_id for lap_id, csv_value in zip(all_lap_ids, csv_results)
+        if not isinstance(csv_value, Exception) and str(csv_value or "").lstrip("\ufeff").strip()
+    ]
+    return {
+        "analysis_id": str(analysis_id),
+        "required_lap_count": len(all_lap_ids),
+        "stored_lap_count": len(stored_lap_ids),
+        "required_lap_ids": list(all_lap_ids),
+        "stored_lap_ids": stored_lap_ids,
+        "is_complete": len(stored_lap_ids) == len(all_lap_ids),
+    }
+
+
 async def _store_report_csvs(
     *,
     analysis_id,
@@ -170,6 +190,11 @@ async def execute_analysis(
         csv_results=csv_results,
         laps_metadata=laps_metadata,
         db=db,
+    )
+    telemetry_storage = _build_telemetry_storage_state(
+        analysis_id=analysis_id,
+        all_lap_ids=all_lap_ids,
+        csv_results=csv_results,
     )
 
     failed_csvs = [lid for lid, r in zip(all_lap_ids, csv_results) if isinstance(r, Exception)]
@@ -318,5 +343,6 @@ async def execute_analysis(
         "telemetry": telemetry,
         "weak_zones": weak_zones,
         "laps_metadata": laps_metadata,
+        "telemetry_storage": telemetry_storage,
         "generation_time_s": _generation_time_s,
     }

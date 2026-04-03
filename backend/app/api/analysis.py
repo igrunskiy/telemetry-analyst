@@ -120,6 +120,7 @@ class AnalysisVersionSummaryResponse(BaseModel):
     llm_provider: str | None = None
     model_name: str | None = None
     prompt_version: str | None = None
+    telemetry_storage_complete: bool | None = None
 
 
 class ReportFeedbackRequest(BaseModel):
@@ -149,6 +150,7 @@ def _enqueued_response(record: AnalysisResult) -> dict[str, Any]:
         "version_group_id": str(record.version_group_id or record.id),
         "version_number": record.version_number,
         "is_default_version": record.is_default_version,
+        "telemetry_storage": input_data.get("telemetry_storage"),
     }
 
 
@@ -171,6 +173,7 @@ def _completed_response(record: AnalysisResult) -> dict[str, Any]:
 
 def _failed_response(record: AnalysisResult) -> dict[str, Any]:
     input_data = record.input_json or {}
+    result_data = record.result_json or {}
     return {
         "id": str(record.id),
         "status": "failed",
@@ -186,6 +189,7 @@ def _failed_response(record: AnalysisResult) -> dict[str, Any]:
         "version_group_id": str(record.version_group_id or record.id),
         "version_number": record.version_number,
         "is_default_version": record.is_default_version,
+        "telemetry_storage": result_data.get("telemetry_storage") or input_data.get("telemetry_storage"),
     }
 
 
@@ -213,6 +217,11 @@ def _version_summary(record: AnalysisResult) -> dict[str, Any]:
         "llm_provider": input_data.get("llm_provider") or result_data.get("llm_provider"),
         "model_name": result_data.get("model_name"),
         "prompt_version": result_data.get("prompt_version") or input_data.get("prompt_version"),
+        "telemetry_storage_complete": (
+            (result_data.get("telemetry_storage") or input_data.get("telemetry_storage") or {}).get("is_complete")
+            if isinstance(result_data.get("telemetry_storage") or input_data.get("telemetry_storage"), dict)
+            else None
+        ),
     }
 
 
@@ -228,6 +237,10 @@ async def _attach_version_history(payload: dict[str, Any], record: AnalysisResul
     payload["version_number"] = record.version_number
     payload["is_default_version"] = record.is_default_version
     payload["available_versions"] = [_version_summary(item) for item in versions]
+    latest_valid = next((item for item in versions if item.status == "completed"), None)
+    if latest_valid is not None:
+        payload["latest_valid_version_id"] = str(latest_valid.id)
+        payload["latest_valid_version_number"] = latest_valid.version_number
     return payload
 
 

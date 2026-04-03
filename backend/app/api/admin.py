@@ -88,6 +88,9 @@ class AdminReportItem(BaseModel):
     version_group_id: str
     enqueued_at: str | None
     error_message: str | None
+    telemetry_storage_complete: bool | None = None
+    latest_valid_version_id: str | None = None
+    latest_valid_version_number: int | None = None
     latest_retrospective: dict | None = None
 
 
@@ -307,6 +310,17 @@ async def list_all_reports(
         analysis_mode = rj.get("analysis_mode") or input_data.get("analysis_mode", "vs_reference")
         retrospectives = rj.get("admin_retrospectives") or []
         latest_retrospective = retrospectives[-1] if retrospectives else None
+        telemetry_storage = rj.get("telemetry_storage") or input_data.get("telemetry_storage") or {}
+        latest_valid_result = await db.execute(
+            select(AnalysisResult)
+            .where(
+                AnalysisResult.version_group_id == (record.version_group_id or record.id),
+                AnalysisResult.status == "completed",
+            )
+            .order_by(desc(AnalysisResult.version_number), desc(AnalysisResult.created_at))
+            .limit(1)
+        )
+        latest_valid = latest_valid_result.scalar_one_or_none()
         items.append(AdminReportItem(
             id=str(record.id),
             user_id=str(record.user_id),
@@ -325,6 +339,9 @@ async def list_all_reports(
             version_group_id=str(record.version_group_id or record.id),
             enqueued_at=record.enqueued_at.isoformat() if record.enqueued_at else None,
             error_message=record.error_message,
+            telemetry_storage_complete=telemetry_storage.get("is_complete") if isinstance(telemetry_storage, dict) else None,
+            latest_valid_version_id=str(latest_valid.id) if latest_valid else None,
+            latest_valid_version_number=latest_valid.version_number if latest_valid else None,
             latest_retrospective=latest_retrospective,
         ))
     return items

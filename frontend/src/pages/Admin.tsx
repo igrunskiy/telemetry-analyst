@@ -1277,6 +1277,8 @@ function ReportRow({ r }: { r: AdminReport }) {
   const isProcessing = r.status === 'processing'
   const elapsed = useElapsed(r.enqueued_at ?? r.created_at, isProcessing)
   const latestRetrospective = r.latest_retrospective
+  const latestValidVersionId = r.latest_valid_version_id ?? null
+  const latestValidVersionNumber = r.latest_valid_version_number ?? null
 
   const isOngoing = r.status === 'enqueued' || r.status === 'processing'
 
@@ -1333,6 +1335,13 @@ function ReportRow({ r }: { r: AdminReport }) {
                     Failed
                   </span>
                 )}
+                {r.telemetry_storage_complete != null && (
+                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${
+                    r.telemetry_storage_complete ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400'
+                  }`}>
+                    {r.telemetry_storage_complete ? 'Telemetry stored' : 'Telemetry partial'}
+                  </span>
+                )}
                 <span className="text-amber-400 font-semibold text-sm truncate">{r.car_name}</span>
                 <span className="text-slate-500 text-xs">@</span>
                 <span className="text-slate-300 text-sm truncate">{r.track_name}</span>
@@ -1386,14 +1395,29 @@ function ReportRow({ r }: { r: AdminReport }) {
           <div className="border-t border-red-500/20 bg-red-950/20 px-4 py-3">
             <div className="flex items-center justify-between mb-1.5">
               <p className="text-xs text-red-400 font-semibold">Error log</p>
-              <button
-                onClick={(e) => { e.stopPropagation(); rerunMutation.mutate() }}
-                disabled={rerunMutation.isPending}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
-              >
-                <RefreshCw className={`w-3 h-3 ${rerunMutation.isPending ? 'animate-spin' : ''}`} />
-                {rerunMutation.isPending ? 'Re-running…' : 'Re-run'}
-              </button>
+              <div className="flex items-center gap-2">
+                {latestValidVersionId && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      navigate(`/report/${latestValidVersionId}`, {
+                        state: { backTo: { pathname: '/admin', state: { initialSection: 'reports' satisfies Section } } },
+                      })
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-700/60 border border-slate-600 text-slate-200 hover:bg-slate-700 transition-colors"
+                  >
+                    {latestValidVersionNumber != null ? `Open valid v${latestValidVersionNumber}` : 'Open latest valid'}
+                  </button>
+                )}
+                <button
+                  onClick={(e) => { e.stopPropagation(); rerunMutation.mutate() }}
+                  disabled={rerunMutation.isPending}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
+                >
+                  <RefreshCw className={`w-3 h-3 ${rerunMutation.isPending ? 'animate-spin' : ''}`} />
+                  {rerunMutation.isPending ? 'Re-running…' : 'Re-run'}
+                </button>
+              </div>
             </div>
             {r.error_message
               ? <pre className="text-xs text-red-300/80 font-mono whitespace-pre-wrap break-all leading-relaxed max-h-64 overflow-y-auto">{r.error_message}</pre>

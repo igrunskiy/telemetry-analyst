@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User, RefreshCw, Share2, Check, Zap, FileText, Download, Shield, Sparkles, MessageSquare, ThermometerSun, Waves, Wind } from 'lucide-react'
+import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User, RefreshCw, Share2, Check, Zap, FileText, Download, Shield, Sparkles, MessageSquare, ThermometerSun, Waves, Wind, HardDrive } from 'lucide-react'
 import { getAnalysis, deleteAnalysis, regenerateAnalysis, shareAnalysis, getSharedAnalysis, setDefaultAnalysisVersion, adminRetrospectReport, submitAnalysisFeedback, deleteAnalysisFeedback } from '../api/client'
 import TrackMap from '../components/TrackMap'
 import TelemetryChart from '../components/TelemetryChart'
@@ -850,6 +850,28 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
   const hasRetrospectives = retrospectives.length > 0
   const versionOptions = displayReport?.available_versions ?? []
   const reportPhase = getReportPhase(report?.status)
+  const telemetryStorage = displayReport?.telemetry_storage
+  const telemetryStorageState = telemetryStorage
+    ? {
+        label: 'Telemetry',
+        detail: `${telemetryStorage.stored_lap_count}/${telemetryStorage.required_lap_count}`,
+        title: telemetryStorage.is_complete
+          ? `Stored telemetry ready for rerun (${telemetryStorage.stored_lap_count}/${telemetryStorage.required_lap_count} laps)`
+          : `Stored telemetry incomplete (${telemetryStorage.stored_lap_count}/${telemetryStorage.required_lap_count} laps)`,
+        iconClass: telemetryStorage.is_complete ? 'text-emerald-400' : 'text-amber-400',
+        pillClass: telemetryStorage.is_complete
+          ? 'text-emerald-300 bg-emerald-400/10'
+          : 'text-amber-300 bg-amber-400/10',
+      }
+    : displayReport
+      ? {
+          label: 'Telemetry',
+          detail: 'unknown',
+          title: 'This report does not include telemetry storage status. It was likely created before storage tracking was added.',
+          iconClass: 'text-slate-400',
+          pillClass: 'text-slate-300 bg-slate-400/10',
+        }
+      : null
   const soloUserLap = isSolo ? displayReport?.laps_metadata?.find((l) => l.role === 'user') : undefined
   const soloTotalLaps = displayReport ? displayReport.reference_lap_ids.length + 1 : 0
   const hasGps = (displayReport?.telemetry?.user_lat?.length ?? 0) > 0
@@ -1173,6 +1195,18 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       )}
                     </span>
                   )}
+                  {isStaff && telemetryStorageState && (
+                    <span
+                      className="flex items-center gap-1.5"
+                      title={telemetryStorageState.title}
+                    >
+                      <HardDrive className={`w-3.5 h-3.5 flex-shrink-0 ${telemetryStorageState.iconClass}`} />
+                      <span className="text-slate-500">{telemetryStorageState.label}</span>
+                      <span className={`font-mono text-xs px-1.5 py-0.5 rounded ${telemetryStorageState.pillClass}`}>
+                        {telemetryStorageState.detail}
+                      </span>
+                    </span>
+                  )}
                   {renderVersionSelector()}
                   {/* Link to best lap on Garage61 */}
                   <a
@@ -1297,6 +1331,18 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                           <span className="font-mono text-xs text-fuchsia-300/90 bg-fuchsia-400/10 px-1.5 py-0.5 rounded">{formatBytes(displayReport.llm_payload_bytes)}</span>
                         </>
                       )}
+                    </span>
+                  )}
+                  {isStaff && telemetryStorageState && (
+                    <span
+                      className="flex items-center gap-1.5"
+                      title={telemetryStorageState.title}
+                    >
+                      <HardDrive className={`w-3.5 h-3.5 flex-shrink-0 ${telemetryStorageState.iconClass}`} />
+                      <span className="text-slate-500">{telemetryStorageState.label}</span>
+                      <span className={`font-mono text-xs px-1.5 py-0.5 rounded ${telemetryStorageState.pillClass}`}>
+                        {telemetryStorageState.detail}
+                      </span>
                     </span>
                   )}
                   {renderVersionSelector()}

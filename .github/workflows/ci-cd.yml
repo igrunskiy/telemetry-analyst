@@ -215,19 +215,6 @@ jobs:
           cache-from: type=gha,scope=proxy
           cache-to: type=gha,mode=max,scope=proxy
 
-  auto-merge:
-    needs: [build-backend, build-frontend, build-proxy, build-db]
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - name: Merge PR into main
-        run: gh pr merge "${{ github.event.pull_request.number }}" --squash --repo "${{ github.repository }}"
-        env:
-          GH_TOKEN: ${{ secrets.ACTIONS_PAT }}
-
   deploy:
     needs: [build-backend, build-frontend, build-proxy, build-db]
     if: |
