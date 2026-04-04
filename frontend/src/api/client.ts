@@ -132,7 +132,7 @@ export async function runAnalysis(
   trackName: string,
   analysisMode: 'vs_reference' | 'solo' = 'vs_reference',
   lapsMetadata?: LapMeta[],
-  llmProvider: 'claude' | 'gemini' = 'claude',
+  llmProvider: 'claude' | 'gemini' | 'openai' = 'claude',
   promptVersion?: string | null,
   uploadedTelemetry?: UploadedTelemetryInput[],
 ): Promise<AnalysisReport> {
@@ -213,8 +213,12 @@ export async function deleteAnalysis(id: string): Promise<void> {
   await api.delete(`/api/analysis/${id}`)
 }
 
-export async function regenerateAnalysis(id: string): Promise<AnalysisReport> {
-  const { data } = await api.post<AnalysisReport>(`/api/analysis/${id}/regenerate`)
+export async function regenerateAnalysis(
+  id: string,
+  llmProvider?: 'claude' | 'gemini' | 'openai',
+): Promise<AnalysisReport> {
+  const payload = llmProvider ? { llm_provider: llmProvider } : undefined
+  const { data } = await api.post<AnalysisReport>(`/api/analysis/${id}/regenerate`, payload)
   return data
 }
 
@@ -254,6 +258,10 @@ export async function updateClaudeKey(apiKey: string): Promise<void> {
 
 export async function updateGeminiKey(apiKey: string): Promise<void> {
   await api.put('/api/profile/gemini-key', { api_key: apiKey })
+}
+
+export async function updateOpenAiKey(apiKey: string): Promise<void> {
+  await api.put('/api/profile/openai-key', { api_key: apiKey })
 }
 
 export async function logout(): Promise<void> {

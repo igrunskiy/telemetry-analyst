@@ -29,6 +29,10 @@ class UpdateGeminiKeyRequest(BaseModel):
     api_key: str
 
 
+class UpdateOpenAiKeyRequest(BaseModel):
+    api_key: str
+
+
 class UserProfileResponse(BaseModel):
     id: str
     garage61_user_id: str
@@ -36,6 +40,7 @@ class UserProfileResponse(BaseModel):
     avatar_url: str | None
     has_custom_claude_key: bool
     has_custom_gemini_key: bool
+    has_custom_openai_key: bool
     created_at: datetime
     last_login_at: datetime
     llm_access: dict
@@ -83,6 +88,25 @@ async def update_gemini_key(
     await db.flush()
 
 
+@router.put("/openai-key", status_code=status.HTTP_204_NO_CONTENT)
+async def update_openai_key(
+    body: UpdateOpenAiKeyRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """
+    Store (or remove) the user's personal OpenAI API key.
+    Send an empty string to remove the saved key.
+    Returns 204 No Content on success.
+    """
+    if body.api_key.strip():
+        current_user.openai_api_key_enc = encrypt(body.api_key.strip())
+    else:
+        current_user.openai_api_key_enc = None
+
+    await db.flush()
+
+
 @router.get("/", response_model=UserProfileResponse)
 async def get_profile(
     current_user: User = Depends(get_current_user),
@@ -96,6 +120,7 @@ async def get_profile(
         avatar_url=current_user.avatar_url,
         has_custom_claude_key=bool(current_user.claude_api_key_enc),
         has_custom_gemini_key=bool(current_user.gemini_api_key_enc),
+        has_custom_openai_key=bool(current_user.openai_api_key_enc),
         created_at=current_user.created_at,
         last_login_at=current_user.last_login_at,
         llm_access=await build_llm_access_state(current_user, db),

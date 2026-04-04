@@ -50,6 +50,7 @@ class AdminUserItem(BaseModel):
     discord_user_id: str | None
     has_custom_claude_key: bool
     has_custom_gemini_key: bool
+    has_custom_openai_key: bool
     created_at: str
     last_login_at: str
 
@@ -160,6 +161,7 @@ async def list_users(
             discord_user_id=u.discord_user_id,
             has_custom_claude_key=bool(u.claude_api_key_enc),
             has_custom_gemini_key=bool(u.gemini_api_key_enc),
+            has_custom_openai_key=bool(u.openai_api_key_enc),
             created_at=u.created_at.isoformat(),
             last_login_at=u.last_login_at.isoformat(),
         )
@@ -238,6 +240,7 @@ async def create_user(
         discord_user_id=user.discord_user_id,
         has_custom_claude_key=bool(user.claude_api_key_enc),
         has_custom_gemini_key=bool(user.gemini_api_key_enc),
+        has_custom_openai_key=bool(user.openai_api_key_enc),
         created_at=user.created_at.isoformat(),
         last_login_at=user.last_login_at.isoformat(),
     )
@@ -539,6 +542,7 @@ class PromptCreateRequest(BaseModel):
 class PromptDefaultsRequest(BaseModel):
     claude: str
     gemini: str
+    openai: str
 
 
 @router.get("/prompts")
@@ -556,7 +560,7 @@ async def get_prompt_defaults(_admin=Depends(require_admin)):
 @router.put("/prompts/defaults")
 async def set_prompt_defaults(body: PromptDefaultsRequest, _admin=Depends(require_admin)):
     """Set the default prompt for each model."""
-    prompts_manager.set_defaults({"claude": body.claude, "gemini": body.gemini})
+    prompts_manager.set_defaults({"claude": body.claude, "gemini": body.gemini, "openai": body.openai})
     logger.info("Admin updated prompt defaults: %s", body.model_dump())
     return {"ok": True}
 

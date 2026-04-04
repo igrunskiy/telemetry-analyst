@@ -156,7 +156,7 @@ export default function DeltaHeatmap({
                 type: 'scatter' as const,
                 x: [distances[hoverIndex]],
                 y: [delta_ms[hoverIndex]],
-                mode: 'markers',
+                mode: 'markers' as const,
                 marker: {
                   size: 9,
                   color: '#fbbf24',
@@ -174,6 +174,7 @@ export default function DeltaHeatmap({
           plot_bgcolor: PLOT_BG,
           height: 196,
           autosize: true,
+          uirevision: xRange ? `${xRange[0].toFixed(1)}-${xRange[1].toFixed(1)}` : 'full',
           margin: { t: 18, r: 10, b: 20, l: 42 },
           showlegend: false,
           hovermode: 'x unified',
@@ -182,6 +183,7 @@ export default function DeltaHeatmap({
             zeroline: false,
             tickfont: TICK_FONT,
             linecolor: 'rgba(148,163,184,0.15)',
+            range: xRange ?? (distances.length > 0 ? [distances[0], distances[distances.length - 1]] : undefined),
             title: { text: 'Distance (m)', font: { color: '#64748b', size: 10 } },
           },
           yaxis: {
@@ -202,23 +204,7 @@ export default function DeltaHeatmap({
             showticklabels: false,
             zeroline: false,
           },
-          shapes: [
-            ...cornerShapes,
-            ...(xRange
-              ? [{
-                  type: 'rect' as const,
-                  x0: xRange[0],
-                  x1: xRange[1],
-                  y0: 0,
-                  y1: 1,
-                  xref: 'x' as const,
-                  yref: 'paper' as const,
-                  fillcolor: 'rgba(59,130,246,0.10)',
-                  line: { width: 1, color: 'rgba(59,130,246,0.35)' },
-                  layer: 'below' as const,
-                }]
-              : []),
-          ],
+          shapes: cornerShapes,
           annotations: [
             ...cornerAnnotations,
             {

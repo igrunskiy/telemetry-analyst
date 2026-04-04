@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from app.analysis.llm import analyze_with_claude, CLAUDE_MODEL
 from app.analysis.gemini import analyze_with_gemini, GEMINI_MODEL
+from app.analysis.openai import analyze_with_openai, OPENAI_MODEL
 from app.analysis.prompts_manager import resolve_prompt_name
 from app.analysis.processor import TelemetryProcessor
 from app.analysis.zones import detect_weak_zones
@@ -23,7 +24,7 @@ from app.models.user import User
 from app.telemetry.catalog import compress_csv, decompress_csv, load_csv_for_lap_id
 
 logger = logging.getLogger(__name__)
-_MAX_REFERENCE_LAPS = 5
+_MAX_REFERENCE_LAPS = 3
 
 
 def _guess_report_telemetry_filename(lap_id: str, meta: dict[str, Any] | None) -> str:
@@ -145,7 +146,12 @@ async def execute_analysis(
     Run the full telemetry → weak-zone → LLM pipeline and return the result dict.
     Raises ValueError or Exception on failure (caller decides how to surface errors).
     """
-    model_name = GEMINI_MODEL if llm_provider == "gemini" else CLAUDE_MODEL
+    if llm_provider == "gemini":
+        model_name = GEMINI_MODEL
+    elif llm_provider == "openai":
+        model_name = OPENAI_MODEL
+    else:
+        model_name = CLAUDE_MODEL
     effective_prompt_version = resolve_prompt_name(prompt_version, llm_provider)
     unique_reference_lap_ids: list[str] = []
     seen_lap_ids = {lap_id}
@@ -274,6 +280,18 @@ async def execute_analysis(
             prompt_version=effective_prompt_version,
             laps_metadata=laps_metadata,
         )
+    elif llm_provider == "openai":
+        openai_key = decrypt(user.openai_api_key_enc) if user.openai_api_key_enc else ""
+        llm_result = await analyze_with_openai(
+            processed=processed,
+            weak_zones=weak_zones,
+            car_name=car_name,
+            track_name=track_name,
+            openai_api_key=openai_key,
+            analysis_mode=analysis_mode,
+            prompt_version=effective_prompt_version,
+            laps_metadata=laps_metadata,
+        )
     else:
         claude_key = decrypt(user.claude_api_key_enc) if user.claude_api_key_enc else ""
         llm_result = await analyze_with_claude(
@@ -303,6 +321,18 @@ async def execute_analysis(
     ref_laps = processed.get("reference_laps", [])
     ref_lap = ref_laps[0] if ref_laps else {}
     delta = processed.get("delta", {})
+    reference_telemetry = [
+        {
+            "lap_id": unique_reference_lap_ids[index] if index < len(unique_reference_lap_ids) else None,
+            "speed": ref.get("speed", []),
+            "throttle": ref.get("throttle", []),
+            "brake": ref.get("brake", []),
+            "gear": ref.get("gear", []),
+            "lat": ref.get("lat", []),
+            "lon": ref.get("lon", []),
+        }
+        for index, ref in enumerate(ref_laps)
+    ]
 
     telemetry: dict[str, Any] = {
         "distances": user_lap.get("dist", []),
@@ -317,6 +347,7 @@ async def execute_analysis(
         "delta_ms": delta.get("time_delta_ms", []),
         "corners": processed.get("corners", []),
         "sectors": processed.get("sectors", []),
+        "reference_laps": reference_telemetry,
     }
     if "lat" in user_lap:
         telemetry["user_lat"] = user_lap["lat"]

@@ -1,5 +1,5 @@
 export interface LlmProviderAccess {
-  provider: 'claude' | 'gemini'
+  provider: 'claude' | 'gemini' | 'openai'
   label: string
   has_custom_key: boolean
   has_shared_key: boolean
@@ -14,7 +14,7 @@ export interface LlmAccessState {
   shared_reports_per_day: number
   shared_reports_used_today: number
   shared_reports_remaining_today: number
-  providers: Record<'claude' | 'gemini', LlmProviderAccess>
+  providers: Record<'claude' | 'gemini' | 'openai', LlmProviderAccess>
 }
 
 export interface User {
@@ -23,6 +23,7 @@ export interface User {
   avatar_url: string | null
   has_custom_claude_key: boolean
   has_custom_gemini_key: boolean
+  has_custom_openai_key: boolean
   has_garage61: boolean
   role: 'admin' | 'moderator' | 'user'
   llm_access: LlmAccessState
@@ -60,6 +61,7 @@ export interface AdminUser {
   discord_user_id: string | null
   has_custom_claude_key: boolean
   has_custom_gemini_key: boolean
+  has_custom_openai_key: boolean
   created_at: string
   last_login_at: string
 }
@@ -278,7 +280,7 @@ export interface AnalysisReport {
   car_name: string
   track_name: string
   analysis_mode?: 'vs_reference' | 'solo'
-  llm_provider?: 'claude' | 'gemini'
+  llm_provider?: 'claude' | 'gemini' | 'openai'
   model_name?: string
   prompt_version?: string
   llm_payload_bytes?: number
@@ -307,6 +309,15 @@ export interface AnalysisReport {
   user_feedback_items?: ReportFeedback[]
   share_token?: string | null
   telemetry: {
+    reference_laps?: {
+      lap_id?: string | null
+      speed: number[]
+      throttle: number[]
+      brake: number[]
+      gear?: number[]
+      lat?: number[]
+      lon?: number[]
+    }[]
     distances: number[]
     user_speed: number[]
     ref_speed: number[]
@@ -332,7 +343,7 @@ export interface AnalysisVersionSummary {
   created_at: string
   status: 'enqueued' | 'processing' | 'completed' | 'failed'
   is_default_version: boolean
-  llm_provider?: 'claude' | 'gemini' | string
+  llm_provider?: 'claude' | 'gemini' | 'openai' | string
   model_name?: string
   prompt_version?: string
   telemetry_storage_complete?: boolean | null
@@ -413,6 +424,7 @@ export interface PromptMeta {
 export interface PromptsDefaults {
   claude: string
   gemini: string
+  openai: string
 }
 
 export interface SharedReportLimitSettings {
@@ -429,7 +441,7 @@ export interface AnalysisHistoryItem {
   estimated_time_gain_seconds: number | null
   analysis_mode?: 'vs_reference' | 'solo'
   status?: string
-  llm_provider?: 'claude' | 'gemini'
+  llm_provider?: 'claude' | 'gemini' | 'openai'
   model_name?: string
   prompt_version?: string
 }

@@ -8,6 +8,7 @@ interface TelemetryChartProps {
   distances: number[]
   userSpeed: number[]
   refSpeed: number[]
+  referenceLaps?: ReferenceLapTrace[]
   userThrottle: number[]
   refThrottle: number[]
   userBrake: number[]
@@ -31,6 +32,15 @@ const DARK = {
 
 const USER_COLOR = '#3b82f6' // blue-500
 const REF_COLOR = '#f97316' // orange-500
+const REF_PALETTE = ['#ff6b35', '#ff3d77', '#ffd166']
+
+export interface ReferenceLapTrace {
+  label: string
+  speed: number[]
+  throttle: number[]
+  brake: number[]
+  gear?: number[]
+}
 
 function cleanGearSeries(values?: number[]): number[] {
   if (!values || values.length === 0) return []
@@ -151,7 +161,9 @@ interface SingleChartProps {
   yLabel: string
   distances: number[]
   userValues: number[]
+  showUser?: boolean
   refValues?: number[]
+  referenceSeries?: ReferenceSeries[]
   corners: Corner[]
   isDelta?: boolean
   isStep?: boolean
@@ -162,6 +174,12 @@ interface SingleChartProps {
   onRangeChange?: (range: [number, number] | null) => void
   deltaMode?: 'ahead' | 'lost'
   valueScale?: number
+  highlightedSeriesLabel?: string | null
+}
+
+interface ReferenceSeries {
+  label: string
+  values: number[]
 }
 
 export function SingleChart({
@@ -169,7 +187,9 @@ export function SingleChart({
   yLabel,
   distances,
   userValues,
+  showUser = true,
   refValues,
+  referenceSeries,
   corners,
   isDelta = false,
   isStep = false,
@@ -180,6 +200,7 @@ export function SingleChart({
   onRangeChange,
   deltaMode = 'ahead',
   valueScale = 1,
+  highlightedSeriesLabel,
 }: SingleChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -204,26 +225,42 @@ export function SingleChart({
     () => refValues?.map((value) => value * valueScale),
     [refValues, valueScale],
   )
+  const scaledReferenceSeries = useMemo(
+    () => (referenceSeries ?? [])
+      .map((series) => ({
+        label: series.label,
+        values: series.values.map((value) => value * valueScale),
+      }))
+      .filter((series) => series.values.length > 0),
+    [referenceSeries, valueScale],
+  )
+  const comparisonSeries = scaledReferenceSeries.length > 0
+    ? scaledReferenceSeries
+    : (refValues && (referenceSeries == null || referenceSeries.length === 0)
+      ? [{ label: 'Reference', values: scaledRefValues ?? [] }]
+      : [])
   const displayValues = isDelta
     ? userValues.map((v) => (deltaMode === 'ahead' ? -v : v) / 1000)
-    : scaledUserValues
+    : (showUser ? scaledUserValues : [])
+  const yCandidates = [
+    ...displayValues,
+    ...comparisonSeries.flatMap((series) => series.values),
+  ]
   const yMin = useMemo(
     () =>
       Math.min(
-        ...displayValues,
-        ...(scaledRefValues ?? []),
+        ...(yCandidates.length > 0 ? yCandidates : [0]),
         isDelta ? -0.05 : 0,
       ),
-    [displayValues, scaledRefValues, isDelta],
+    [yCandidates, isDelta],
   )
   const yMax = useMemo(
     () =>
       Math.max(
-        ...displayValues,
-        ...(scaledRefValues ?? []),
+        ...(yCandidates.length > 0 ? yCandidates : [1]),
         isDelta ? 0.05 : 1,
       ),
-    [displayValues, scaledRefValues, isDelta],
+    [yCandidates, isDelta],
   )
 
   const shapes = useMemo(
@@ -302,32 +339,48 @@ export function SingleChart({
       ]
     }
 
-    const result: Plotly.Data[] = [
-      {
+    const result: Plotly.Data[] = []
+
+    if (showUser) {
+      const isHighlighted = highlightedSeriesLabel === 'You'
+      const isDimmed = highlightedSeriesLabel != null && highlightedSeriesLabel !== 'You'
+      result.push({
         type: 'scatter',
         mode: 'lines',
         x: distances,
         y: scaledUserValues,
         name: 'You',
-        line: { color: USER_COLOR, width: 1.5, shape: isStep ? 'hv' : 'linear' },
+        line: {
+          color: USER_COLOR,
+          width: isHighlighted ? 2.8 : 1.8,
+          shape: isStep ? 'hv' : 'linear',
+        },
+        opacity: isDimmed ? 0.28 : 1,
         hovertemplate: isStep ? `%{y:.0f}<extra>You</extra>` : `%{y:.1f}<extra>You</extra>`,
-      },
-    ]
+      })
+    }
 
-    if (scaledRefValues) {
+    comparisonSeries.forEach((series, index) => {
+      const isHighlighted = highlightedSeriesLabel === series.label
+      const isDimmed = highlightedSeriesLabel != null && !isHighlighted
       result.push({
         type: 'scatter',
         mode: 'lines',
         x: distances,
-        y: scaledRefValues,
-        name: 'Reference',
-        line: { color: REF_COLOR, width: 1.5, shape: isStep ? 'hv' : 'linear' },
-        hovertemplate: isStep ? `%{y:.0f}<extra>Reference</extra>` : `%{y:.1f}<extra>Reference</extra>`,
+        y: series.values,
+        name: series.label,
+        line: {
+          color: REF_PALETTE[index % REF_PALETTE.length] ?? REF_COLOR,
+          width: isHighlighted ? 2.8 : 1.9,
+          shape: isStep ? 'hv' : 'linear',
+        },
+        opacity: isDimmed ? 0.25 : 1,
+        hovertemplate: isStep ? `%{y:.0f}<extra>${series.label}</extra>` : `%{y:.1f}<extra>${series.label}</extra>`,
       })
-    }
+    })
 
     return result
-  }, [distances, userValues, scaledUserValues, scaledRefValues, isDelta, isStep, deltaMode])
+  }, [distances, scaledUserValues, scaledRefValues, scaledReferenceSeries, comparisonSeries, isDelta, isStep, deltaMode, showUser, highlightedSeriesLabel])
 
   return (
     <div ref={containerRef}>
@@ -335,22 +388,22 @@ export function SingleChart({
         <span className="text-slate-400 text-xs font-medium">{title}</span>
         {!isDelta && (
           <div className="flex items-center gap-3 ml-auto text-xs">
-            <span className="flex items-center gap-1">
+            <span className={`flex items-center gap-1 ${showUser ? 'opacity-100' : 'opacity-40'}`}>
               <span
                 className="inline-block w-5 h-0.5 rounded"
                 style={{ backgroundColor: USER_COLOR }}
               />
               <span className="text-slate-500">You</span>
             </span>
-            {refValues && (
-              <span className="flex items-center gap-1">
+            {comparisonSeries.map((series, index) => (
+              <span key={`${series.label}-${index}`} className="flex items-center gap-1">
                 <span
                   className="inline-block w-5 h-0.5 rounded"
-                  style={{ backgroundColor: REF_COLOR }}
+                  style={{ backgroundColor: REF_PALETTE[index % REF_PALETTE.length] ?? REF_COLOR }}
                 />
-                <span className="text-slate-500">Reference</span>
+                <span className="text-slate-500">{series.label}</span>
               </span>
-            )}
+            ))}
           </div>
         )}
       </div>
@@ -409,6 +462,7 @@ export default function TelemetryChart({
   distances,
   userSpeed,
   refSpeed,
+  referenceLaps,
   userThrottle,
   refThrottle,
   userBrake,
@@ -420,8 +474,30 @@ export default function TelemetryChart({
   onHoverIndex,
   xRange,
 }: TelemetryChartProps) {
+  const [hiddenLabels, setHiddenLabels] = useState<string[]>([])
+  const [highlightedSeriesLabel, setHighlightedSeriesLabel] = useState<string | null>(null)
+  const referenceSeries = useMemo(
+    () => (referenceLaps ?? []).filter((lap) =>
+      lap.speed.length > 0 || lap.throttle.length > 0 || lap.brake.length > 0 || (lap.gear?.length ?? 0) > 0
+    ),
+    [referenceLaps],
+  )
+  useEffect(() => {
+    const availableLabels = new Set(['You', ...referenceSeries.map((lap) => lap.label)])
+    setHiddenLabels((prev) => prev.filter((label) => availableLabels.has(label)))
+    setHighlightedSeriesLabel((prev) => (prev && availableLabels.has(prev) ? prev : null))
+  }, [referenceSeries])
   const cleanedUserGear = useMemo(() => cleanGearSeries(userGear), [userGear])
   const cleanedRefGear = useMemo(() => cleanGearSeries(refGear), [refGear])
+  const gearReferenceSeries = useMemo(
+    () => referenceSeries
+      .map((lap) => ({
+        label: lap.label,
+        values: cleanGearSeries(lap.gear),
+      }))
+      .filter((lap) => lap.values.length > 0),
+    [referenceSeries],
+  )
   const fullRange: [number, number] = distances.length > 0
     ? [distances[0], distances[distances.length - 1]]
     : [0, 1]
@@ -434,34 +510,72 @@ export default function TelemetryChart({
     setControlledRange(xRange ?? null)
   }, [xRange])
 
+  const clampRange = useCallback((range: [number, number] | null): [number, number] | null => {
+    if (!range) return null
+    const [fullLo, fullHi] = fullRange
+    const requestedSpan = range[1] - range[0]
+    const fullSpan = fullHi - fullLo
+    if (!Number.isFinite(requestedSpan) || requestedSpan <= 0) return [fullLo, fullHi]
+    if (requestedSpan >= fullSpan) return [fullLo, fullHi]
+
+    let lo = Math.max(fullLo, range[0])
+    let hi = Math.min(fullHi, range[1])
+
+    if (lo <= fullLo) {
+      hi = Math.min(fullHi, fullLo + requestedSpan)
+    }
+    if (hi >= fullHi) {
+      lo = Math.max(fullLo, fullHi - requestedSpan)
+    }
+    if (hi <= lo) return [fullLo, fullHi]
+    return [lo, hi]
+  }, [fullRange])
+
   // Receives pan/scroll zoom events from any SingleChart; value-equality check breaks feedback loops
   const handleRangeChange = useCallback((range: [number, number] | null) => {
+    const nextRange = clampRange(range)
     setControlledRange((prev) => {
-      if (!prev && !range) return prev
-      if (prev && range &&
-        Math.abs(prev[0] - range[0]) < 0.5 &&
-        Math.abs(prev[1] - range[1]) < 0.5) return prev
-      return range
+      if (!prev && !nextRange) return prev
+      if (prev && nextRange &&
+        Math.abs(prev[0] - nextRange[0]) < 0.5 &&
+        Math.abs(prev[1] - nextRange[1]) < 0.5) return prev
+      return nextRange
     })
-  }, [])
+  }, [clampRange])
 
   const effectiveRange = controlledRange ?? fullRange
+  const isUserVisible = !hiddenLabels.includes('You')
+  const visibleReferenceSeries = referenceSeries.filter((lap) => !hiddenLabels.includes(lap.label))
+  const visibleGearReferenceSeries = gearReferenceSeries.filter((lap) => !hiddenLabels.includes(lap.label))
+  const legendItems = [
+    { label: 'You', color: USER_COLOR, visible: isUserVisible },
+    ...referenceSeries.map((lap, index) => ({
+      label: lap.label,
+      color: REF_PALETTE[index % REF_PALETTE.length] ?? REF_COLOR,
+      visible: !hiddenLabels.includes(lap.label),
+    })),
+  ]
+
+  const toggleSeries = useCallback((label: string) => {
+    setHiddenLabels((prev) => (
+      prev.includes(label)
+        ? prev.filter((item) => item !== label)
+        : [...prev, label]
+    ))
+  }, [])
 
   const handleZoomIn = () => {
     const [lo, hi] = effectiveRange
     const center = (lo + hi) / 2
     const halfSpan = (hi - lo) / 2 * 0.65
-    setControlledRange([center - halfSpan, center + halfSpan])
+    setControlledRange(clampRange([center - halfSpan, center + halfSpan]))
   }
 
   const handleZoomOut = () => {
     const [lo, hi] = effectiveRange
     const center = (lo + hi) / 2
     const halfSpan = (hi - lo) / 2 / 0.65
-    setControlledRange([
-      Math.max(fullRange[0], center - halfSpan),
-      Math.min(fullRange[1], center + halfSpan),
-    ])
+    setControlledRange(clampRange([center - halfSpan, center + halfSpan]))
   }
 
   const handleReset = () => {
@@ -496,6 +610,33 @@ export default function TelemetryChart({
           <p className="text-slate-500 text-xs mt-0.5">
             Left-drag to zoom · scroll to zoom · double-click to reset
           </p>
+          {legendItems.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
+              {legendItems.map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => toggleSeries(item.label)}
+                  onMouseEnter={() => item.visible && setHighlightedSeriesLabel(item.label)}
+                  onMouseLeave={() => setHighlightedSeriesLabel(null)}
+                  onFocus={() => item.visible && setHighlightedSeriesLabel(item.label)}
+                  onBlur={() => setHighlightedSeriesLabel(null)}
+                  className={`flex items-center gap-1.5 rounded-full border px-2 py-1 transition-colors ${
+                    item.visible
+                      ? 'border-slate-600 bg-slate-800/80 text-slate-300 hover:border-slate-500'
+                      : 'border-slate-800 bg-slate-900/60 text-slate-600 hover:border-slate-700'
+                  }`}
+                  title={item.visible ? `Hide ${item.label}` : `Show ${item.label}`}
+                >
+                  <span
+                    className="inline-block w-4 h-0.5 rounded"
+                    style={{ backgroundColor: item.color }}
+                  />
+                  <span className={item.visible ? '' : 'line-through'}>{item.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-0.5">
           <button
@@ -526,7 +667,10 @@ export default function TelemetryChart({
         title="Speed"
         yLabel="km/h"
         userValues={userSpeed}
+        showUser={isUserVisible}
         refValues={refSpeed}
+        referenceSeries={visibleReferenceSeries.map((lap) => ({ label: lap.label, values: lap.speed }))}
+        highlightedSeriesLabel={highlightedSeriesLabel}
         height={180}
         {...sharedProps}
       />
@@ -535,7 +679,10 @@ export default function TelemetryChart({
         title="Throttle"
         yLabel="%"
         userValues={userThrottle}
+        showUser={isUserVisible}
         refValues={refThrottle}
+        referenceSeries={visibleReferenceSeries.map((lap) => ({ label: lap.label, values: lap.throttle }))}
+        highlightedSeriesLabel={highlightedSeriesLabel}
         height={150}
         valueScale={100}
         {...sharedProps}
@@ -545,7 +692,10 @@ export default function TelemetryChart({
         title="Brake"
         yLabel="%"
         userValues={userBrake}
+        showUser={isUserVisible}
         refValues={refBrake}
+        referenceSeries={visibleReferenceSeries.map((lap) => ({ label: lap.label, values: lap.brake }))}
+        highlightedSeriesLabel={highlightedSeriesLabel}
         height={150}
         valueScale={100}
         {...sharedProps}
@@ -556,7 +706,10 @@ export default function TelemetryChart({
           title="Gear"
           yLabel="gear"
           userValues={cleanedUserGear}
+          showUser={isUserVisible}
           refValues={cleanedRefGear.length > 0 ? cleanedRefGear : undefined}
+          referenceSeries={visibleGearReferenceSeries}
+          highlightedSeriesLabel={highlightedSeriesLabel}
           isStep
           height={120}
           {...sharedProps}

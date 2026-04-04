@@ -70,6 +70,7 @@ class UserMeResponse(BaseModel):
     avatar_url: str | None
     has_custom_claude_key: bool
     has_custom_gemini_key: bool
+    has_custom_openai_key: bool
     has_garage61: bool
     role: str
     llm_access: dict
@@ -537,6 +538,7 @@ async def me(
         avatar_url=current_user.avatar_url,
         has_custom_claude_key=bool(current_user.claude_api_key_enc),
         has_custom_gemini_key=bool(current_user.gemini_api_key_enc),
+        has_custom_openai_key=bool(current_user.openai_api_key_enc),
         has_garage61=bool(current_user.access_token_enc),
         role=current_user.role,
         llm_access=await build_llm_access_state(current_user, db),
