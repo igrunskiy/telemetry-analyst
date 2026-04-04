@@ -8,10 +8,11 @@ from app.llm_access import build_llm_access_state, has_custom_llm_key, has_share
 
 
 def test_has_custom_llm_key_detects_encrypted_user_key() -> None:
-    user = SimpleNamespace(claude_api_key_enc="enc", gemini_api_key_enc=None)
+    user = SimpleNamespace(claude_api_key_enc="enc", gemini_api_key_enc=None, openai_api_key_enc=None)
 
     assert has_custom_llm_key(user, "claude") is True
     assert has_custom_llm_key(user, "gemini") is False
+    assert has_custom_llm_key(user, "openai") is False
 
 
 def test_has_shared_llm_key_detects_operator_key() -> None:
@@ -23,13 +24,24 @@ def test_has_shared_llm_key_detects_operator_key() -> None:
         settings.CLAUDE_API_KEY = original
 
 
+def test_has_shared_llm_key_detects_openai_operator_key() -> None:
+    original = settings.OPENAI_API_KEY
+    settings.OPENAI_API_KEY = "shared-openai"
+    try:
+        assert has_shared_llm_key("openai") is True
+    finally:
+        settings.OPENAI_API_KEY = original
+
+
 def test_build_llm_access_state_allows_shared_access() -> None:
     original_claude = settings.CLAUDE_API_KEY
     original_gemini = settings.GEMINI_API_KEY
+    original_openai = settings.OPENAI_API_KEY
     settings.CLAUDE_API_KEY = "shared-claude"
     settings.GEMINI_API_KEY = ""
+    settings.OPENAI_API_KEY = ""
     try:
-        user = SimpleNamespace(id=None, claude_api_key_enc=None, gemini_api_key_enc="enc")
+        user = SimpleNamespace(id=None, claude_api_key_enc=None, gemini_api_key_enc="enc", openai_api_key_enc=None)
         access = asyncio.run(build_llm_access_state(user, None))
 
         assert access["shared_reports_per_day"] >= 0
@@ -38,6 +50,9 @@ def test_build_llm_access_state_allows_shared_access() -> None:
         assert access["providers"]["claude"]["key_source"] == "shared"
         assert access["providers"]["gemini"]["can_generate"] is True
         assert access["providers"]["gemini"]["key_source"] == "custom"
+        assert access["providers"]["openai"]["can_generate"] is False
+        assert access["providers"]["openai"]["key_source"] == "none"
     finally:
         settings.CLAUDE_API_KEY = original_claude
         settings.GEMINI_API_KEY = original_gemini
+        settings.OPENAI_API_KEY = original_openai

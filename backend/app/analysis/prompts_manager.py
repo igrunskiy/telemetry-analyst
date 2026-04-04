@@ -15,7 +15,7 @@ _METADATA_FILE = _PROMPTS_DIR / "metadata.json"
 def _load_metadata() -> dict:
     if _METADATA_FILE.exists():
         return json.loads(_METADATA_FILE.read_text(encoding="utf-8"))
-    return {"defaults": {"claude": "analysis_v1", "gemini": "analysis_v1"}}
+    return {"defaults": {"claude": "analysis_v1", "gemini": "analysis_v1", "openai": "analysis_v1"}}
 
 
 def _save_metadata(meta: dict) -> None:
@@ -53,7 +53,7 @@ def delete_prompt(name: str) -> bool:
 
 
 def get_defaults() -> dict[str, str]:
-    return _load_metadata().get("defaults", {"claude": "analysis_v1", "gemini": "analysis_v1"})
+    return _load_metadata().get("defaults", {"claude": "analysis_v1", "gemini": "analysis_v1", "openai": "analysis_v1"})
 
 
 def set_defaults(defaults: dict[str, str]) -> None:

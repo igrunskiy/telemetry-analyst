@@ -362,7 +362,7 @@ export default function LapSelectorPage() {
 
   const [pageTab, setPageTab] = useState<PageTab>('analysis')
   const [uploadTab, setUploadTab] = useState<UploadTab>('files')
-  const [llmModel, setLlmModel] = useState<'claude' | 'gemini'>('claude')
+  const [llmModel, setLlmModel] = useState<'claude' | 'gemini' | 'openai'>('claude')
   const [promptVersion, setPromptVersion] = useState<string>('default')
   const [uploadCarName, setUploadCarName] = useState('')
   const [uploadTrackName, setUploadTrackName] = useState('')
@@ -379,6 +379,7 @@ export default function LapSelectorPage() {
   const [selectedLapId, setSelectedLapId] = useState<string | null>(null)
   const [selectedRefIds, setSelectedRefIds] = useState<Set<string>>(new Set())
   const [refLapLimit, setRefLapLimit] = useState(5)
+  const MAX_SELECTED_REFERENCE_LAPS = 3
   const [refLapsPage, setRefLapsPage] = useState(0)
   const REF_LAPS_PAGE_SIZE = 5
   const [myLapsPage, setMyLapsPage] = useState(0)
@@ -884,11 +885,7 @@ export default function LapSelectorPage() {
   useEffect(() => {
     setSelectedRefIds((prev) => {
       const availableIds = new Set(refLaps.map((lap) => lap.id))
-      const next = new Set([...prev].filter((id) => availableIds.has(id)))
-      if (next.size > 0) {
-        return next
-      }
-      return new Set(refLaps.map((lap) => lap.id))
+      return new Set([...prev].filter((id) => availableIds.has(id)))
     })
   }, [refLaps])
 
@@ -898,6 +895,9 @@ export default function LapSelectorPage() {
       if (next.has(lapId)) {
         next.delete(lapId)
       } else {
+        if (next.size >= MAX_SELECTED_REFERENCE_LAPS) {
+          return prev
+        }
         next.add(lapId)
       }
       return next
@@ -1025,14 +1025,18 @@ export default function LapSelectorPage() {
 
   const llmAccess = user?.llm_access
   const selectedProviderAccess = llmAccess?.providers?.[llmModel]
-  const alternateProvider = llmModel === 'claude' ? 'gemini' : 'claude'
-  const alternateProviderAccess = llmAccess?.providers?.[alternateProvider]
-  const hasPersonalLlmKey = Boolean(user?.has_custom_claude_key || user?.has_custom_gemini_key)
-  const personalProviderOptions = (['claude', 'gemini'] as const).filter(
+  const providerPriority = ['claude', 'gemini', 'openai'] as const
+  const alternateProvider = providerPriority.find(
+    (provider) => provider !== llmModel && llmAccess?.providers?.[provider]?.can_generate,
+  )
+  const hasPersonalLlmKey = Boolean(user?.has_custom_claude_key || user?.has_custom_gemini_key || user?.has_custom_openai_key)
+  const personalProviderOptions = providerPriority.filter(
     (provider) => llmAccess?.providers?.[provider]?.has_custom_key,
   )
   const hasSharedFreeReports = Boolean(
-    llmAccess?.providers?.claude?.has_shared_key || llmAccess?.providers?.gemini?.has_shared_key,
+    llmAccess?.providers?.claude?.has_shared_key
+    || llmAccess?.providers?.gemini?.has_shared_key
+    || llmAccess?.providers?.openai?.has_shared_key,
   )
   const baseCanAnalyse = Boolean(
     selectedCarId
@@ -1052,10 +1056,10 @@ export default function LapSelectorPage() {
   }
 
   useEffect(() => {
-    if (!selectedProviderAccess?.can_generate && alternateProviderAccess?.can_generate) {
+    if (!selectedProviderAccess?.can_generate && alternateProvider) {
       setLlmModel(alternateProvider)
     }
-  }, [alternateProvider, alternateProviderAccess?.can_generate, selectedProviderAccess?.can_generate])
+  }, [alternateProvider, selectedProviderAccess?.can_generate])
 
   useEffect(() => {
     if (!hasPersonalLlmKey) {
@@ -1522,10 +1526,10 @@ export default function LapSelectorPage() {
                   <div className="flex items-center gap-2 mb-2">
                     <button
                       type="button"
-                      onClick={() => setSelectedRefIds(new Set(refLaps.map((lap) => lap.id)))}
+                      onClick={() => setSelectedRefIds(new Set(refLaps.slice(0, MAX_SELECTED_REFERENCE_LAPS).map((lap) => lap.id)))}
                       className="text-xs text-slate-400 hover:text-white transition-colors"
                     >
-                      Select all
+                      Select top 3
                     </button>
                     <span className="text-slate-700">·</span>
                     <button
@@ -1535,7 +1539,7 @@ export default function LapSelectorPage() {
                     >
                       Clear
                     </button>
-                    <span className="text-slate-600 text-xs ml-auto">{selectedRefIds.size} selected</span>
+                    <span className="text-slate-600 text-xs ml-auto">{selectedRefIds.size}/{MAX_SELECTED_REFERENCE_LAPS} selected</span>
                   </div>
                 )}
 
@@ -1866,7 +1870,7 @@ export default function LapSelectorPage() {
                     <select
                       id="llm-model"
                       value={llmModel}
-                      onChange={(e) => setLlmModel(e.target.value as 'claude' | 'gemini')}
+                      onChange={(e) => setLlmModel(e.target.value as 'claude' | 'gemini' | 'openai')}
                       className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-amber-500"
                     >
                       {personalProviderOptions.map((provider) => (

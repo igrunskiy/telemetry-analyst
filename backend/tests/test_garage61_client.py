@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from typing import Optional
+
 import pytest
 
 from app.garage61.client import Garage61Client
 
 
 class _FakeResponse:
-    def __init__(self, text: str, headers: dict[str, str] | None = None) -> None:
+    def __init__(self, text: str, headers: Optional[dict[str, str]] = None) -> None:
         self.text = text
         self.headers = headers or {}
 

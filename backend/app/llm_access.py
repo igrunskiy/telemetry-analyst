@@ -11,16 +11,18 @@ from app.config import settings
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-SUPPORTED_LLM_PROVIDERS = ("claude", "gemini")
+SUPPORTED_LLM_PROVIDERS = ("claude", "gemini", "openai")
 
 _PROVIDER_LABELS = {
     "claude": "Claude",
     "gemini": "Gemini",
+    "openai": "OpenAI",
 }
 
 _CUSTOM_KEY_ATTRS = {
     "claude": "claude_api_key_enc",
     "gemini": "gemini_api_key_enc",
+    "openai": "openai_api_key_enc",
 }
 
 def get_shared_report_limit() -> int:
@@ -43,6 +45,8 @@ def has_shared_llm_key(provider: str) -> bool:
         return bool((settings.CLAUDE_API_KEY or "").strip())
     if provider == "gemini":
         return bool((settings.GEMINI_API_KEY or "").strip())
+    if provider == "openai":
+        return bool((settings.OPENAI_API_KEY or "").strip())
     return False
 
 

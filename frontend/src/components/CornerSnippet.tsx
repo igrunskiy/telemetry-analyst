@@ -47,10 +47,6 @@ const CHANNEL_LABELS: Record<string, { unit: string; title: string }> = {
 export default function CornerSnippet({
   corner,
   distances,
-  userLat,
-  userLon,
-  refLat,
-  refLon,
   userSpeed,
   refSpeed,
   userBrake,

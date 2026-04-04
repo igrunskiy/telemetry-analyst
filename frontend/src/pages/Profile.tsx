@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Save, Key, User, CheckCircle, AlertCircle, Link2, Link2Off } from 'lucide-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../hooks/useAuth'
-import { updateClaudeKey, updateGeminiKey, connectGarage61 } from '../api/client'
+import { updateClaudeKey, updateGeminiKey, updateOpenAiKey, connectGarage61 } from '../api/client'
 import type { LlmProviderAccess } from '../types'
 
 function providerStatusSummary(access?: LlmProviderAccess) {
@@ -38,17 +38,24 @@ export default function ProfilePage() {
   const [claudeSaveSuccess, setClaudeSaveSuccess] = useState(false)
   const [geminiKey, setGeminiKey] = useState('')
   const [geminiSaveSuccess, setGeminiSaveSuccess] = useState(false)
+  const [openAiKey, setOpenAiKey] = useState('')
+  const [openAiSaveSuccess, setOpenAiSaveSuccess] = useState(false)
   const garage61JustConnected = searchParams.get('garage61') === 'connected'
   const claudeAccess = user?.llm_access?.providers?.claude
   const geminiAccess = user?.llm_access?.providers?.gemini
+  const openAiAccess = user?.llm_access?.providers?.openai
   const claudeStatus = providerStatusSummary(claudeAccess)
   const geminiStatus = providerStatusSummary(geminiAccess)
+  const openAiStatus = providerStatusSummary(openAiAccess)
   const hasAnyAvailableProvider = Boolean(
-    user?.llm_access?.providers?.claude?.can_generate || user?.llm_access?.providers?.gemini?.can_generate,
+    user?.llm_access?.providers?.claude?.can_generate
+    || user?.llm_access?.providers?.gemini?.can_generate
+    || user?.llm_access?.providers?.openai?.can_generate,
   )
   const hasSharedFallback = Boolean(
     (!user?.has_custom_claude_key && user?.llm_access?.providers?.claude?.has_shared_key) ||
-    (!user?.has_custom_gemini_key && user?.llm_access?.providers?.gemini?.has_shared_key),
+    (!user?.has_custom_gemini_key && user?.llm_access?.providers?.gemini?.has_shared_key) ||
+    (!user?.has_custom_openai_key && user?.llm_access?.providers?.openai?.has_shared_key),
   )
 
   useEffect(() => {
@@ -76,6 +83,15 @@ export default function ProfilePage() {
     },
   })
 
+  const openAiMutation = useMutation({
+    mutationFn: () => updateOpenAiKey(openAiKey),
+    onSuccess: () => {
+      setOpenAiSaveSuccess(true)
+      setTimeout(() => setOpenAiSaveSuccess(false), 3000)
+      queryClient.invalidateQueries({ queryKey: ['auth', 'me'] })
+    },
+  })
+
   return (
     <div className="min-h-screen bg-slate-900">
       {/* Header */}
@@ -97,7 +113,7 @@ export default function ProfilePage() {
           <h2 className="text-sm font-medium text-slate-400 uppercase tracking-wide mb-4">
             LLM Access
           </h2>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-3">
             <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -117,6 +133,17 @@ export default function ProfilePage() {
                 </div>
                 <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${geminiStatus.tone}`}>
                   {geminiStatus.label}
+                </span>
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-white font-medium">OpenAI</p>
+                  <p className="text-slate-400 text-sm mt-1">{openAiStatus.detail}</p>
+                </div>
+                <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${openAiStatus.tone}`}>
+                  {openAiStatus.label}
                 </span>
               </div>
             </div>
@@ -156,6 +183,12 @@ export default function ProfilePage() {
                     Gemini key active
                   </span>
                 )}
+                {user?.has_custom_openai_key && (
+                  <span className="inline-flex items-center gap-1 text-xs text-cyan-300 bg-cyan-400/10 px-2 py-0.5 rounded-full">
+                    <CheckCircle className="w-3 h-3" />
+                    OpenAI key active
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -165,11 +198,11 @@ export default function ProfilePage() {
           <div className="flex items-start gap-3 text-red-300 text-sm bg-red-500/10 border border-red-500/20 rounded-lg p-4">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
             <span>
-              Report generation is unavailable right now. Add your personal Claude or Gemini API key below, or wait for the shared free-report quota to refresh.
+              Report generation is unavailable right now. Add your personal Claude, Gemini, or OpenAI API key below, or wait for the shared free-report quota to refresh.
             </span>
           </div>
         )}
-        {user && !user.has_custom_claude_key && !user.has_custom_gemini_key && hasSharedFallback && hasAnyAvailableProvider && (
+        {user && !user.has_custom_claude_key && !user.has_custom_gemini_key && !user.has_custom_openai_key && hasSharedFallback && hasAnyAvailableProvider && (
           <div className="flex items-start gap-3 text-amber-200 text-sm bg-amber-500/10 border border-amber-500/20 rounded-lg p-4">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
             <span>
@@ -407,6 +440,99 @@ export default function ProfilePage() {
                 className="text-blue-400 hover:text-blue-300"
               >
                 aistudio.google.com
+              </a>
+              .
+            </p>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="flex items-center gap-2 mb-1">
+            <Key className="w-4 h-4 text-cyan-300" />
+            <h2 className="text-white font-medium">OpenAI API Key</h2>
+          </div>
+          <p className="text-slate-500 text-sm mb-4">
+            Provide your OpenAI API key to enable OpenAI-powered analysis for your account.
+          </p>
+          {openAiAccess && (
+            <div className={`mb-4 rounded-lg border px-3 py-2 text-sm ${
+              openAiAccess.can_generate
+                ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+                : 'border-red-500/20 bg-red-500/10 text-red-300'
+            }`}>
+              <div className="font-medium mb-1">OpenAI status: {openAiStatus.label}</div>
+              <div>
+                {openAiAccess.has_custom_key
+                  ? 'Your personal OpenAI API key is configured and will be used for reports.'
+                  : openAiAccess.has_shared_key
+                    ? openAiAccess.can_generate
+                      ? `OpenAI can use the shared free-report quota. ${openAiAccess.shared_reports_remaining_today} shared report${openAiAccess.shared_reports_remaining_today === 1 ? '' : 's'} remaining in the last 24 hours.`
+                      : 'OpenAI shared free-report quota is exhausted for the last 24 hours. Add your own OpenAI API key below to keep generating reports.'
+                    : 'OpenAI is not configured. Add your own OpenAI API key below to enable it.'}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <div>
+              <label htmlFor="openai-key" className="block text-xs text-slate-400 mb-1.5">
+                API Key
+              </label>
+              <input
+                id="openai-key"
+                type="password"
+                className="input font-mono text-sm"
+                placeholder="sk-..."
+                value={openAiKey}
+                onChange={(e) => setOpenAiKey(e.target.value)}
+                autoComplete="new-password"
+              />
+            </div>
+
+            {openAiMutation.isError && (
+              <div className="flex items-center gap-2 text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg p-3">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>Failed to save API key. Please try again.</span>
+              </div>
+            )}
+            {openAiSaveSuccess && (
+              <div className="flex items-center gap-2 text-emerald-400 text-sm bg-emerald-400/10 border border-emerald-400/20 rounded-lg p-3">
+                <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                <span>OpenAI API key saved successfully.</span>
+              </div>
+            )}
+
+            <button
+              onClick={() => openAiMutation.mutate()}
+              disabled={openAiMutation.isPending}
+              className="flex items-center gap-2 px-4 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:opacity-60 disabled:cursor-not-allowed text-slate-950 font-medium rounded-xl transition-colors text-sm"
+            >
+              {openAiMutation.isPending ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                  <span>Saving...</span>
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4" />
+                  <span>Save OpenAI Key</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          <div className="mt-4 p-3 bg-slate-700/50 rounded-lg border border-slate-600/50">
+            <p className="text-slate-400 text-xs leading-relaxed">
+              <strong className="text-slate-300">Note:</strong> Your API key is stored
+              securely on the server and used only for generating analysis reports.
+              Get a key at{' '}
+              <a
+                href="https://platform.openai.com/api-keys"
+                target="_blank"
+                rel="noreferrer"
+                className="text-cyan-300 hover:text-cyan-200"
+              >
+                platform.openai.com
               </a>
               .
             </p>

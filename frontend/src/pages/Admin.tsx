@@ -287,6 +287,7 @@ function UserRow({
   const llmProviders: string[] = []
   if (user.has_custom_claude_key) llmProviders.push('Claude')
   if (user.has_custom_gemini_key) llmProviders.push('Gemini')
+  if (user.has_custom_openai_key) llmProviders.push('OpenAI')
 
   return (
     <div className={`bg-slate-800 border rounded-xl px-3 py-2.5 flex items-center gap-3 ${
@@ -792,7 +793,7 @@ function ConfigEditor() {
           <div>
             <h3 className="text-sm font-semibold text-white">Shared LLM Daily Limit</h3>
             <p className="text-slate-400 text-sm mt-1">
-              Legacy setting retained in the config UI. Report generation now requires each user to add a personal Claude or Gemini API key.
+              Legacy setting retained in the config UI. Report generation now requires each user to add a personal Claude, Gemini, or OpenAI API key.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -994,7 +995,7 @@ function PromptsManager() {
         <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 space-y-3">
           <h3 className="text-sm font-medium text-slate-300">Default per model</h3>
           <div className="flex flex-wrap gap-4">
-            {(['claude', 'gemini'] as const).map(model => (
+            {(['claude', 'gemini', 'openai'] as const).map(model => (
               <label key={model} className="flex items-center gap-2 text-sm">
                 <span className="text-slate-400 w-16">{model}</span>
                 <select
