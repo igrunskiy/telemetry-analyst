@@ -487,7 +487,7 @@ function WorkerMonitor() {
   const { data: status, isLoading, dataUpdatedAt } = useQuery({
     queryKey: ['admin', 'worker', 'status'],
     queryFn: adminGetWorkerStatus,
-    refetchInterval: 3000,
+    refetchInterval: 5000,
   })
 
   const { data: dbHealth, dataUpdatedAt: dbUpdatedAt, refetch: refetchDb, isFetching: dbFetching } = useQuery({
@@ -539,7 +539,7 @@ function WorkerMonitor() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-xl font-semibold">Worker Monitor</h2>
-          <p className="text-slate-400 text-sm mt-1">Auto-refreshes every 3s · last update {lastUpdated}</p>
+          <p className="text-slate-400 text-sm mt-1">Auto-refreshes every 5s · last update {lastUpdated}</p>
         </div>
       </div>
 

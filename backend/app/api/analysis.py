@@ -192,7 +192,6 @@ def _completed_response(record: AnalysisResult) -> dict[str, Any]:
 def _failed_response(record: AnalysisResult) -> dict[str, Any]:
     input_data = record.input_json or {}
     result_data = record.result_json or {}
-    llm_provider = input_data.get("llm_provider")
     return {
         "id": str(record.id),
         "status": "failed",

@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push:*)"
+    ],
+    "allow": [
+      "Bash(git -C d:/Claude/.tmp/telemetry-analyst_auth-admin-ui add -A)",
+      "Bash(git -C:*)",
+      "Bash(grep -h \"^revision\\\\|^down_revision\" d:/Claude/.tmp/telemetry-analyst_auth-admin-ui/backend/alembic/versions/*.py)",
+      "Bash(mv 002_add_gemini_key.py 003_add_gemini_key.py)",
+      "Bash(mv 003_add_enqueued_at.py 004_add_enqueued_at.py)",
+      "Bash(docker push:*)",
+      "Bash(ln -s d:/Claude/telemetry-analyst/.env \"d:/Claude/.tmp/telemetry-analyst_version-build-ts/.env\")"
+    ],
+    "additionalDirectories": [
+      "d:\\Claude\\.tmp\\telemetry-analyst_garage61-settings"
+    ]
+  }
+}

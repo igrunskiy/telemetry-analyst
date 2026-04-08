@@ -44,6 +44,7 @@ if settings.ENABLE_REMOTE_DEBUG:
 async def _seed_default_admin(conn) -> None:
     """Create the default admin and user accounts if they don't exist yet."""
     import bcrypt
+    import uuid
     from sqlalchemy import text as t
 
     now = datetime.now(timezone.utc)
@@ -53,12 +54,13 @@ async def _seed_default_admin(conn) -> None:
     )
     if result.fetchone() is None:
         password_hash = bcrypt.hashpw(b"admin-s3cr3t", bcrypt.gensalt()).decode()
+        garage61_user_id = f"local-admin-{uuid.uuid4()}"
         await conn.execute(
             t(
-                "INSERT INTO users (id, username, password_hash, display_name, role, is_suspended, created_at, last_login_at) "
-                "VALUES (gen_random_uuid(), 'admin', :pw, 'Administrator', 'admin', false, :now, :now)"
+                "INSERT INTO users (id, garage61_user_id, username, password_hash, display_name, access_token_enc, refresh_token_enc, role, is_suspended, created_at, last_login_at) "
+                "VALUES (gen_random_uuid(), :garage61_user_id, 'admin', :pw, 'Administrator', '', '', 'admin', false, :now, :now)"
             ),
-            {"pw": password_hash, "now": now},
+            {"garage61_user_id": garage61_user_id, "pw": password_hash, "now": now},
         )
         logging.getLogger(__name__).info("Default admin account created (username: admin)")
 
@@ -67,12 +69,13 @@ async def _seed_default_admin(conn) -> None:
     )
     if result.fetchone() is None:
         password_hash = bcrypt.hashpw(b"user", bcrypt.gensalt()).decode()
+        garage61_user_id = f"local-user-{uuid.uuid4()}"
         await conn.execute(
             t(
-                "INSERT INTO users (id, username, password_hash, display_name, role, is_suspended, created_at, last_login_at) "
-                "VALUES (gen_random_uuid(), 'user', :pw, 'User', 'user', false, :now, :now)"
+                "INSERT INTO users (id, garage61_user_id, username, password_hash, display_name, access_token_enc, refresh_token_enc, role, is_suspended, created_at, last_login_at) "
+                "VALUES (gen_random_uuid(), :garage61_user_id, 'user', :pw, 'User', '', '', 'user', false, :now, :now)"
             ),
-            {"pw": password_hash, "now": now},
+            {"garage61_user_id": garage61_user_id, "pw": password_hash, "now": now},
         )
         logging.getLogger(__name__).info("Default user account created (username: user)")
 
@@ -104,6 +107,10 @@ async def lifespan(app: FastAPI):
             await conn.execute(text(
                 "ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS "
                 "input_json JSONB"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS "
+                "enqueued_at TIMESTAMPTZ"
             ))
             await conn.execute(text(
                 "ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS "
