@@ -203,6 +203,7 @@ async def _extract_filename_metadata_with_llm(
     track_candidates: list[str],
     claude_api_key: str = "",
     gemini_api_key: str = "",
+    openai_api_key: str = "",
 ) -> dict[str, Any]:
     try:
         candidate_cars = _pick_candidate_subset(filename, car_candidates)
@@ -253,6 +254,22 @@ async def _extract_filename_metadata_with_llm(
                 contents=prompt,
             )
             text = (response.text or "").strip()
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+            return _coerce_llm_metadata(json.loads(text), candidate_cars, candidate_tracks)
+
+        effective_openai_key = openai_api_key.strip() if openai_api_key else ""
+        if effective_openai_key:
+            from openai import AsyncOpenAI
+
+            client = AsyncOpenAI(api_key=effective_openai_key)
+            response = await client.chat.completions.create(
+                model="gpt-4.1-mini",
+                response_format={"type": "json_object"},
+                messages=[{"role": "user", "content": prompt}],
+                max_completion_tokens=300,
+            )
+            text = (response.choices[0].message.content or "").strip()
             text = re.sub(r"^```(?:json)?\s*", "", text)
             text = re.sub(r"\s*```$", "", text)
             return _coerce_llm_metadata(json.loads(text), candidate_cars, candidate_tracks)
@@ -309,6 +326,7 @@ async def inspect_upload_with_llm(
     track_candidates: list[str],
     claude_api_key: str = "",
     gemini_api_key: str = "",
+    openai_api_key: str = "",
 ) -> dict[str, Any]:
     inspection = inspect_upload(filename, content)
     header_metadata = _extract_header_metadata(content)
@@ -318,6 +336,7 @@ async def inspect_upload_with_llm(
         track_candidates=track_candidates,
         claude_api_key=claude_api_key,
         gemini_api_key=gemini_api_key,
+        openai_api_key=openai_api_key,
     )
 
     metadata = dict(inspection.get("metadata") or {})

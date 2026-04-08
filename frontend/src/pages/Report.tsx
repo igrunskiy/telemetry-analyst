@@ -1,17 +1,18 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, User, RefreshCw, Share2, Check, Zap, FileText, Download, Shield, Sparkles, MessageSquare, ThermometerSun, Waves, Wind, HardDrive } from 'lucide-react'
+import { ArrowLeft, BarChart2, Trash2, Clock, Calendar, Layers, Lightbulb, TrendingDown, ChevronDown, ChevronUp, ExternalLink, RefreshCw, Share2, Check, Zap, FileText, Download, Shield, Sparkles, MessageSquare, ThermometerSun, Waves, Wind, HardDrive } from 'lucide-react'
 import { getAnalysis, deleteAnalysis, regenerateAnalysis, shareAnalysis, getSharedAnalysis, setDefaultAnalysisVersion, adminRetrospectReport, submitAnalysisFeedback, deleteAnalysisFeedback } from '../api/client'
 import TrackMap from '../components/TrackMap'
-import TelemetryChart from '../components/TelemetryChart'
+import TelemetryChart, { SingleChart } from '../components/TelemetryChart'
 import HeatMap from '../components/HeatMap'
+import type { ReferenceLapTrace } from '../components/TelemetryChart'
 import DeltaHeatmap from '../components/DeltaHeatmap'
 import AnalysisCards from '../components/AnalysisCards'
 import { ThemeToggle } from '../components/ThemeToggle'
 import TelemetryInsights from '../components/TelemetryInsights'
 import { useAuth } from '../hooks/useAuth'
-import type { AnalysisReport, ImprovementArea, LapConditions, LapMeta, SectorData, AdminRetrospective, ReportFeedback } from '../types'
+import type { AnalysisReport, ImprovementArea, LapConditions, LapMeta, SectorData, AdminRetrospective } from '../types'
 import { normalizeFeedbackSelections, renderHighlightedText } from '../utils/feedbackHighlights'
 
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 }
@@ -251,6 +252,8 @@ function getSelectedReportText(root: HTMLElement | null): string {
   if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return ''
   return text.slice(0, 4000)
 }
+
+const FEEDBACK_TOOLTIP_STORAGE_KEY = 'report_feedback_tooltip_seen_v1'
 
 async function copyText(text: string): Promise<void> {
   if (window.isSecureContext && navigator.clipboard?.writeText) {
@@ -514,6 +517,40 @@ function formatSectorDelta(deltaMs: number): string {
   return deltaMs > 0 ? `+${seconds.toFixed(2)}s` : `-${seconds.toFixed(2)}s`
 }
 
+function formatTelemetryLegendDelta(deltaMs: number, context: string): string {
+  if (!Number.isFinite(deltaMs) || deltaMs === 0) return `0.00s ${context}`
+  const seconds = Math.abs(deltaMs) / 1000
+  return `${deltaMs > 0 ? '+' : '-'}${seconds.toFixed(2)}s ${context}`
+}
+
+function estimateSegmentTimeMs(
+  distances: number[],
+  speedKph: number[],
+  range: [number, number] | null,
+): number | null {
+  if (distances.length < 2 || speedKph.length < 2) return null
+  const start = range?.[0] ?? distances[0]
+  const end = range?.[1] ?? distances[distances.length - 1]
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null
+
+  let totalSeconds = 0
+  for (let i = 1; i < Math.min(distances.length, speedKph.length); i += 1) {
+    const segStart = distances[i - 1]
+    const segEnd = distances[i]
+    if (!Number.isFinite(segStart) || !Number.isFinite(segEnd) || segEnd <= segStart) continue
+    const overlapStart = Math.max(start, segStart)
+    const overlapEnd = Math.min(end, segEnd)
+    if (overlapEnd <= overlapStart) continue
+
+    const avgKph = (speedKph[i - 1] + speedKph[i]) / 2
+    const avgMps = avgKph / 3.6
+    if (!Number.isFinite(avgMps) || avgMps <= 0.1) continue
+    totalSeconds += (overlapEnd - overlapStart) / avgMps
+  }
+
+  return totalSeconds > 0 ? totalSeconds * 1000 : null
+}
+
 export default function ReportPage({ readOnly = false }: { readOnly?: boolean }) {
   const { analysisId, shareToken } = useParams<{ analysisId?: string; shareToken?: string }>()
   const navigate = useNavigate()
@@ -534,6 +571,9 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
   const [selectedFeedbackText, setSelectedFeedbackText] = useState('')
   const [feedbackComment, setFeedbackComment] = useState('')
   const [feedbackSuccess, setFeedbackSuccess] = useState('')
+  const [isShiftSelectingFeedback, setIsShiftSelectingFeedback] = useState(false)
+  const [showFeedbackTooltip, setShowFeedbackTooltip] = useState(false)
+  const [selectedRegenerateProvider, setSelectedRegenerateProvider] = useState<'claude' | 'gemini' | 'openai'>('claude')
   const [activeFeedbackBubble, setActiveFeedbackBubble] = useState<{
     group: FeedbackGroup
     top: number
@@ -568,7 +608,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
   })
 
   const regenerateMutation = useMutation({
-    mutationFn: () => regenerateAnalysis(analysisId!),
+    mutationFn: () => regenerateAnalysis(analysisId!, selectedRegenerateProvider),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['analysis', analysisId] })
       if (data?.id && !readOnly) {
@@ -626,6 +666,9 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
   })
 
   const handleRegenerate = () => {
+    if (!selectedRegenerateProvider) {
+      return
+    }
     if (report && (!report.status || report.status === 'completed')) {
       setSavedReport(report)
     }
@@ -668,6 +711,27 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
     report?.status === 'enqueued' ||
     report?.status === 'processing'
 
+  const regenerateProviderOptions = (['claude', 'gemini', 'openai'] as const)
+    .filter((provider) => user?.llm_access?.providers?.[provider]?.can_generate)
+    .map((provider) => ({
+      value: provider,
+      label: user?.llm_access?.providers?.[provider]?.label ?? provider,
+    }))
+  const reportProviderForRegeneration = savedReport?.llm_provider ?? report?.llm_provider
+
+  useEffect(() => {
+    if (!regenerateProviderOptions.length) {
+      return
+    }
+    const preferredProvider = regenerateProviderOptions.find((option) => option.value === reportProviderForRegeneration)?.value
+      ?? regenerateProviderOptions[0].value
+    setSelectedRegenerateProvider((current) => (
+      regenerateProviderOptions.some((option) => option.value === current)
+        ? current
+        : preferredProvider
+    ))
+  }, [regenerateProviderOptions, reportProviderForRegeneration, savedReport?.llm_provider, report?.llm_provider])
+
   useEffect(() => {
     if (!isRegenerating) {
       return
@@ -699,11 +763,48 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
 
   useEffect(() => {
     if (readOnly || !displayReport || displayReport.status === 'enqueued' || displayReport.status === 'processing' || displayReport.status === 'failed') {
+      setShowFeedbackTooltip(false)
+      return
+    }
+    if (typeof window === 'undefined') return
+    const alreadySeen = window.localStorage.getItem(FEEDBACK_TOOLTIP_STORAGE_KEY)
+    setShowFeedbackTooltip(!alreadySeen)
+  }, [displayReport, readOnly])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Shift') {
+        setIsShiftSelectingFeedback(true)
+      }
+    }
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === 'Shift') {
+        setIsShiftSelectingFeedback(false)
+      }
+    }
+    const handleWindowBlur = () => {
+      setIsShiftSelectingFeedback(false)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', handleWindowBlur)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', handleWindowBlur)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (readOnly || !displayReport || displayReport.status === 'enqueued' || displayReport.status === 'processing' || displayReport.status === 'failed') {
       return
     }
 
     const syncSelection = () => {
       if (reportFeedbackMutation.isPending) return
+      if (!isShiftSelectingFeedback) {
+        return
+      }
       const text = getSelectedReportText(reportContentRef.current)
       const active = document.activeElement
       const focusInsideFeedback =
@@ -722,7 +823,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
 
     document.addEventListener('selectionchange', syncSelection)
     return () => document.removeEventListener('selectionchange', syncSelection)
-  }, [displayReport, readOnly, reportFeedbackMutation.isPending])
+  }, [displayReport, readOnly, reportFeedbackMutation.isPending, isShiftSelectingFeedback])
 
   useEffect(() => {
     if (!displayReport?.id) return
@@ -791,6 +892,10 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
   }
 
   const isSolo = displayReport?.analysis_mode === 'solo'
+  const availableTabs = useMemo(
+    () => TABS.filter((tab) => tab.id !== 'heatmap' || isSolo),
+    [isSolo],
+  )
   const isAdmin = user?.role === 'admin'
   const isStaff = user?.role === 'admin' || user?.role === 'moderator'
   const canDeleteOrShareReport = isAdmin || (!!displayReport?.user_id && displayReport.user_id === user?.id)
@@ -875,14 +980,99 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
   const soloUserLap = isSolo ? displayReport?.laps_metadata?.find((l) => l.role === 'user') : undefined
   const soloTotalLaps = displayReport ? displayReport.reference_lap_ids.length + 1 : 0
   const hasGps = (displayReport?.telemetry?.user_lat?.length ?? 0) > 0
+  const telemetryReferenceLaps = useMemo<ReferenceLapTrace[]>(() => {
+    if (!displayReport) return []
+
+    const userLapMeta = (displayReport.laps_metadata ?? []).find((lap) => lap.role === 'user')
+    const userLapTime = userLapMeta?.lap_time ?? 0
+    const userSectorTime = selectedSector != null
+      ? estimateSegmentTimeMs(
+          displayReport.telemetry.distances ?? [],
+          displayReport.telemetry.user_speed ?? [],
+          activeSectorRange,
+        )
+      : null
+    const referenceMeta = (displayReport.laps_metadata ?? []).filter((lap) => lap.role === 'reference')
+    const telemetryRefs = displayReport.telemetry.reference_laps ?? []
+    if (telemetryRefs.length > 0) {
+      return telemetryRefs.slice(0, 3).map((lap, index) => {
+        const meta = referenceMeta.find((item) => item.id === lap.lap_id) ?? referenceMeta[index]
+        const baseLabel = meta?.driver_name?.trim() || `Ref ${index + 1}`
+        const refSectorTime = selectedSector != null
+          ? estimateSegmentTimeMs(
+              displayReport.telemetry.distances ?? [],
+              lap.speed ?? [],
+              activeSectorRange,
+            )
+          : null
+        const sectorDelta = (
+          selectedSector != null
+          && userSectorTime != null
+          && refSectorTime != null
+        )
+          ? refSectorTime - userSectorTime
+          : null
+        const lapDelta = meta?.lap_time && userLapTime ? meta.lap_time - userLapTime : null
+        const deltaLabel = sectorDelta != null
+          ? formatTelemetryLegendDelta(sectorDelta, `S${selectedSector}`)
+          : lapDelta != null
+            ? formatTelemetryLegendDelta(lapDelta, 'lap')
+            : null
+        return {
+          label: deltaLabel ? `${baseLabel} · ${deltaLabel}` : baseLabel,
+          speed: lap.speed ?? [],
+          throttle: lap.throttle ?? [],
+          brake: lap.brake ?? [],
+          gear: lap.gear ?? [],
+        }
+      }).filter((lap) =>
+        lap.speed.length > 0 || lap.throttle.length > 0 || lap.brake.length > 0 || (lap.gear?.length ?? 0) > 0
+      )
+    }
+
+    if ((displayReport.telemetry.ref_speed?.length ?? 0) === 0) return []
+    const fallbackLapDelta = referenceMeta[0]?.lap_time && userLapTime ? referenceMeta[0].lap_time - userLapTime : null
+    const fallbackRefSectorTime = selectedSector != null
+      ? estimateSegmentTimeMs(
+          displayReport.telemetry.distances ?? [],
+          displayReport.telemetry.ref_speed ?? [],
+          activeSectorRange,
+        )
+      : null
+    const fallbackSectorDelta = (
+      selectedSector != null
+      && userSectorTime != null
+      && fallbackRefSectorTime != null
+    )
+      ? fallbackRefSectorTime - userSectorTime
+      : null
+    const fallbackLabel = referenceMeta[0]?.driver_name?.trim() || 'Reference'
+    return [{
+      label: fallbackSectorDelta != null
+        ? `${fallbackLabel} · ${formatTelemetryLegendDelta(fallbackSectorDelta, `S${selectedSector}`)}`
+        : fallbackLapDelta != null
+          ? `${fallbackLabel} · ${formatTelemetryLegendDelta(fallbackLapDelta, 'lap')}`
+          : fallbackLabel,
+      speed: displayReport.telemetry.ref_speed ?? [],
+      throttle: displayReport.telemetry.ref_throttle ?? [],
+      brake: displayReport.telemetry.ref_brake ?? [],
+      gear: displayReport.telemetry.ref_gear ?? [],
+    }]
+  }, [displayReport, selectedSector, activeSectorRange])
   const showTrackGuide = hasGps && activeTab !== 'heatmap'
   const trackLength =
     displayReport && displayReport.telemetry?.distances?.length > 0
       ? displayReport.telemetry.distances[displayReport.telemetry.distances.length - 1]
       : 3000
 
+  useEffect(() => {
+    if (!availableTabs.some((tab) => tab.id === activeTab)) {
+      setActiveTab('summary')
+    }
+  }, [availableTabs, activeTab])
+
   const renderVersionSelector = () => {
-    if (!isAdmin || readOnly || !displayReport || versionOptions.length <= 1) {
+    if (!isStaff || readOnly || !displayReport || versionOptions.length <= 1) {
       return null
     }
     return (
@@ -901,18 +1091,20 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
         >
           {versionOptions.map((version) => (
             <option key={version.id} value={version.id}>
-              {`v${version.version_number}${version.is_default_version ? ' default' : ''} · ${new Date(version.created_at).toLocaleDateString()}`}
+              {`v${version.version_number}${version.is_default_version ? ' default' : ''} · ${version.model_name ?? version.llm_provider ?? 'unknown model'} · ${new Date(version.created_at).toLocaleDateString()}`}
             </option>
           ))}
         </select>
-        <button
-          type="button"
-          onClick={() => displayReport.id && setDefaultVersionMutation.mutate(displayReport.id)}
-          disabled={displayReport.is_default_version || setDefaultVersionMutation.isPending}
-          className="px-2 py-1 rounded-md border border-slate-700 text-xs text-slate-300 hover:bg-slate-700/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          {displayReport.is_default_version ? 'Default' : 'Make default'}
-        </button>
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={() => displayReport.id && setDefaultVersionMutation.mutate(displayReport.id)}
+            disabled={displayReport.is_default_version || setDefaultVersionMutation.isPending}
+            className="px-2 py-1 rounded-md border border-slate-700 text-xs text-slate-300 hover:bg-slate-700/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {displayReport.is_default_version ? 'Default' : 'Make default'}
+          </button>
+        )}
       </span>
     )
   }
@@ -970,6 +1162,28 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
 
       {/* Content */}
       <main ref={reportContentRef} className="flex-1 max-w-[90%] w-full mx-auto px-4 py-6">
+        {showFeedbackTooltip && !readOnly && displayReport && (!displayReport.status || displayReport.status === 'completed') && (
+          <div className="mb-5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-amber-300">How to send feedback</p>
+                <p className="text-sm text-slate-300 mt-1">
+                  Hold <span className="font-mono text-xs text-amber-200 bg-amber-500/10 px-1.5 py-0.5 rounded">Shift</span> while selecting report text to open the feedback panel for admins.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowFeedbackTooltip(false)
+                  window.localStorage.setItem(FEEDBACK_TOOLTIP_STORAGE_KEY, '1')
+                }}
+                className="text-xs text-slate-400 hover:text-white transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
         {isLoading && (
           <div className="flex flex-col items-center justify-center py-24 gap-4">
             <div className="w-10 h-10 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
@@ -1027,14 +1241,31 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
             <p className="text-slate-500 text-sm mb-4">{report.error_message?.split('\n')[0] || 'An unexpected error occurred.'}</p>
             <div className="flex items-center justify-center gap-3">
               {!readOnly && (
-                <button
-                  onClick={() => handleRegenerate()}
-                  disabled={regenerateMutation.isPending}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-900 font-medium text-sm transition-colors"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${regenerateMutation.isPending ? 'animate-spin' : ''}`} />
-                  {regenerateMutation.isPending ? 'Re-running…' : 'Re-run analysis'}
-                </button>
+                <div className="flex items-center gap-2">
+                  {regenerateProviderOptions.length > 1 && (
+                    <select
+                      value={selectedRegenerateProvider}
+                      onChange={(e) => setSelectedRegenerateProvider(e.target.value as 'claude' | 'gemini' | 'openai')}
+                      disabled={regenerateMutation.isPending}
+                      className="rounded-xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-amber-500"
+                      title="Choose provider for re-running this report"
+                    >
+                      {regenerateProviderOptions.map((provider) => (
+                        <option key={provider.value} value={provider.value}>
+                          {provider.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <button
+                    onClick={() => handleRegenerate()}
+                    disabled={regenerateMutation.isPending || regenerateProviderOptions.length === 0}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-900 font-medium text-sm transition-colors"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${regenerateMutation.isPending ? 'animate-spin' : ''}`} />
+                    {regenerateMutation.isPending ? 'Re-running…' : 'Re-run analysis'}
+                  </button>
+                </div>
               )}
               <Link to={backHref} state={backTo?.state} className="text-amber-500 hover:text-amber-400 text-sm">
                 &larr; Back to lap selector
@@ -1174,7 +1405,9 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                   {(displayReport.generation_time_s != null || displayReport.model_name || displayReport.llm_provider || (isAdmin && displayReport.prompt_version) || (isAdmin && displayReport.llm_payload_bytes != null)) && (
                     <span className="flex items-center gap-1.5">
                       <RefreshCw className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                      <span className="text-slate-500">Generated{displayReport.generation_time_s != null ? ` in ${displayReport.generation_time_s}s` : ''}</span>
+                      {displayReport.generation_time_s != null && (
+                        <span className="text-slate-500">{displayReport.generation_time_s}s</span>
+                      )}
                       {(displayReport.model_name || displayReport.llm_provider) && (
                         <>
                           <span className="text-slate-600">by</span>
@@ -1222,9 +1455,25 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                   {/* Control buttons */}
                   {!readOnly && (
                     <div className="ml-auto flex items-center gap-1 flex-shrink-0">
+                      {regenerateProviderOptions.length > 1 && (
+                        <select
+                          value={selectedRegenerateProvider}
+                          onChange={(e) => setSelectedRegenerateProvider(e.target.value as 'claude' | 'gemini' | 'openai')}
+                          onClick={(e) => e.stopPropagation()}
+                          disabled={isRegenerating}
+                          className="rounded-lg border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+                          title="Choose provider for re-running this report"
+                        >
+                          {regenerateProviderOptions.map((provider) => (
+                            <option key={provider.value} value={provider.value}>
+                              {provider.label}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                       <button
                         onClick={() => handleRegenerate()}
-                        disabled={isRegenerating}
+                        disabled={isRegenerating || regenerateProviderOptions.length === 0}
                         className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/60 rounded-lg transition-colors disabled:opacity-50"
                         title="Regenerate analysis"
                       >
@@ -1312,7 +1561,9 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                   {(displayReport.generation_time_s != null || displayReport.model_name || displayReport.llm_provider || (isAdmin && displayReport.prompt_version) || (isAdmin && displayReport.llm_payload_bytes != null)) && (
                     <span className="flex items-center gap-1.5">
                       <RefreshCw className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                      <span className="text-slate-500">Generated{displayReport.generation_time_s != null ? ` in ${displayReport.generation_time_s}s` : ''}</span>
+                      {displayReport.generation_time_s != null && (
+                        <span className="text-slate-500">{displayReport.generation_time_s}s</span>
+                      )}
                       {(displayReport.model_name || displayReport.llm_provider) && (
                         <>
                           <span className="text-slate-600">by</span>
@@ -1349,9 +1600,25 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                   <div className="ml-auto flex items-center gap-1 flex-shrink-0">
                     {!readOnly && (
                       <>
+                        {regenerateProviderOptions.length > 1 && (
+                          <select
+                            value={selectedRegenerateProvider}
+                            onChange={(e) => setSelectedRegenerateProvider(e.target.value as 'claude' | 'gemini' | 'openai')}
+                            onClick={(e) => e.stopPropagation()}
+                            disabled={regenerateMutation.isPending}
+                            className="rounded-lg border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+                            title="Choose provider for re-running this report"
+                          >
+                            {regenerateProviderOptions.map((provider) => (
+                              <option key={provider.value} value={provider.value}>
+                                {provider.label}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                         <button
                           onClick={(e) => { e.stopPropagation(); handleRegenerate() }}
-                          disabled={regenerateMutation.isPending}
+                          disabled={regenerateMutation.isPending || regenerateProviderOptions.length === 0}
                           className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/60 rounded-lg transition-colors disabled:opacity-50"
                           title="Regenerate analysis"
                         >
@@ -1542,7 +1809,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                 </div>
               )}
               <div className="flex items-center gap-1 flex-shrink-0 ml-auto">
-                {TABS.map((tab) => (
+                {availableTabs.map((tab) => (
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
@@ -1561,7 +1828,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
 
               {/* Persistent sticky TrackMap */}
               {showTrackGuide && (
-                <div className="xl:sticky xl:top-20">
+                <div className="xl:sticky xl:top-28">
                   <TrackMap
                     userLat={displayReport.telemetry.user_lat ?? []}
                     userLon={displayReport.telemetry.user_lon ?? []}
@@ -1576,7 +1843,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                     highlightRange={activeSectorRange}
                     highlightCornerNums={activeCornerNums}
                     title="Track Guide"
-                    showRef={false}
+                    showRef
                   />
                 </div>
               )}
@@ -1692,6 +1959,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       distances={displayReport.telemetry.distances}
                       userSpeed={displayReport.telemetry.user_speed}
                       refSpeed={displayReport.telemetry.ref_speed}
+                      referenceLaps={telemetryReferenceLaps}
                       userThrottle={displayReport.telemetry.user_throttle}
                       refThrottle={displayReport.telemetry.ref_throttle}
                       userBrake={displayReport.telemetry.user_brake}
@@ -1707,16 +1975,7 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                 )}
 
                 {activeTab === 'heatmap' && (
-                  <div className="space-y-3">
-                    <DeltaHeatmap
-                      distances={displayReport.telemetry.distances}
-                      delta_ms={displayReport.telemetry.delta_ms}
-                      corners={displayReport.telemetry.corners}
-                      isSolo={isSolo}
-                      xRange={activeSectorRange}
-                      hoverIndex={hoverIdx}
-                      onHoverIndex={setHoverIdx}
-                    />
+                  <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)] gap-4 items-start">
                     <HeatMap
                       lat={displayReport.telemetry.user_lat ?? []}
                       lon={displayReport.telemetry.user_lon ?? []}
@@ -1726,12 +1985,31 @@ export default function ReportPage({ readOnly = false }: { readOnly?: boolean })
                       refBrake={displayReport.telemetry.ref_brake}
                       throttle={displayReport.telemetry.user_throttle}
                       refThrottle={displayReport.telemetry.ref_throttle}
-                      xRange={activeSectorRange}
                       distances={displayReport.telemetry.distances}
+                      xRange={activeSectorRange}
                       isSolo={isSolo}
-                      hoverIndex={hoverIdx}
-                      onHoverIndex={setHoverIdx}
                     />
+                    <div className="space-y-3">
+                      <DeltaHeatmap
+                        distances={displayReport.telemetry.distances}
+                        delta_ms={displayReport.telemetry.delta_ms}
+                        corners={displayReport.telemetry.corners}
+                        isSolo={isSolo}
+                        xRange={activeSectorRange}
+                      />
+                      <div className="card p-0 overflow-hidden">
+                        <SingleChart
+                          title="Speed Trace"
+                          yLabel="km/h"
+                          distances={displayReport.telemetry.distances}
+                          userValues={displayReport.telemetry.user_speed}
+                          refValues={displayReport.telemetry.ref_speed}
+                          corners={displayReport.telemetry.corners}
+                          height={220}
+                          xRange={activeSectorRange}
+                        />
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

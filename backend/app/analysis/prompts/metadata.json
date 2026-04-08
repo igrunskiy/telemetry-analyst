@@ -1,6 +1,7 @@
 {
   "defaults": {
     "claude": "analysis_v2",
-    "gemini": "analysis_v2"
+    "gemini": "analysis_v2",
+    "openai": "analysis_v2"
   }
 }

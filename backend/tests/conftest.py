@@ -1,4 +1,6 @@
 """Shared pytest fixtures and configuration."""
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -8,10 +10,10 @@ from app.analysis.processor import TelemetryProcessor, INTERP_POINTS
 
 def make_lap_csv(
     n: int = 300,
-    speed_profile: np.ndarray | None = None,
+    speed_profile: Optional[np.ndarray] = None,
     use_alias_columns: bool = False,
     speed_in_ms: bool = False,
-    track_length_m: float | None = None,
+    track_length_m: Optional[float] = None,
 ) -> str:
     """
     Generate a minimal synthetic telemetry CSV.

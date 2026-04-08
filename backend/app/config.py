@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     GARAGE61_PERSONAL_TOKEN: str = ""
     CLAUDE_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
     ENCRYPTION_KEY: str
     DISCORD_CLIENT_ID: str = ""
     DISCORD_CLIENT_SECRET: str = ""
@@ -35,6 +36,7 @@ class Settings(BaseSettings):
     DEFAULT_SHARED_REPORTS_PER_DAY: int = 6
     CLAUDE_MAX_TOKENS: int = 20000
     GEMINI_MAX_TOKENS: int = 20000
+    OPENAI_MAX_TOKENS: int = 20000
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

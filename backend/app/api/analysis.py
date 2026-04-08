@@ -20,6 +20,9 @@ from app.analysis.lap_metadata import canonical_driver_name as _canonical_driver
 from app.analysis.lap_metadata import driver_key as _driver_key
 from app.analysis.lap_metadata import normalize_lap_meta_dict as _normalize_lap_meta_dict
 from app.analysis.upload_inspector import inspect_upload_with_llm
+from app.analysis.llm import CLAUDE_MODEL
+from app.analysis.gemini import GEMINI_MODEL
+from app.analysis.openai import OPENAI_MODEL
 from app.auth.crypto import decrypt
 from app.auth.jwt import get_current_user, has_staff_access
 from app.config import settings
@@ -34,7 +37,7 @@ from app.telemetry.catalog import decompress_csv, resolve_or_create_car, resolve
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 logger = logging.getLogger(__name__)
-_MAX_REFERENCE_LAPS = 5
+_MAX_REFERENCE_LAPS = 3
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +94,7 @@ class RunAnalysisRequest(BaseModel):
     track_name: str
     analysis_mode: str = "vs_reference"  # "vs_reference" or "solo"
     laps_metadata: list[LapMetaInput] | None = None
-    llm_provider: str = "claude"  # "claude" or "gemini"
+    llm_provider: str = "claude"  # "claude", "gemini", or "openai"
     prompt_version: str | None = None  # named prompt; None → model default
     uploaded_telemetry: list[UploadedTelemetryInput] | None = None
 
@@ -128,13 +131,27 @@ class ReportFeedbackRequest(BaseModel):
     comment: str = ""
 
 
+class RegenerateAnalysisRequest(BaseModel):
+    llm_provider: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _model_name_for_provider(provider: str | None) -> str | None:
+    if provider == "claude":
+        return CLAUDE_MODEL
+    if provider == "gemini":
+        return GEMINI_MODEL
+    if provider == "openai":
+        return OPENAI_MODEL
+    return None
+
 def _enqueued_response(record: AnalysisResult) -> dict[str, Any]:
     """Return a minimal response for a newly enqueued or in-progress record."""
     input_data = record.input_json or {}
+    llm_provider = input_data.get("llm_provider")
     return {
         "id": str(record.id),
         "status": record.status,
@@ -145,7 +162,8 @@ def _enqueued_response(record: AnalysisResult) -> dict[str, Any]:
         "created_at": record.created_at.isoformat(),
         "enqueued_at": record.enqueued_at.isoformat() if record.enqueued_at else None,
         "analysis_mode": (record.input_json or {}).get("analysis_mode", "vs_reference"),
-        "llm_provider": input_data.get("llm_provider"),
+        "llm_provider": llm_provider,
+        "model_name": _model_name_for_provider(llm_provider),
         "prompt_version": input_data.get("prompt_version"),
         "version_group_id": str(record.version_group_id or record.id),
         "version_number": record.version_number,
@@ -184,7 +202,8 @@ def _failed_response(record: AnalysisResult) -> dict[str, Any]:
         "track_name": record.track_name,
         "created_at": record.created_at.isoformat(),
         "enqueued_at": record.enqueued_at.isoformat() if record.enqueued_at else None,
-        "llm_provider": input_data.get("llm_provider"),
+        "llm_provider": llm_provider,
+        "model_name": result_data.get("model_name") or _model_name_for_provider(llm_provider),
         "prompt_version": input_data.get("prompt_version"),
         "version_group_id": str(record.version_group_id or record.id),
         "version_number": record.version_number,
@@ -208,14 +227,15 @@ def _version_group_id_for(record: AnalysisResult) -> uuid.UUID:
 def _version_summary(record: AnalysisResult) -> dict[str, Any]:
     result_data = record.result_json or {}
     input_data = record.input_json or {}
+    llm_provider = input_data.get("llm_provider") or result_data.get("llm_provider")
     return {
         "id": str(record.id),
         "version_number": record.version_number,
         "created_at": record.created_at.isoformat(),
         "status": record.status,
         "is_default_version": record.is_default_version,
-        "llm_provider": input_data.get("llm_provider") or result_data.get("llm_provider"),
-        "model_name": result_data.get("model_name"),
+        "llm_provider": llm_provider,
+        "model_name": result_data.get("model_name") or _model_name_for_provider(llm_provider),
         "prompt_version": result_data.get("prompt_version") or input_data.get("prompt_version"),
         "telemetry_storage_complete": (
             (result_data.get("telemetry_storage") or input_data.get("telemetry_storage") or {}).get("is_complete")
@@ -574,11 +594,12 @@ async def inspect_uploaded_telemetry(
     track_candidates = [name for name in track_result.scalars().all() if name]
     claude_key = decrypt(current_user.claude_api_key_enc) if current_user.claude_api_key_enc else ""
     gemini_key = decrypt(current_user.gemini_api_key_enc) if current_user.gemini_api_key_enc else ""
+    openai_key = decrypt(current_user.openai_api_key_enc) if current_user.openai_api_key_enc else ""
 
-    if not claude_key and not gemini_key:
+    if not claude_key and not gemini_key and not openai_key:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="A personal Claude or Gemini API key is required in Profile before using telemetry inspection.",
+            detail="A personal Claude, Gemini, or OpenAI API key is required in Profile before using telemetry inspection.",
         )
 
     results: list[dict[str, Any]] = []
@@ -593,6 +614,7 @@ async def inspect_uploaded_telemetry(
                 track_candidates=track_candidates,
                 claude_api_key=claude_key,
                 gemini_api_key=gemini_key,
+                openai_api_key=openai_key,
             )
         )
     return results
@@ -601,6 +623,7 @@ async def inspect_uploaded_telemetry(
 @router.post("/{analysis_id}/regenerate", status_code=status.HTTP_202_ACCEPTED)
 async def regenerate_analysis(
     analysis_id: str,
+    body: RegenerateAnalysisRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -643,7 +666,8 @@ async def regenerate_analysis(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis owner not found")
 
     input_data = record.input_json or {}
-    llm_provider = input_data.get("llm_provider") or (record.result_json or {}).get("llm_provider") or "claude"
+    requested_provider = (body.llm_provider if body else None) or None
+    llm_provider = requested_provider or input_data.get("llm_provider") or (record.result_json or {}).get("llm_provider") or "claude"
     try:
         provider_access = await require_llm_provider_access(owner, llm_provider, db)
     except PermissionError as exc:

@@ -12,6 +12,7 @@ from google.genai import types
 
 from app.analysis.gemini import GEMINI_MODEL
 from app.analysis.llm import CLAUDE_MODEL
+from app.analysis.openai import OPENAI_MODEL
 from app.analysis.prompts_manager import resolve_prompt
 from app.auth.crypto import decrypt
 from app.config import settings
@@ -69,6 +70,10 @@ def _resolve_api_key(provider: str, admin_user: User) -> str:
         if admin_user.gemini_api_key_enc:
             return decrypt(admin_user.gemini_api_key_enc)
         return settings.GEMINI_API_KEY.strip()
+    if provider == "openai":
+        if admin_user.openai_api_key_enc:
+            return decrypt(admin_user.openai_api_key_enc)
+        return settings.OPENAI_API_KEY.strip()
     if admin_user.claude_api_key_enc:
         return decrypt(admin_user.claude_api_key_enc)
     return settings.CLAUDE_API_KEY.strip()
@@ -150,6 +155,21 @@ async def generate_report_retrospective(
         )
         raw_text = (response.text or "").strip()
         model_name = GEMINI_MODEL
+    elif llm_provider == "openai":
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=api_key)
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": RETROSPECT_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_completion_tokens=min(settings.OPENAI_MAX_TOKENS, 4000),
+        )
+        raw_text = (response.choices[0].message.content or "").strip()
+        model_name = OPENAI_MODEL
     else:
         client = anthropic.AsyncAnthropic(api_key=api_key)
         response = await client.messages.create(

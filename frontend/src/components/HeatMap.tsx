@@ -20,7 +20,6 @@ interface HeatMapProps {
   xRange?: [number, number] | null
   isSolo?: boolean
   hoverIndex?: number | null
-  onHoverIndex?: (idx: number | null) => void
 }
 
 type Metric = 'speedDelta' | 'brakeDelta' | 'throttleDelta'
@@ -79,7 +78,7 @@ const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 
 export default function HeatMap({
   lat, lon, speed, refSpeed, brake, refBrake, throttle, refThrottle,
-  distances, xRange, isSolo, hoverIndex, onHoverIndex,
+  distances, xRange, isSolo, hoverIndex,
 }: HeatMapProps) {
   const [metric, setMetric] = useState<Metric>('speedDelta')
   const [mapStyle, setMapStyle] = useState<MapStyle>('satellite')

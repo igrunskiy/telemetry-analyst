@@ -87,6 +87,7 @@ if [ ! -f "$APP_DIR/.env" ]; then
   echo "      - GARAGE61_CLIENT_ID"
   echo "      - GARAGE61_CLIENT_SECRET"
   echo "      - CLAUDE_API_KEY"
+  echo "      - OPENAI_API_KEY (optional)"
   echo "    Once you have a domain, also set:"
   echo "      - DOMAIN=yourdomain.com"
   echo "      - GARAGE61_REDIRECT_URI=https://yourdomain.com/auth/callback"

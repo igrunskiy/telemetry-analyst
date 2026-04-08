@@ -51,6 +51,57 @@ function FitBounds({ lat, lon }: { lat: number[]; lon: number[] }) {
   return null
 }
 
+function FitBoundsToHighlight({
+  lat,
+  lon,
+  highlightRange,
+  trackLength,
+}: {
+  lat: number[]
+  lon: number[]
+  highlightRange?: [number, number] | null
+  trackLength: number
+}) {
+  const map = useMap()
+
+  useEffect(() => {
+    if (lat.length === 0 || lon.length === 0) return
+
+    const fitPositions = (positions: [number, number][], padding: [number, number]) => {
+      if (positions.length === 0) return
+      let minLat = positions[0][0]
+      let maxLat = positions[0][0]
+      let minLon = positions[0][1]
+      let maxLon = positions[0][1]
+      for (let i = 1; i < positions.length; i++) {
+        const [curLat, curLon] = positions[i]
+        if (curLat < minLat) minLat = curLat
+        if (curLat > maxLat) maxLat = curLat
+        if (curLon < minLon) minLon = curLon
+        if (curLon > maxLon) maxLon = curLon
+      }
+      map.fitBounds([[minLat, minLon], [maxLat, maxLon]], { padding, animate: true, duration: 0.45 })
+    }
+
+    if (!highlightRange) {
+      fitPositions(lat.map((value, index) => [value, lon[index]] as [number, number]), [24, 24])
+      return
+    }
+
+    const n = Math.min(lat.length, lon.length)
+    if (n < 2 || trackLength <= 0) return
+    const start = Math.max(0, Math.round((highlightRange[0] / trackLength) * (n - 1)))
+    const end = Math.min(n - 1, Math.round((highlightRange[1] / trackLength) * (n - 1)))
+    const pad = Math.max(6, Math.round((end - start) * 0.08))
+    const from = Math.max(0, start - pad)
+    const to = Math.min(n - 1, end + pad)
+    const positions = lat.slice(from, to + 1).map((value, index) => [value, lon[from + index]] as [number, number])
+    fitPositions(positions, [36, 36])
+  }, [map, lat, lon, highlightRange, trackLength])
+
+  return null
+}
+
 function PanToCorner({ cornerData, highlightCornerNums }: {
   cornerData: { lat: number; lon: number; num: number }[]
   highlightCornerNums: number[]
@@ -120,6 +171,8 @@ function RightClickPan() {
 const ESRI_SAT_URL =
   'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
 const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+const USER_COLOR = '#3b82f6'
+const REF_COLOR = '#f97316'
 
 export default function TrackMap({
   userLat,
@@ -257,14 +310,21 @@ export default function TrackMap({
         <div className="flex items-center gap-4 text-xs">
           <h3 className="text-white font-medium text-sm">{title}</h3>
           <span className="flex items-center gap-1.5">
-            <span className="inline-block h-1.5 w-12 rounded-full"
-              style={{ background: 'linear-gradient(to right, #ef4444, #94a3b8, #22c55e)' }} />
-            <span className="text-slate-400">You (Δ speed)</span>
+            <span className="w-5 h-0.5 inline-block rounded-full" style={{ backgroundColor: USER_COLOR }} />
+            <span className="text-slate-400">You</span>
           </span>
-          {showRef && (
+          {showRef ? (
             <span className="flex items-center gap-1.5">
-              <span className="w-5 h-0.5 bg-green-500 inline-block opacity-70" />
-              <span className="text-slate-400">Reference</span>
+              <span className="w-5 h-0.5 inline-block rounded-full" style={{ backgroundColor: REF_COLOR }} />
+              <span className="text-slate-400">Ref</span>
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5">
+              <span
+                className="inline-block h-1.5 w-12 rounded-full"
+                style={{ background: 'linear-gradient(to right, #ef4444, #94a3b8, #22c55e)' }}
+              />
+              <span className="text-slate-400">You (Δ speed)</span>
             </span>
           )}
         </div>
@@ -300,6 +360,12 @@ export default function TrackMap({
       >
         <TilePaneFader mapStyle={mapStyle} />
         <FitBounds lat={userLat} lon={userLon} />
+        <FitBoundsToHighlight
+          lat={userLat}
+          lon={userLon}
+          highlightRange={highlightRange}
+          trackLength={trackLength}
+        />
         <RightClickPan />
         <PanToCorner cornerData={cornerData} highlightCornerNums={highlightCornerNums} />
         {mapStyle !== 'none' && (
@@ -309,18 +375,26 @@ export default function TrackMap({
         )}
 
         {showRef && refPositions.length > 0 && (
-          <Polyline positions={refPositions} pathOptions={{ color: '#22c55e', weight: 1.5, opacity: 0.78 }} />
+          <Polyline positions={refPositions} pathOptions={{ color: REF_COLOR, weight: 2.2, opacity: 0.88 }} />
         )}
 
-        {speedDeltaSegments.length > 0
-          ? speedDeltaSegments.map((seg, i) => (
-              <Polyline key={`ud-${i}`} positions={seg.positions}
-                pathOptions={{ color: seg.color, weight: 2.5, opacity: 0.95 }} />
+        {showRef
+          ? userSegments.map((seg, i) => (
+              <Polyline
+                key={`user-${i}`}
+                positions={seg.positions}
+                pathOptions={{ color: USER_COLOR, weight: Math.max(2, seg.weight), opacity: Math.max(0.55, seg.opacity) }}
+              />
             ))
-          : userSegments.map((seg, i) => (
-              <Polyline key={i} positions={seg.positions}
-                pathOptions={{ color: '#f59e0b', weight: seg.weight, opacity: seg.opacity }} />
-            ))
+          : speedDeltaSegments.length > 0
+            ? speedDeltaSegments.map((seg, i) => (
+                <Polyline key={`ud-${i}`} positions={seg.positions}
+                  pathOptions={{ color: seg.color, weight: 2.5, opacity: 0.95 }} />
+              ))
+            : userSegments.map((seg, i) => (
+                <Polyline key={i} positions={seg.positions}
+                  pathOptions={{ color: '#f59e0b', weight: seg.weight, opacity: seg.opacity }} />
+              ))
         }
 
         {cornerData.map((c) => {

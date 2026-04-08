@@ -32,6 +32,7 @@ class User(Base):
     refresh_token_enc: Mapped[str | None] = mapped_column(String, nullable=True)
     claude_api_key_enc: Mapped[str | None] = mapped_column(String, nullable=True)
     gemini_api_key_enc: Mapped[str | None] = mapped_column(String, nullable=True)
+    openai_api_key_enc: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
