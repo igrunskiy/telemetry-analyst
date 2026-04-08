@@ -815,21 +815,56 @@ async def get_db_health(_admin=Depends(require_admin), db: AsyncSession = Depend
 @router.get("/worker/status")
 async def get_worker_status(_admin=Depends(require_admin)):
     """Return current worker pool status and queue depth."""
-    from app.analysis.worker import get_pool
-
     pool = get_pool()
-    if pool is None:
-        return {"pool_size": 0, "active_workers": 0, "queue_depth": 0, "tasks": []}
-
-    status = pool.get_status()
+    status = (
+        pool.get_status()
+        if pool is not None
+        else {"pool_size": 0, "active_workers": 0, "queue_depth": 0, "tasks": []}
+    )
 
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
+        queue_depth_result = await db.execute(
             select(func.count(AnalysisResult.id)).where(
                 AnalysisResult.status == "enqueued"
             )
         )
-        status["queue_depth"] = result.scalar_one()
+        status["queue_depth"] = queue_depth_result.scalar_one()
+
+        processing_result = await db.execute(
+            select(
+                AnalysisResult.id,
+                AnalysisResult.enqueued_at,
+                AnalysisResult.created_at,
+            ).where(AnalysisResult.status == "processing")
+        )
+        processing_rows = processing_result.all()
+
+    existing_tasks = status.get("tasks", [])
+    task_ids = {t.get("job_id") for t in existing_tasks}
+    timeout_seconds = settings.ANALYSIS_WORKER_TIMEOUT
+    now = datetime.now(timezone.utc)
+
+    for job_id, enqueued_at, created_at in processing_rows:
+        sid = str(job_id)
+        if sid in task_ids:
+            continue
+
+        started_at = enqueued_at or created_at or now
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        elapsed_seconds = max(0.0, round((now - started_at).total_seconds(), 1))
+
+        existing_tasks.append(
+            {
+                "job_id": sid,
+                "started_at": started_at.isoformat(),
+                "elapsed_seconds": elapsed_seconds,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+
+    status["tasks"] = existing_tasks
+    status["active_workers"] = len(existing_tasks)
 
     return status
 

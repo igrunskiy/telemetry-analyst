@@ -11,7 +11,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-telemetry} -d ${POSTGRES_DB:-telemetry_analyst}"]
       interval: 5s
@@ -59,8 +59,8 @@ services:
       - ./backend/app:/app/app
       - ./.env:/app/.env
     ports:
-      - "8000:8000"
-      - "5678:5678"
+      - "${BACKEND_PORT:-8001}:8000"
+      - "${REMOTE_DEBUG_HOST_PORT:-5679}:${REMOTE_DEBUG_PORT:-5678}"
 
   frontend:
     build:
@@ -74,7 +74,7 @@ services:
     image: nginx:alpine
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "${PROXY_PORT:-18080}:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
